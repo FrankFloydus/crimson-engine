@@ -177,6 +177,24 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
     hooks.resolveTexture=[&assets](const std::string& id,bool normal){return assets.references().resolveTexture(id,normal);};
     hooks.reservedAsset=[&assets](const std::string& id){return assets.references().deleted(id);};
     hooks.assetPolicyRevision=[&assets]{return assets.references().revision();};
+    hooks.capturePaintInputs=[this,&assets](EntityId owner)->std::optional<std::vector<QuaderPaintInput>> {
+        std::vector<QuaderPaintInput> inputs;
+        for(const auto& record:document_.scene().records())if(record.quaderGenerated && record.quaderGenerated->owner==owner && record.model) {
+            auto model=assets.findModel(record.model->id);
+            if(record.meshPaint && !model)return std::nullopt;
+            inputs.push_back({record.quaderGenerated->sourceKey,record.model->id,std::move(model),record.meshPaint});
+        }
+        return inputs;
+    };
+    hooks.paintInputsCurrent=[this](EntityId owner,const QuaderImportResult& result) {
+        std::size_t count{};
+        for(const auto& record:document_.scene().records())if(record.quaderGenerated && record.quaderGenerated->owner==owner && record.model) {
+            ++count;
+            const auto found=std::find_if(result.paintInputs.begin(),result.paintInputs.end(),[&](const auto& input){return input.sourceKey==record.quaderGenerated->sourceKey;});
+            if(found==result.paintInputs.end() || found->modelId!=record.model->id || found->paint!=record.meshPaint)return false;
+        }
+        return count==result.paintInputs.size();
+    };
     hooks.applyImport=[this,&assets](EntityId owner,const QuaderLink& link,const QuaderImportResult& result){
         if(!applyQuaderSceneImport(document_,owner,link,result,[&assets](const std::string& id)->std::optional<std::vector<std::string>> {
             if(const auto model=assets.findModel(id))return model->materialIds;
@@ -663,6 +681,10 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(editor_.overlays().navigationMesh) {
         auto navigationOverlays=navigationPreview_.overlays(play_.playing()?play_.navigationWorld():&navigationPreview_.world(),editor_.navigationPreviewProfile());
         collisionOverlays.scene.insert(collisionOverlays.scene.end(),navigationOverlays.begin(),navigationOverlays.end());
+    }
+    if(renderInput.sceneVisible&&editor_.showPaintSubdivisions()&&!play_.playing()) {
+        auto subdivisions=prepared_.vertexPaintSubdivisionOverlays(document,document.selection().ids);
+        collisionOverlays.scene.insert(collisionOverlays.scene.end(),subdivisions.begin(),subdivisions.end());
     }
     renderInput.sceneCollisionOverlays=std::move(collisionOverlays.scene);
     renderInput.gameCollisionOverlays=std::move(collisionOverlays.game);

@@ -269,8 +269,8 @@ std::string quaderSaveKey(const QuaderCompletedSave& save,float scale,bool refre
     // The default light policy does not need a separate key suffix.
     if(!syncLights)out<<"|lights:off";
     if(refreshMaterials){std::vector<std::string> ids;for(const auto& [id,record]:save.materials){(void)record;ids.push_back(id);}std::sort(ids.begin(),ids.end());for(const auto& id:ids)out<<'|'<<id<<':'<<save.materials.at(id).token;}
-    // Reconsume pre-extension saves once: their corner-only geometry omitted
-    // circular fields even when the native saved bytes already contained them.
-    const auto canonical=out.str();return "quader:v3:"+modelImportDataDigest({reinterpret_cast<const std::uint8_t*>(canonical.data()),canonical.size()});
+    // Reconsume older saves once to retain native polygon boundaries, including
+    // source quads, independently of the reader DLL and source-save timestamp.
+    const auto canonical=out.str();return "quader:v4:"+modelImportDataDigest({reinterpret_cast<const std::uint8_t*>(canonical.data()),canonical.size()});
 }
 } // namespace crimson

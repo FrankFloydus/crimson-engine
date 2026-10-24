@@ -1,6 +1,7 @@
 #pragma once
 #include "scene/SceneDocument.h"
 #include "VertexPaintSurface.h"
+#include "VertexPaintFootprint.h"
 #include <crimson/renderer/forward/MeshPaint.h>
 #include <functional>
 #include <memory>
@@ -39,6 +40,10 @@ struct VertexPaintCandidate {
     std::uint32_t target{},vertex{};
     Vec3 world;
     Vec2 pixel;
+    // A footprint sample belongs to this logical cell rather than a control
+    // vertex. Its visibility must be checked at world/pixel, including GPU
+    // coverage, without admitting an unrelated incident cell or seam.
+    std::uint32_t cell{~0u};
 };
 struct VertexPaintDabChanges {std::uint32_t target{};std::vector<MeshPaintChange> vertices;};
 struct VertexPaintBatch {
@@ -57,13 +62,18 @@ public:
         std::span<const std::shared_ptr<const MeshPaintPayload>>,const Visibility&);
     std::span<const VertexPaintCandidate> candidates() const {return candidates_;}
     void resetVisibility();
-    void clear();
+    // Fractional dab contributions belong to one stroke only. Persisted and
+    // published payloads remain RGB8; visibility preparation owns no weights.
+    void resetStrokeWeights();
+    void clear(bool retainFootprint=false);
 private:
     static constexpr std::uint32_t BinSize=32;
     std::uint32_t width_{},height_{},columns_{};
     std::vector<VertexPaintCandidate> candidates_;
     std::vector<std::vector<std::uint32_t>> bins_;
     std::vector<std::int8_t> visibility_;
+    std::vector<std::unordered_map<std::uint32_t,Vec4>> strokeWeights_;
+    VertexPaintFootprintCache footprint_;
 };
 // Owns exactly one SceneDocument transaction. Published immutable weight pages
 // are shared with history; cancellation restores the exact original payloads.

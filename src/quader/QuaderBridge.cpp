@@ -116,6 +116,11 @@ struct QuaderBridge::Impl {
             if(current.source&&!current.preparing.valid()&&!current.result&&!current.invalid){
                 if(!current.blockedMaterials.empty()&&hooks.dirtyMaterial&&std::any_of(current.blockedMaterials.begin(),current.blockedMaterials.end(),[&](const auto& id){return hooks.dirtyMaterial(id);}))return;
                 auto settings=options(current,hooks);
+                if(hooks.capturePaintInputs) {
+                    auto inputs=hooks.capturePaintInputs(current.request.entity);
+                    if(!inputs){states[current.request.entity].message="Waiting for current Quader mesh geometry...";return;}
+                    settings.paintInputs=std::move(*inputs);
+                }
                 if(settings.refreshMaterials&&!settings.protectedMaterials.empty()){current.blockedMaterials.assign(settings.protectedMaterials.begin(),settings.protectedMaterials.end());states[current.request.entity].message="Material refresh waits for the open material to be saved or closed.";return;}
                 current.assetPolicyRevision=hooks.assetPolicyRevision?hooks.assetPolicyRevision():0;
                 current.blockedMaterials.clear();const auto source=current.source;const auto token=current.cancellation.get_token();states[current.request.entity].message="Preparing Quader meshes, collisions and materials...";
@@ -133,6 +138,13 @@ struct QuaderBridge::Impl {
             if((hooks.assetPolicyRevision&&hooks.assetPolicyRevision()!=current.assetPolicyRevision)||
                 (current.result->locationRevision&&*current.result->locationRevision!=contentStorageRevision(root))||!currentMaterialInputs(*current.result)){
                 current.result.reset();current.blockedMaterials.clear();states[current.request.entity].message="Crimson material assets changed; preparing the current versions...";return;}
+            if(hooks.paintInputsCurrent && !hooks.paintInputsCurrent(current.request.entity,*current.result)) {
+                current.result.reset();states[current.request.entity].message="Vertex paint changed; preparing the current paint...";return;
+            }
+            if(const auto target=std::find_if(targets.begin(),targets.end(),[&](const auto& value){return value.entity==current.request.entity;});target!=targets.end()) {
+                const auto& before=target->link.saveKey;const auto& after=current.result->sourceKey;
+                current.result->topologyOnly=before.starts_with("quader:v3:")&&after.starts_with("quader:v4:")&&before.substr(10)==after.substr(10);
+            }
             if(!hooks.applyImport)throw std::runtime_error("No Quader scene publication owner is available.");
             std::vector<AssetFileChange> rollback;rollback.reserve(current.result->files.size()+1);for(const auto& file:current.result->files)rollback.push_back({file.id,previousFile(root,file.id)});
             rollback.push_back({".crimson/asset-locations.json",previousFile(root,".crimson/asset-locations.json")});

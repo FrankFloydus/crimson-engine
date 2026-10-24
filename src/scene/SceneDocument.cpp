@@ -1649,7 +1649,7 @@ EntityId SceneDocument::createQuader(const std::string& name) {
     EntityRecord record;record.name=name;record.quader.emplace();return create(std::move(record),"Create Quader");
 }
 bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,const std::vector<EntityRecord>& generated,
-    const ModelMaterialRemap& remapMaterials) {
+    const ModelMaterialRemap& remapMaterials,const ModelPaintRemap& remapPaint,bool preservePlacement) {
     if(transient_ || transaction_){status_="Quader import waits for Edit mode and the current scene edit.";return false;}
     const auto root=scene_.find(owner);
     if(!root || !root->quader){status_="Quader entity no longer exists.";return false;}
@@ -1658,7 +1658,8 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
         std::unordered_map<std::string,EntityId> existing;
         for(const auto& record:records)if(record.quaderGenerated && record.quaderGenerated->owner==owner) {
             existing.try_emplace(record.quaderGenerated->sourceKey,record.id);
-            for(const auto id:scene_.subtree(record.id))removed.insert(id);
+            if(preservePlacement)removed.insert(record.id);
+            else for(const auto id:scene_.subtree(record.id))removed.insert(id);
         }
         std::vector<EntityRecord> replacements;replacements.reserve(generated.size()+1);
         std::unordered_map<EntityId,EntityId> remap;
@@ -1672,6 +1673,7 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
         imported.order=nextOrder(records,owner);imported.quaderGenerated=QuaderGenerated{owner,"Imported"};
         if(const auto previous=scene_.find(imported.id)){
             imported.visible=previous->visible;imported.outlinerStyle=previous->outlinerStyle;
+            if(preservePlacement){imported.name=previous->name;imported.local=previous->local;imported.parent=previous->parent;imported.order=previous->order;}
             preserveAuthoredActorComponents(imported,*previous);
         }
         replacements.push_back(imported);
@@ -1686,11 +1688,15 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
             // those authored values on matching source identities/kinds while
             // source transforms, energy, geometry and shadow flags still sync.
             if(const auto previous=scene_.find(record.id)) {
+                if(preservePlacement) {
+                    record.name=previous->name;record.local=previous->local;
+                    record.parent=previous->parent;record.order=previous->order;
+                }
                 record.visible=previous->visible;
                 record.outlinerStyle=previous->outlinerStyle;
                 preserveAuthoredActorComponents(record,*previous);
                 if(record.model && previous->model) {
-                    record.meshPaint=previous->meshPaint;
+                    record.meshPaint=remapPaint?remapPaint(*previous,record):previous->meshPaint;
                     record.lightingScopes=previous->lightingScopes;
                     record.meshShading=previous->meshShading;
                     if(remapMaterials)record.modelMaterials=remapMaterials(*previous,record);

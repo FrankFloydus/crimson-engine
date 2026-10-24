@@ -55,6 +55,9 @@ public:
     bool failed(const std::string& id) const;
     void retainExternalModelForFrame(const std::string& id) { externalModels_.push_back(id); }
     VertexPaintTargets vertexPaintTargets(const SceneDocument& document,EntityId entity) {return meshPaint_.targets(document,entity);}
+    std::vector<RenderCollisionOverlay> vertexPaintSubdivisionOverlays(const SceneDocument& document,std::span<const EntityId> selection) {
+        return meshPaint_.subdivisionOverlays(document,selection);
+    }
     VertexPaintSurfaceSnapshot vertexPaintSurfaces(const SceneDocument& document);
     bool meshPaintSubdivision(const EntityRecord& record,std::uint32_t level,SceneMeshPaint& result,std::string& diagnostic) {
         return meshPaint_.subdivision(record,level,result,diagnostic);

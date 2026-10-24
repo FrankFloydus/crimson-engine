@@ -1,4 +1,5 @@
 #include "MeshPaintResources.h"
+#include "VertexPaintSubdivisionOverlay.h"
 #include "assets/AssetLibrary.h"
 #include "assets/MaterialGraph.h"
 #include "assets/MaterialAsset.h"
@@ -6,12 +7,15 @@
 #include "scene/SceneExtraction.h"
 #include <crimson/renderer/core/Profiler.hpp>
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <sstream>
 #include <unordered_set>
 
 namespace crimson {
 namespace {
+std::atomic_uint64_t nextSubdivisionOverlayOwner{1};
+constexpr std::size_t MaximumSubdivisionOverlayBytes=128ull*1024*1024,MaximumSubdivisionOverlayEntries=256;
 struct ModelData final:ModelAsset {
     struct Draw {std::uint32_t sourcePrimitive{};std::shared_ptr<const MeshPaintGeometry> geometry;std::shared_ptr<const MeshPaintPayload> base;};
     std::vector<Draw> paintedDraws;
@@ -29,7 +33,7 @@ bool rigidSource(const ModelAsset& model){return model.skins.empty()&&model.anim
 std::uint64_t paintKey(const std::optional<SceneMeshPaint>& paint){std::uint64_t hash=1469598103934665603ull;if(paint)for(const auto& draw:paint->draws){mix(hash,draw.draw);mix(hash,draw.primitive);mix(hash,draw.level);mix(hash,draw.sourceSignature);mix(hash,draw.weights?draw.weights->fingerprint:0);}return hash;}
 std::size_t bytes(const ModelData& model){std::size_t total=sizeof(ModelData);std::unordered_set<const MeshPaintGeometry*> geometries;
     for(const auto& p:model.primitives)total+=sizeof(ModelPrimitive)+p.vertices.size()*sizeof(ModelVertex)+p.indices.size()*sizeof(std::uint32_t);
-    for(const auto& d:model.paintedDraws)if(geometries.insert(d.geometry.get()).second){total+=sizeof(MeshPaintGeometry)+d.geometry->vertices.size()*sizeof(ModelVertex)+d.geometry->indices.size()*sizeof(std::uint32_t)+d.geometry->cells.size()*sizeof(MeshPaintCell)+d.geometry->boundaryEdges.size()*sizeof(std::array<std::uint32_t,2>);
+    for(const auto& d:model.paintedDraws)if(geometries.insert(d.geometry.get()).second){total+=sizeof(MeshPaintGeometry)+(d.geometry->vertices.size()+d.geometry->shadingVertices.size())*sizeof(ModelVertex)+d.geometry->indices.size()*sizeof(std::uint32_t)+d.geometry->cells.size()*sizeof(MeshPaintCell)+d.geometry->boundaryEdges.size()*sizeof(std::array<std::uint32_t,2>);
         for(const auto& list:d.geometry->vertexTriangles)total+=sizeof(list)+list.size()*sizeof(std::uint32_t);for(const auto& list:d.geometry->seamVertices)total+=sizeof(list)+list.size()*sizeof(std::uint32_t);}
     if(model.resampled)for(const auto& d:model.resampled->draws)if(d.weights)for(const auto& page:d.weights->pages)if(page)total+=sizeof(MeshPaintPage);return total;
 }
@@ -61,7 +65,7 @@ std::shared_ptr<ModelData> build(const std::shared_ptr<const ModelAsset>& source
     return result;
 }
 }
-MeshPaintResources::MeshPaintResources(AssetLibrary& assets,ResourceManager& resources):assets_(assets),resources_(resources){}
+MeshPaintResources::MeshPaintResources(AssetLibrary& assets,ResourceManager& resources):assets_(assets),resources_(resources),subdivisionOverlayOwner_(nextSubdivisionOverlayOwner.fetch_add(1)){}
 ResourceHandle<ModelAsset> MeshPaintResources::request(const EntityRecord& record,std::uint32_t level,ResourcePriority priority,bool resample,std::string& diagnostic){
     CRIMSON_PROFILE_ZONE("Vertex paint subdivision request");
     if(!record.model){diagnostic="Select a rigid mesh.";return {};}
@@ -101,6 +105,50 @@ VertexPaintTargets MeshPaintResources::targets(const SceneDocument& document,Ent
             target.sourceNode=prepared.asset->draws[draw.draw].node;target.world=*world*prepared.asset->draws[draw.draw].transform;target.geometry=draw.geometry;target.weights=draw.weights;out.draws.push_back(std::move(target));}
         if(out.draws.empty())out.diagnostic="Assign an opaque Blend material to this mesh.";
     }catch(const std::exception& error){out.draws.clear();out.diagnostic=error.what();}return out;
+}
+std::vector<RenderCollisionOverlay> MeshPaintResources::subdivisionOverlays(const SceneDocument& document,std::span<const EntityId> selection) {
+    CRIMSON_PROFILE_ZONE("Vertex paint selected subdivision overlays");
+    std::vector<RenderCollisionOverlay> result;const auto now=std::chrono::steady_clock::now();
+    for(const auto entity:selection) {
+        const auto record=document.scene().find(entity);const auto world=document.scene().worldTransform(entity);
+        if(!record||!record->model||!world||!document.scene().isVisible(entity))continue;
+        const auto prepared=prepare(*record,ResourcePriority::Selected);if(!prepared.ready)continue;
+        for(const auto& draw:prepared.draws) {
+            if(!draw.geometry||draw.draw>=prepared.asset->draws.size())continue;
+            const auto* key=draw.geometry.get();auto found=subdivisionOverlays_.find(key);
+            if(found!=subdivisionOverlays_.end()&&found->second.source.lock()!=draw.geometry) {
+                subdivisionOverlayBytes_-=found->second.reservedBytes;subdivisionOverlays_.erase(found);found=subdivisionOverlays_.end();
+            }
+            if(found==subdivisionOverlays_.end()) {
+                // Reserve a conservative output bound before launching work.
+                // Changing selection cannot retain an unbounded set of jobs.
+                const auto estimate=sizeof(CollisionOverlayGeometry)+draw.geometry->vertices.size()*sizeof(Vec3)+
+                    draw.geometry->cells.size()*4*sizeof(CollisionOverlayEdge);
+                if(estimate>MaximumSubdivisionOverlayBytes)continue;
+                while(!subdivisionOverlays_.empty()&&(subdivisionOverlayBytes_+estimate>MaximumSubdivisionOverlayBytes||subdivisionOverlays_.size()>=MaximumSubdivisionOverlayEntries)) {
+                    const auto oldest=std::min_element(subdivisionOverlays_.begin(),subdivisionOverlays_.end(),[](const auto& a,const auto& b){return a.second.used<b.second.used;});
+                    if(oldest->second.used==now)break;
+                    subdivisionOverlayBytes_-=oldest->second.reservedBytes;subdivisionOverlays_.erase(oldest);
+                }
+                if(subdivisionOverlayBytes_+estimate>MaximumSubdivisionOverlayBytes||subdivisionOverlays_.size()>=MaximumSubdivisionOverlayEntries)continue;
+                ResourceRequestOptions options;options.priority=ResourcePriority::Selected;options.retainLoader=false;options.cancelWhenUnused=true;
+                SubdivisionOverlayEntry entry;entry.source=draw.geometry;entry.used=now;entry.reservedBytes=estimate;
+                entry.resource=resources_.requestDerived<CollisionOverlayGeometry>(
+                    "vertex-paint-subdivision-overlay:"+std::to_string(subdivisionOverlayOwner_)+":"+std::to_string(++subdivisionOverlayJob_),
+                    [geometry=draw.geometry](std::stop_token stop) {
+                        const auto overlay=buildVertexPaintSubdivisionOverlay(*geometry,stop);
+                        const auto bytes=sizeof(CollisionOverlayGeometry)+overlay->vertices.capacity()*sizeof(Vec3)+overlay->edges.capacity()*sizeof(CollisionOverlayEdge);
+                        return ResourceLoadResult<CollisionOverlayGeometry>{overlay,bytes,geometry->signature,{}};
+                    },std::move(options));
+                found=subdivisionOverlays_.emplace(key,std::move(entry)).first;subdivisionOverlayBytes_+=estimate;
+            }
+            auto& entry=found->second;entry.used=now;
+            const auto snapshot=entry.resource.snapshot();if(!snapshot||entry.resource.state()!=ResourceState::Ready)continue;
+            const auto transform=*world*prepared.asset->draws[draw.draw].transform;
+            result.push_back({snapshot.shared(),transform,{.1f,.85f,1.f,.8f},0.f});
+        }
+    }
+    return result;
 }
 VertexPaintSurfaceSnapshot MeshPaintResources::surfaces(const SceneDocument& document,const SurfaceBoundsQuery& surfaceBounds) {
     CRIMSON_PROFILE_ZONE("Vertex paint surface snapshot preparation");
@@ -179,7 +227,8 @@ VertexPaintSurfaceSnapshot MeshPaintResources::surfaces(const SceneDocument& doc
 bool MeshPaintResources::subdivision(const EntityRecord& record,std::uint32_t level,SceneMeshPaint& result,std::string& diagnostic){const auto handle=request(record,level,ResourcePriority::Selected,true,diagnostic);const auto snapshot=handle.snapshot();if(!snapshot||handle.state()!=ResourceState::Ready)return false;const auto data=std::static_pointer_cast<const ModelData>(snapshot.shared());if(!data->resampled)return false;result=*data->resampled;diagnostic.clear();return true;}
 std::string MeshPaintResources::status(EntityId entity)const{const auto found=statuses_.find(entity);return found==statuses_.end()?std::string{}:found->second;}
 void MeshPaintResources::collect(){const auto now=std::chrono::steady_clock::now();const auto expired=[&](const auto& entry){return now-entry.second.used>resources_.config().idleGrace;};std::erase_if(geometry_,expired);std::erase_if(resampling_,expired);std::erase_if(surfaceModels_,expired);
+    for(auto it=subdivisionOverlays_.begin();it!=subdivisionOverlays_.end();)if(expired(*it)) {subdivisionOverlayBytes_-=it->second.reservedBytes;it=subdivisionOverlays_.erase(it);}else ++it;
     if(surfaceModels_.empty()){surfaceSnapshot_={};surfaceSnapshotKey_=0;}
     std::unordered_set<EntityId> live;for(const auto& [key,entry]:geometry_){(void)key;live.insert(entry.entity);}for(const auto& [key,entry]:resampling_){(void)key;live.insert(entry.entity);}std::erase_if(statuses_,[&](const auto& entry){return !live.contains(entry.first);});}
-void MeshPaintResources::clear(){geometry_.clear();resampling_.clear();surfaceModels_.clear();surfaceSnapshot_={};surfaceSnapshotKey_=0;statuses_.clear();}
+void MeshPaintResources::clear(){geometry_.clear();resampling_.clear();surfaceModels_.clear();subdivisionOverlays_.clear();subdivisionOverlayBytes_=0;surfaceSnapshot_={};surfaceSnapshotKey_=0;statuses_.clear();}
 }

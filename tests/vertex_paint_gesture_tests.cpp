@@ -49,7 +49,7 @@ void brushVisibilityAndOrder() {
     result=cache.apply(dabs,brush,weights,[&](const auto& vertex)->std::optional<bool>{++queries;return vertex.vertex!=0;});
     require(!result.missing&&result.changes.size()==1&&result.changes.front().vertices.size()==3,"Exact visible vertex set changed.");
     require(queries==5,"Overlapping dabs did not retain per-vertex visibility memoization.");
-    const auto twice=blendMeshPaintRgb(blendMeshPaintRgb({},1,.5f),1,.5f);
+    const auto twice=normalizedMeshPaintRgb({63.75f,191.25f,0,0});
     for(const auto& change:result.changes.front().vertices)require(change.vertex!=0&&change.rgb==twice,"Batched dabs changed order or painted an occluded vertex.");
     require(mesh.weights->rgb(1)==MeshPaintRgb{},"Brush publication mutated its immutable source.");
     const auto next=updateMeshPaintPayload(mesh.weights,result.changes.front().vertices);
@@ -66,6 +66,90 @@ void brushVisibilityAndOrder() {
     require(!hover.prepareVisibility(dabs.front(),brush,[&](const auto&)->std::optional<bool>{++hoverQueries;return true;}),"Hover visibility did not become ready after its missing surface arrived.");
     require(hoverQueries==5,"Hover visibility repeated already validated vertices.");
     require(!hover.prepareVisibility(dabs.front(),brush,[](const auto&)->std::optional<bool>{throw std::runtime_error("Prepared hover visibility was queried again.");}),"A prepared hover footprint became unknown.");
+}
+void fractionalStrokeWeights() {
+    auto mesh=target();const std::array targets{mesh};
+    const auto visible=[](const auto&)->std::optional<bool>{return true;};
+    const VertexPaintDab dab{{0,0,0},{100,100},150};
+    std::array<VertexPaintDab,8> dabs;dabs.fill(dab);
+    VertexPaintBrush brush;brush.radius=1;brush.strength=.0001f;brush.hardness=1;brush.layer=1;
+    const auto publish=[&](VertexPaintBrushCache& cache,auto& weights,std::span<const VertexPaintDab> batch) {
+        const auto result=cache.apply(batch,brush,weights,visible);require(!result.missing,"Exact visibility unexpectedly deferred a fractional stroke.");
+        for(const auto& changes:result.changes)weights[changes.target]=updateMeshPaintPayload(weights[changes.target],changes.vertices);
+    };
+    VertexPaintBrushCache batched,singles;
+    require(batched.prepare(targets,Mat4{},200,200)&&singles.prepare(targets,Mat4{},200,200),"Could not prepare fractional brush fixtures.");
+    std::array batchedWeights{mesh.weights},singleWeights{mesh.weights};
+    publish(batched,batchedWeights,dabs);
+    require(batchedWeights.front()->rgb(1)==MeshPaintRgb{},"A sub-byte batch should not publish a premature weight.");
+    for(unsigned i=1;i<8;++i)publish(batched,batchedWeights,dabs);
+    for(unsigned i=0;i<64;++i)publish(singles,singleWeights,std::span{&dab,1});
+    require(batchedWeights.front()->rgb(1)==MeshPaintRgb{2,0,0},"Unpublished fractional contributions were lost between batches.");
+    require(sameMeshPaintPayload(batchedWeights.front(),singleWeights.front()),"Changing dab batch boundaries changed fractional stroke results.");
+
+    // Base must remove the final RGB8 residue rather than stall at the point
+    // where each individual dab rounds back to the same published byte.
+    brush.strength=.01f;brush.layer=0;
+    const auto painted=updateMeshPaintPayload(mesh.weights,std::array{MeshPaintChange{1,{100,70,50}}});
+    std::array eraseWeights{painted};batched.resetStrokeWeights();
+    for(unsigned i=0;i<128;++i)publish(batched,eraseWeights,dabs);
+    require(eraseWeights.front()->rgb(1)==MeshPaintRgb{},"Repeated soft Base dabs retained a quantization plateau.");
+    brush.layer=2;batched.resetStrokeWeights();eraseWeights.front()=painted;
+    for(unsigned i=0;i<128;++i)publish(batched,eraseWeights,dabs);
+    require(eraseWeights.front()->rgb(1)==MeshPaintRgb{0,255,0},"Soft replacement dabs failed to converge on their chosen layer.");
+
+    // Starting another stroke reads the current immutable payload; fractional
+    // residue from the previous stroke must not leak into a new transaction.
+    brush.strength=.0001f;brush.layer=1;
+    std::array resetWeights{mesh.weights};batched.resetStrokeWeights();
+    for(unsigned i=0;i<2;++i)publish(batched,resetWeights,dabs);
+    require(resetWeights.front()->rgb(1)==MeshPaintRgb{},"The reset fixture unexpectedly published its fractional baseline.");
+    batched.resetStrokeWeights();
+    for(unsigned i=0;i<2;++i)publish(batched,resetWeights,dabs);
+    require(resetWeights.front()->rgb(1)==MeshPaintRgb{},"Fractional contributions escaped their stroke lifetime.");
+    for(unsigned i=0;i<2;++i)publish(batched,resetWeights,dabs);
+    require(resetWeights.front()->rgb(1)==MeshPaintRgb{1,0,0},"An explicit stroke reset discarded subsequent fractional contributions.");
+    require(mesh.weights->rgb(1)==MeshPaintRgb{},"Fractional stroke accumulation mutated saved source paint.");
+}
+void baseCellMaskErasure() {
+    auto mesh=target();auto geometry=std::make_shared<MeshPaintGeometry>();geometry->sourceSignature=123;geometry->signature=456;
+    for(const auto point:std::array<Vec3,4>{{{-.8f,-.8f,0},{.8f,-.8f,0},{.8f,.8f,0},{-.8f,.8f,0}}}){ModelVertex vertex;vertex.position=point;geometry->vertices.push_back(vertex);}
+    geometry->indices={0,1,2,0,2,3};MeshPaintCell cell;cell.cornerCount=4;cell.vertices={0,1,2,3};geometry->cells.push_back(cell);mesh.geometry=geometry;
+    mesh.weights=updateMeshPaintPayload(mesh.weights,std::array{MeshPaintChange{0,{100,70,50}},MeshPaintChange{1,{50,100,70}},MeshPaintChange{2,{70,50,100}},MeshPaintChange{3,{80,80,80}}});
+    const auto visible=[](const auto&)->std::optional<bool>{return true;};
+    VertexPaintBrush brush;brush.radius=.025f;brush.strength=1;brush.hardness=1;brush.layer=0;
+    const std::array offCenter{VertexPaintDab{{-.48f,-.16f,0},{104,232},8}};
+    VertexPaintBrushCache cache;require(cache.prepare(std::array{mesh},Mat4{},400,400),"Could not prepare Base cell erasure.");
+    auto result=cache.apply(offCenter,brush,std::array{mesh.weights},visible);
+    require(!result.missing&&result.changes.size()==1&&result.changes.front().vertices.size()==4,"Full-strength Base missed controls contributing beneath a small off-center brush.");
+    for(const auto& change:result.changes.front().vertices)require(change.rgb==MeshPaintRgb{},"Full-strength off-center Base left part of the sampled cell mask.");
+    require(mesh.weights->rgb(2)==MeshPaintRgb{70,50,100},"Cell erasure modified immutable saved paint.");
+
+    // The exact control under the cursor is already Base. A distant painted
+    // corner still contributes within the circle, and must respond to Base
+    // without moving the brush toward that remote control.
+    mesh.weights=updateMeshPaintPayload(makeMeshPaintPayload(4),std::array{MeshPaintChange{2,{255,0,0}}});
+    const std::array atBaseCorner{VertexPaintDab{{-.8f,-.8f,0},{40,360},8}};
+    require(cache.prepare(std::array{mesh},Mat4{},400,400),"Could not prepare already-Base corner erasure.");
+    result=cache.apply(atBaseCorner,brush,std::array{mesh.weights},visible);
+    require(!result.missing&&result.changes.size()==1&&result.changes.front().vertices.size()==1&&result.changes.front().vertices.front().vertex==2&&result.changes.front().vertices.front().rgb==MeshPaintRgb{},"A brush over an already-Base corner failed to restore its neighboring visible mask.");
+    require(cache.prepare(std::array{mesh},Mat4{},400,400),"Could not prepare soft already-Base corner erasure.");brush.strength=.5f;
+    result=cache.apply(atBaseCorner,brush,std::array{mesh.weights},visible);
+    require(result.changes.size()==1&&result.changes.front().vertices.size()==1&&result.changes.front().vertices.front().rgb==MeshPaintRgb{127,0,0},"Soft Base failed to reduce the sampled mask by its requested amount or applied duplicate footprint samples twice.");
+
+    // A deferred later sample must leave the entire floating-point baseline
+    // untouched, so retrying the batch is indistinguishable from one attempt.
+    VertexPaintBrushCache fresh;require(fresh.prepare(std::array{mesh},Mat4{},400,400),"Could not prepare the deferred Base reference.");
+    require(cache.prepare(std::array{mesh},Mat4{},400,400),"Could not prepare deferred Base visibility.");
+    const std::array paired{atBaseCorner.front(),offCenter.front()};std::size_t queries{};
+    const auto deferred=cache.apply(paired,brush,std::array{mesh.weights},[&](const auto& candidate)->std::optional<bool>{if(candidate.cell!=~0u&&++queries==3)return {};return true;});
+    require(deferred.missing&&deferred.changes.empty(),"Unknown Base footprint visibility partially published a batch.");
+    const auto retried=cache.apply(paired,brush,std::array{mesh.weights},visible),reference=fresh.apply(paired,brush,std::array{mesh.weights},visible);
+    require(retried.changes.size()==1&&reference.changes.size()==1&&retried.changes.front().vertices.size()==reference.changes.front().vertices.size(),"Retried Base batch changed its publication set.");
+    for(std::size_t i=0;i<retried.changes.front().vertices.size();++i) {
+        const auto& a=retried.changes.front().vertices[i];const auto& b=reference.changes.front().vertices[i];
+        require(a.vertex==b.vertex&&a.rgb==b.rgb,"Deferred Base visibility changed fractional stroke state before publication.");
+    }
 }
 void worldRadiusAndFalloff() {
     auto mesh=target();mesh.world=math::scaling({4,1,1});VertexPaintBrushCache cache;
@@ -124,4 +208,4 @@ void transactionalGesture(const std::filesystem::path& root) {
     require(!document.transactionActive()&&sameEntity(*document.scene().find(entity),beforeCancel),"Context loss retained authored stroke changes.");
 }
 }
-int main(){try{sourceMeshSeams();brushVisibilityAndOrder();worldRadiusAndFalloff();worldBrushOutline();Project project;transactionalGesture(project.root);std::cout<<"Vertex paint source seams, visibility, batched dabs, world brush and transactional history passed.\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+int main(){try{sourceMeshSeams();brushVisibilityAndOrder();fractionalStrokeWeights();baseCellMaskErasure();worldRadiusAndFalloff();worldBrushOutline();Project project;transactionalGesture(project.root);std::cout<<"Vertex paint source seams, visibility, fractional batched dabs, Base cell erasure, world brush and transactional history passed.\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

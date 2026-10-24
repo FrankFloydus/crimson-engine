@@ -72,6 +72,55 @@ struct Triangle {
     }
 };
 
+void sourceFacesSurviveShadingSplits(const fs::path& base) {
+    using crimson::Vec3;
+    const auto fixture=[&](bool tangentSplit) {
+        Triangle quad(tangentSplit,4);
+        const std::array<Vec3,4> positions{{{0,0,0},{2,0,0},{2,1,tangentSplit?0.f:.2f},{0,1,0}}};
+        std::memcpy(quad.bytes.data(),positions.data(),sizeof(positions));
+        Bytes indices;for(const std::uint16_t index:{0,1,2,0,2,3})append(indices,index);
+        quad.primitive()["indices"]=quad.accessor(quad.view(indices),6,"SCALAR",5123);
+        quad.primitive()["extras"]["crimsonSourceFaces"]=Json::array({
+            {{"cornerCount",4},{"vertices",{0,1,2,3}},{"triangles",{0,1}}}});
+        if(tangentSplit) {
+            // Opposite UV handedness at the shared diagonal must split render
+            // corners without splitting the authored logical quad.
+            quad.addAttribute("TEXCOORD_0",std::vector<std::array<float,2>>{{0,0},{1,0},{0,1},{1,0}},"VEC2");
+            quad.json["images"]=Json::array({{{"uri","normal.png"}}});
+            quad.json["textures"]=Json::array({{{"source",0}}});
+            quad.json["materials"]=Json::array({{{"normalTexture",{{"index",0}}}}});
+            quad.primitive()["material"]=0;
+        }
+        return std::pair{std::move(quad),positions};
+    };
+    for(const bool tangentSplit:{false,true}) {
+        auto [quad,positions]=fixture(tangentSplit);const auto folder=base/(tangentSplit?"tangent":"normal");
+        const auto source=quad.save(folder/"source");
+        if(tangentSplit)writeBytes(source.parent_path()/"normal.png",png(1,1,Bytes{128,128,255,255}));
+        const auto imported=crimson::importModelPackage(source,folder/"project");
+        const auto verify=[&](const ModelAsset& asset) {
+            const auto& primitive=asset.primitives.at(0);
+            require(primitive.vertices.size()==6,"Shading split was unexpectedly merged while retaining topology.");
+            require(primitive.sourceFaces.size()==1&&primitive.sourceFaces[0].cornerCount==4,
+                "Generated normal or tangent splits discarded a source quad.");
+            const auto& face=primitive.sourceFaces[0];
+            require(face.triangles==std::array<std::uint32_t,2>{0,1},"Source triangle ownership changed.");
+            for(std::size_t corner=0;corner<positions.size();++corner)
+                require(primitive.vertices.at(face.vertices[corner]).position==positions[corner],"Logical source corner moved or was reordered.");
+            const auto& first=primitive.vertices.at(primitive.indices[0]);
+            const auto& alias=primitive.vertices.at(primitive.indices[3]);
+            require(first.position==alias.position,"Split source corners lost position correspondence.");
+            if(tangentSplit)require(first.tangent[3]==-alias.tangent[3],"Mirrored UV tangent seam was lost.");
+            else require(first.normal!=alias.normal,"Distinct generated flat normals were lost.");
+        };
+        verify(*imported);verify(*crimson::loadModelPackage(imported->id,folder/"project"));
+    }
+    auto [malformed,positions]=fixture(false);(void)positions;
+    malformed.primitive()["extras"]["crimsonSourceFaces"][0]["vertices"]={0,1,3,2};
+    rejects([&]{crimson::importModelPackage(malformed.save(base/"invalid-boundary"),base/"invalid-project");},
+        "source face boundary");
+}
+
 void uvInterpolationAttributes(const fs::path& base) {
     using crimson::Vec4;
     const std::vector<Vec4> coordinates{{1,0,1,0},{0,2,2,1.57079637f},{1,1,1.41421356f,.78539816f},{},{},{}};
@@ -815,6 +864,7 @@ int main() {
         materialSlotCompatibility(root/"material-compatibility");
         sparseAndInterleaved(root/"sparse"); embeddedDataAndSceneChoice(root/"data");
         generatedTangentsAndOptionalExtensions(root/"tangents"); uv1WithoutUv0(root/"uv1-only");
+        sourceFacesSurviveShadingSplits(root/"source-faces");
         uvInterpolationAttributes(root/"circular-uv");
         animationSkinAndMorph(root/"animation"); sourceSemanticPreservation(root/"semantics"); missingTripoBindTransforms(root/"tripo-bind");
         blendedMaterials(root/"transparent");invalidInputsAndRollback(root/"invalid"); uvAndPackageSafety(root/"safety");

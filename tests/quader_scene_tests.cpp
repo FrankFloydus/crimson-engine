@@ -643,6 +643,54 @@ void bundleMigrationPreservesSceneHierarchyAndAssignments() {
     require(document.undo()&&document.scene().find(visual)->modelMaterials.empty()&&document.redo()&&snapshot(document)==before,
         "Bundle storage migration invalidated existing material-assignment undo/redo.");
 }
+void topologyUpgradeMigratesPaintAsOneExactCommand() {
+    Project project;SceneDocument document(project.root);const auto owner=document.createQuader();
+    QuaderLink link{"C:/authoring/project.qproj","project-id","scene-id",1,true,false};
+    auto initial=lightSyncFixture("old-triangle-patches");
+    const ModelMaterialSourceQuery materials=[](const std::string&)->std::optional<std::vector<std::string>> {return std::vector<std::string>{"source-stone"};};
+    require(applyQuaderSceneImport(document,owner,link,initial,materials),document.status());
+    const auto visual=generatedId(document.scene(),owner,"mesh/floor");
+    const auto manualParent=document.createEmpty("Authored room group");document.select({manualParent},manualParent);
+    require(document.reparentSelection(owner),document.status());
+    document.select({visual},visual);require(document.reparentSelection(manualParent),document.status());
+    const auto manualChild=document.createEmpty("Authored room attachment");document.select({manualChild},manualChild);
+    require(document.reparentSelection(visual),document.status());
+    auto room=*document.scene().find(visual);room.name="room";room.local=math::translation({17,3,-9});room.order=23;
+    room.meshPaint.emplace();room.meshPaint->subdivisionLevel=4;
+    const std::array<std::uint8_t,12> originalRgb{17,31,0,90,0,5,0,120,40,0,0,0};
+    room.meshPaint->draws.push_back({0,0,4,0x1234,makeMeshPaintPayload(4,originalRgb)});
+    setModelMaterialOverride(room.modelMaterials,0,AssetRef<MaterialAsset>{"assets/materials/authored-blend.crimson-material"});
+    require(document.updateEntity(visual,room),document.status());
+    const auto before=snapshot(document);const auto history=document.history().size();
+    auto corrected=lightSyncFixture("correct-quad-grid");corrected.topologyOnly=true;
+    corrected.meshes.front().name="Source name that must not replace room";corrected.meshes.front().local=math::translation({1,2,3});corrected.meshes.front().order=0;
+    SceneMeshPaint newPaint;newPaint.subdivisionLevel=4;
+    std::array<std::uint8_t,27> transferredRgb{};for(unsigned i=0;i<9;++i){transferredRgb[i*3]=static_cast<std::uint8_t>(i*12);transferredRgb[i*3+1]=static_cast<std::uint8_t>(90-i*6);}
+    newPaint.draws.push_back({0,0,4,0x9876,makeMeshPaintPayload(9,transferredRgb)});
+    QuaderPaintInput captured;captured.sourceKey="mesh/floor";captured.modelId=room.model->id;captured.paint=room.meshPaint;
+    corrected.paintInputs.push_back(captured);
+    corrected.paintReplacements.push_back({captured.sourceKey,captured.modelId,captured.paint,newPaint});
+    require(applyQuaderSceneImport(document,owner,link,corrected,materials),document.status());
+    const auto migrated=document.scene().find(visual);
+    require(migrated&&migrated->name==room.name&&migrated->local==room.local&&migrated->parent==manualParent&&migrated->order==room.order,
+        "Topology-only upgrade replaced the renamed room's authored transform, parent or sibling order.");
+    require(document.scene().find(manualChild)&&document.scene().find(manualChild)->parent==visual,
+        "Topology-only upgrade deleted a manual descendant attached to the room.");
+    require(migrated->meshPaint==newPaint&&migrated->model->id==corrected.meshes.front().modelId&&migrated->modelMaterials==room.modelMaterials,
+        "Topology-only upgrade did not publish corrected model and migrated paint with material assignments.");
+    require(document.history().size()==history+1&&!document.transactionActive(),"Paint migration did not finish as one import command.");
+    require(meshPaintBytes(*room.meshPaint->draws.front().weights)==std::vector<std::uint8_t>(originalRgb.begin(),originalRgb.end()),"Import mutated the original immutable paint payload.");
+    const auto after=snapshot(document);
+    require(document.undo()&&snapshot(document)==before&&document.scene().find(visual)->meshPaint==room.meshPaint,
+        "Undo did not restore the exact old model, paint, room name and placement.");
+    require(document.redo()&&snapshot(document)==after,"Redo did not restore the corrected quad model and migrated payload exactly.");
+    const auto retained=document.historicalModelReferences();require(std::find(retained.begin(),retained.end(),room.model->id)!=retained.end(),"Import history did not retain the old immutable model generation.");
+    const auto unchanged=snapshot(document);const auto count=document.history().size();
+    require(!applyQuaderSceneImport(document,owner,link,corrected,materials)&&snapshot(document)==unchanged&&document.history().size()==count&&!document.transactionActive(),
+        "Stale prepared paint baseline partially replaced the scene or left document commands owned.");
+    require(document.save("Quad migration with paint"),document.status());SceneDocument reopened(project.root);
+    require(reopened.load(document.assetId())&&!reopened.dirty()&&snapshot(reopened)==snapshot(document),"Corrected quad paint or authored room placement changed during save/reopen.");
 }
-int main(){try{reimportIdentityHistoryAndAtomicFailure();quaderMeshOwnsColliderHierarchy();sourceGroupsNamesAndOrderSurviveRefresh();independentLightSyncPolicy();nativeCollisionHistoryAndRefresh();authoredVisibilitySurvivesSourceSync();sourceHiddenMeshesRemainEditable();directionalCompatibilityAndMeshDefaults();clusteredPointLightSceneImport();crimsonLightingRolesSurviveSourceSync();materialSlotsSurviveSourceSync();singleMaterialLegacyFallbackSync();bundleMigrationPreservesSceneHierarchyAndAssignments();std::cout<<"Quader scene identity, authored groups/names/order, mesh/collider hierarchy, native collision, atomic reimport, visibility, independent light sync, history and compatibility checks passed.\n";return 0;}
+}
+int main(){try{reimportIdentityHistoryAndAtomicFailure();quaderMeshOwnsColliderHierarchy();sourceGroupsNamesAndOrderSurviveRefresh();independentLightSyncPolicy();nativeCollisionHistoryAndRefresh();authoredVisibilitySurvivesSourceSync();sourceHiddenMeshesRemainEditable();directionalCompatibilityAndMeshDefaults();clusteredPointLightSceneImport();crimsonLightingRolesSurviveSourceSync();materialSlotsSurviveSourceSync();singleMaterialLegacyFallbackSync();bundleMigrationPreservesSceneHierarchyAndAssignments();topologyUpgradeMigratesPaintAsOneExactCommand();std::cout<<"Quader scene identity, authored groups/names/order, mesh/collider hierarchy, native collision, atomic reimport, visibility, independent light sync, history and compatibility checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

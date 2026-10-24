@@ -40,6 +40,7 @@ public:
     std::uint32_t thumbnailDemand() const { return browser_.thumbnailDemand(); }
     bool vertexPaintActive() const { return viewport_.vertexPaintActive(); }
     bool vertexPaintSurfaceHeld() const { return viewport_.vertexPaintSurfaceHeld(); }
+    bool showPaintSubdivisions() const {return viewport_.showPaintSubdivisions();}
     const PanelVisibility& panels() const { return panels_; }
     void setPanels(const PanelVisibility& panels) { panels_=panels; }
     const OverlayVisibility& overlays() const { return overlays_; }

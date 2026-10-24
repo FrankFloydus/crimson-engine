@@ -523,7 +523,7 @@ void completionRecords(){
     Temporary temporary;QuaderPrepareOptions options;options.projectRoot=temporary.root;options.completed=QuaderCompletedSave{};options.completed->scene=parsed;
     auto valid=prepareQuaderImport(source,options);require(!valid.sourceKey.empty(),"Sealed import did not preserve consumption identity.");options.completed->scene->fingerprint.hash^=1;rejects([&]{prepareQuaderImport(source,options);});
     auto save=QuaderCompletedSave{};save.scene=parsed;const auto first=quaderSaveKey(save,1,false);auto material=parsed;material.token="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";save.materials["material"]=material;
-    require(first.starts_with("quader:v3:"),"Complete UV interpolation support did not invalidate earlier save consumption keys.");
+    require(first.starts_with("quader:v4:"),"Logical topology support did not invalidate earlier save consumption keys.");
     require(quaderSaveKey(save,1,false)==first,"Preserved-material synchronization reacted to an unrelated material save.");require(quaderSaveKey(save,1,true)!=quaderSaveKey(QuaderCompletedSave{parsed,{},{}},1,true),"Explicit material refresh omitted material completion tokens.");
     require(quaderSaveKey(save,1,false,true)==first&&quaderSaveKey(save,1,false,false)!=first,"Light sync configuration did not retain the default consumption key or distinguish disabled imports.");
 }
@@ -1011,6 +1011,43 @@ void coordinatorTransactions(){
     targets[0].link.autoSync=true;const auto before=published;pump([&]{return published>before;},8000);require(published==before+1,"Completed source save did not produce one scene publication.");
     for(int i=0;i<30;++i)bridge.update(targets,1,false,hooks);require(published==before+1&&!bridge.busy(7),"Consumed Quader save immediately replayed after publication.");
 }
+void topologyUpgradeAndPaintInputGuards(){
+    Temporary temporary;const auto sourceRoot=temporary.root/"godot-bridge-fixture-v2",destination=temporary.root/"engine";
+    fs::copy(fixture(),sourceRoot,fs::copy_options::recursive);fs::create_directories(destination);
+    QuaderLink link;link.projectPath=utf8(sourceRoot/"godot-bridge-fixture-v2.qproj");link.sceneId="11111111-1111-4111-8111-111111111111";link.autoSync=true;
+    const auto source=readQuaderScene(pathFromUtf8(link.projectPath),link.sceneId);link.projectId=source->project.id;
+    const std::string token="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    writeFileAtomically(sourceRoot/".quader/bridge/scenes"/pathFromUtf8(source->id+".json"),record(source->project.id,source->id,source->relativePath,source->fingerprint,token).dump());
+    for(std::uint32_t i=0;i<source->materials.size();++i)if(!source->materials[i].embedded){const auto material=source->readMaterial(i);
+        writeFileAtomically(sourceRoot/".quader/bridge/materials"/pathFromUtf8(material.identity.id+".json"),record(source->project.id,material.identity.id,material.relativePath,material.fingerprint,token).dump());}
+    const auto completed=readQuaderCompletedSave(pathFromUtf8(link.projectPath),link.projectId,link.sceneId,true);
+    const auto currentKey=quaderSaveKey(completed,link.importScale,link.refreshMaterials,link.syncLights);
+    require(currentKey.starts_with("quader:v4:"),"Topology upgrade test requires the current save key.");
+    link.saveKey="quader:v3:"+currentKey.substr(10);
+    std::vector<QuaderTarget> targets{{7,link,true,link.saveKey}};QuaderBridge bridge(destination);
+    std::size_t captures{},checks{},published{},notifications{};QuaderBridgeHooks hooks;
+    hooks.resolveMaterial=[](const auto& id){return id;};hooks.reservedAsset=[](const auto&){return false;};
+    hooks.capturePaintInputs=[&](EntityId entity)->std::optional<std::vector<QuaderPaintInput>>{require(entity==7,"Paint capture changed its import target.");++captures;return std::vector<QuaderPaintInput>{};};
+    hooks.paintInputsCurrent=[&](EntityId entity,const QuaderImportResult& result){require(entity==7&&!result.files.empty(),"Paint guard was not checked before a new package publication.");++checks;return checks>1;};
+    hooks.applyImport=[&](EntityId entity,const QuaderLink& applied,const QuaderImportResult& result){
+        require(entity==7&&result.topologyOnly,"A consumed v3 save was not recognized as a topology-only upgrade.");
+        require(captures==2&&checks==2,"Changed paint inputs were not recaptured and prepared exactly once.");
+        targets[0].link=applied;targets[0].link.saveKey=result.sourceKey;targets[0].consumedSaveKey=result.sourceKey;++published;return true;};
+    hooks.publishAssets=[&](const QuaderImportResult&){++notifications;};
+    const auto initialRevision=contentStorageRevision(destination);const auto initialIndex=fileBytes(destination/".crimson/asset-locations.json");
+    const auto initialLocations=locations(destination);
+    const auto pump=[&](auto predicate){const auto end=std::chrono::steady_clock::now()+std::chrono::seconds{12};
+        while(!predicate()&&std::chrono::steady_clock::now()<end){bridge.update(targets,1,false,hooks);std::this_thread::sleep_for(std::chrono::milliseconds{1});}
+        require(predicate(),"Topology upgrade did not complete: "+bridge.status(7));};
+    pump([&]{return checks==1;});
+    require(captures==1&&published==0&&notifications==0&&models(destination)==0&&contentStorageRevision(destination)==initialRevision&&
+        fileBytes(destination/".crimson/asset-locations.json")==initialIndex&&locations(destination)==initialLocations,
+        "Stale paint preparation partially published package files, locations or scene changes.");
+    pump([&]{return published==1&&!bridge.busy(7);});
+    require(targets[0].link.saveKey==currentKey&&notifications==1&&models(destination)>0,"Topology upgrade did not publish the current key and complete packages.");
+    for(unsigned i=0;i<30;++i)bridge.update(targets,1,false,hooks);
+    require(published==1&&notifications==1&&captures==2&&!bridge.busy(7),"Consumed topology upgrade immediately replayed.");
+}
 void materialSyncTransactions(){
     Temporary temporary;const auto sourceRoot=temporary.root/"godot-bridge-fixture-v2",destination=temporary.root/"engine";
     fs::copy(fixture(),sourceRoot,fs::copy_options::recursive);fs::create_directories(destination);
@@ -1095,5 +1132,5 @@ void materialSyncTransactions(){
 int main(int argc,char** argv){try{
     if(argc==4&&std::string(argv[1])=="--verify-import"){verifyImport(pathFromUtf8(argv[2]),argv[3]);return 0;}
     require(argc==1,"Usage: quader_bridge_tests [--verify-import <project.qproj> <scene-id>]");
-    geometryAndLights();uvInterpolationPublication();sourceHierarchyPlacement();currentSourceMeshSet();geometryReuseIgnoresNamesAndPlacement();authoredMeshOwnership();contentOnlyOwnershipMigration();legacyUnusedFallbackPackages();deletedGeometryReimport();reservedGeometryMembersAndCorruption();clusteredPointLightCapacity();completionRecords();nativeReaderHierarchy();nativeReaderHierarchy(fixture().parent_path()/"schema20/hierarchy");nativeReaderMaterials();sceneScopedContentLayout();genericSceneNameAdoption();renamedSceneContentFolders();deletedMaterialsAndTexturesReimport();modernProjectManifest();coordinatorTransactions();materialSyncTransactions();std::cout<<"Quader reader, import, hierarchy, source mesh ownership, current mesh set, collision, deletion/reimport, material, completed-save and publication checks passed.\n";return 0;}
+    geometryAndLights();uvInterpolationPublication();sourceHierarchyPlacement();currentSourceMeshSet();geometryReuseIgnoresNamesAndPlacement();authoredMeshOwnership();contentOnlyOwnershipMigration();legacyUnusedFallbackPackages();deletedGeometryReimport();reservedGeometryMembersAndCorruption();clusteredPointLightCapacity();completionRecords();nativeReaderHierarchy();nativeReaderHierarchy(fixture().parent_path()/"schema20/hierarchy");nativeReaderMaterials();sceneScopedContentLayout();genericSceneNameAdoption();renamedSceneContentFolders();deletedMaterialsAndTexturesReimport();modernProjectManifest();coordinatorTransactions();topologyUpgradeAndPaintInputGuards();materialSyncTransactions();std::cout<<"Quader reader, import, hierarchy, source mesh ownership, current mesh set, collision, deletion/reimport, material, completed-save and publication checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

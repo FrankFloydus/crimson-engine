@@ -44,8 +44,8 @@ bool onTriangle(Vec3 p,Vec3 a,Vec3 b,Vec3 c,double precision=1e-6) {
 void VertexPaintTool::setEnabled(bool enabled,SceneDocument& document,Renderer& renderer) {
     if(enabled_==enabled)return;cancel(document,renderer);enabled_=enabled;diagnostic_.clear();
 }
-void VertexPaintTool::clear() {
-    brushCache_.clear();points_.clear();lastPoint_.reset();lastWorldPoint_.reset();pending_.reset();missingSurface_.reset();inverses_.clear();seams_.clear();surfaces_.clear();hoverTargets_.clear();surfaceSnapshot_={};cursorHit_.reset();cursorReady_=false;holdSurface_=false;used_=0;paletteMaterial_.clear();
+void VertexPaintTool::clear(bool retainFootprint) {
+    brushCache_.clear(retainFootprint);points_.clear();lastPoint_.reset();lastWorldPoint_.reset();pending_.reset();missingSurface_.reset();inverses_.clear();seams_.clear();surfaces_.clear();hoverTargets_.clear();surfaceSnapshot_={};cursorHit_.reset();cursorReady_=false;holdSurface_=false;used_=0;paletteMaterial_.clear();
 }
 void VertexPaintTool::cancel(SceneDocument& document,Renderer& renderer) {
     CRIMSON_PROFILE_ZONE("Vertex paint cancel");
@@ -58,7 +58,7 @@ void VertexPaintTool::finish(SceneDocument& document,Renderer& renderer) {
     // Unavailable coverage is a preparation state, never a deferred command.
     if(pending_)renderer.cancelPicking();pending_.reset();
     gesture_.finish(document);points_.clear();lastPoint_.reset();lastWorldPoint_.reset();missingSurface_.reset();
-    brushCache_.resetVisibility();surfaces_.clear();holdSurface_=false;
+    brushCache_.resetVisibility();brushCache_.resetStrokeWeights();surfaces_.clear();holdSurface_=false;
     shared::profiling::counter("Vertex paint active",0);shared::profiling::counter("Vertex paint pending GPU",0);shared::profiling::counter("Vertex paint queued dabs",0);
 }
 void VertexPaintTool::finishForCommand(SceneDocument& document,Renderer& renderer) {
@@ -85,6 +85,8 @@ void VertexPaintTool::drawBrushSettings() {
     ImGui::SliderFloat("Strength",&brush_.strength,0,1,"%.2f");
     if(ImGui::IsItemHovered())ImGui::SetTooltip("Moves the current material blend toward the selected material.");
     ImGui::SliderFloat("Hardness",&brush_.hardness,0,1,"%.2f");
+    ImGui::Checkbox("Show Subdivisions",&showSubdivisions_);
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("Overlay the selected mesh's paint control grid.");
 }
 std::span<const VertexPaintTarget> VertexPaintTool::targets() const {return active()?gesture_.targets():std::span<const VertexPaintTarget>{hoverTargets_};}
 bool VertexPaintTool::eligible(const VertexPaintSurfaceHit& hit) const {
@@ -186,6 +188,7 @@ std::optional<bool> VertexPaintTool::visible(const VertexPaintCandidate& candida
     if(nearest->entity!=target.entity||math::length(nearest->worldPosition-candidate.world)>epsilon)return false;
     const auto sameDraw=[&](const VertexPaintTarget& mesh){return nearest->draw==mesh.draw&&nearest->primitive==mesh.primitive&&(!mesh.resourceRevision||nearest->resourceRevision==mesh.resourceRevision);};
     if(sameDraw(target))return true;
+    if(candidate.cell!=~0u)return false;
     if(const auto seam=seams_[candidate.target].find(candidate.vertex);seam!=seams_[candidate.target].end())for(const auto alias:seam->second)if(sameDraw(source[alias.target]))return true;
     return false;
 }
@@ -205,6 +208,15 @@ std::optional<bool> VertexPaintTool::gpuVisible(const VertexPaintCandidate& cand
             const auto local=math::transformPoint(inverses_[targetIndex],sample->worldPosition);
             const auto worldPrecision=std::max(1e-5,math::length(sample->worldPosition)*std::numeric_limits<float>::epsilon()*4);
             const auto localPrecision=worldPrecision*std::max({math::length(math::transformDirection(inverses_[targetIndex],{1,0,0})),math::length(math::transformDirection(inverses_[targetIndex],{0,1,0})),math::length(math::transformDirection(inverses_[targetIndex],{0,0,1}))});
+            if(candidate.cell!=~0u) {
+                if(targetIndex!=candidate.target||candidate.cell>=mesh.cells.size())return false;
+                const auto& cell=mesh.cells[candidate.cell];
+                for(unsigned triangle=0;triangle<cell.cornerCount-2u;++triangle) {
+                    const auto a=cell.vertices[cell.triangleCorners[triangle*3]],b=cell.vertices[cell.triangleCorners[triangle*3+1]],c=cell.vertices[cell.triangleCorners[triangle*3+2]];
+                    if(onTriangle(local,mesh.vertices[a].position,mesh.vertices[b].position,mesh.vertices[c].position,localPrecision))return true;
+                }
+                return false;
+            }
             if(vertex>=mesh.vertexTriangles.size())return false;
             for(const auto triangle:mesh.vertexTriangles[vertex]) {
                 const auto base=std::size_t(triangle)*3;
@@ -213,6 +225,7 @@ std::optional<bool> VertexPaintTool::gpuVisible(const VertexPaintCandidate& cand
             return false;
         };
         if(incident(candidate.target,candidate.vertex))return true;
+        if(candidate.cell!=~0u)continue;
         if(candidate.vertex<target.geometry->seamVertices.size())for(const auto alias:target.geometry->seamVertices[candidate.vertex])if(incident(candidate.target,alias))return true;
         if(const auto seam=seams_[candidate.target].find(candidate.vertex);seam!=seams_[candidate.target].end())for(const auto alias:seam->second)if(incident(alias.target,alias.vertex))return true;
     }
@@ -250,7 +263,10 @@ void VertexPaintTool::update(SceneDocument& document,Renderer& renderer,const st
     auto currentSurface=[&]{CRIMSON_PROFILE_ZONE("Vertex paint surface query");return surfaceQuery_?surfaceQuery_(document):VertexPaintSurfaceSnapshot{};}();
     if(active()&&(!currentSurface.ready||currentSurface.signature!=surfaceSnapshot_.signature)){diagnostic_="The painting surface changed.";cancel(document,renderer);return;}
     if(!active()) {
-        if(viewChanged||currentSurface.signature!=surfaceSnapshot_.signature){if(pending_)renderer.cancelPicking();clear();}
+        if(viewChanged||currentSurface.signature!=surfaceSnapshot_.signature){
+            const bool cameraOnly=documentGeneration_==document.documentGeneration()&&currentSurface.signature==surfaceSnapshot_.signature;
+            if(pending_)renderer.cancelPicking();clear(cameraOnly);
+        }
         surfaceSnapshot_=std::move(currentSurface);projection_=vp;width_=width;height_=height;documentGeneration_=document.documentGeneration();
         CRIMSON_PROFILE_ZONE("Vertex paint target query");
         std::vector<VertexPaintTarget> selected;
@@ -300,6 +316,7 @@ void VertexPaintTool::update(SceneDocument& document,Renderer& renderer,const st
     if(!active()&&pressed&&hovered&&!blocked&&!waitForRelease_&&!document.transactionActive()&&!document.transient()) {
         if(hoverTargets_.empty()){if(diagnostic_.empty())diagnostic_="Select a rigid mesh with an assigned Blend material.";return;}
         if(!cursorReady_){if(diagnostic_.empty())diagnostic_="Paint the selected mesh's Blend material slot.";return;}
+        brushCache_.resetStrokeWeights();
         if(!gesture_.begin(document,hoverTargets_)){diagnostic_="The painting selection changed.";return;}
         strokeBrush_=brush_;enqueue(pointer);
     }

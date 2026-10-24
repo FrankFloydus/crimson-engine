@@ -753,8 +753,28 @@ void geometry(const GltfSource& data,const aiScene& imported,ModelAsset& asset) 
                     check(count==3||count==4,"unsupported source face corner count");face.cornerCount=static_cast<std::uint8_t>(count);
                     const auto corners=encoded.at("vertices").get<std::array<std::uint32_t,4>>();
                     face.triangles=encoded.at("triangles").get<std::array<std::uint32_t,2>>();
+                    for(unsigned a=0;a<count;++a)for(unsigned b=a+1;b<count;++b)
+                        check(corners[a]!=corners[b],"source face repeats a corner");
+                    std::array<std::array<unsigned,4>,4> edgeUses{};
                     for(unsigned triangle=0;triangle<(count==4?2u:1u);++triangle) {
                         check(face.triangles[triangle]<owned.size()&&!owned[face.triangles[triangle]],"overlapping source face provenance");owned[face.triangles[triangle]]=true;
+                        std::array<unsigned,3> logical;
+                        for(unsigned at=0;at<3;++at) {
+                            const auto sourceVertex=sourceFaceIndices[std::size_t(face.triangles[triangle])*3+at];
+                            const auto found=std::find(corners.begin(),corners.begin()+count,sourceVertex);
+                            check(found!=corners.begin()+count,"source face does not own its triangle corners");
+                            logical[at]=static_cast<unsigned>(found-corners.begin());
+                        }
+                        for(unsigned at=0;at<3;++at) {
+                            const auto a=logical[at],b=logical[(at+1)%3];
+                            check(a!=b,"source face contains a degenerate triangle");
+                            ++edgeUses[std::min(a,b)][std::max(a,b)];
+                        }
+                    }
+                    for(unsigned corner=0;corner<count;++corner) {
+                        const auto next=(corner+1)%count;
+                        check(edgeUses[std::min(corner,next)][std::max(corner,next)]==1,
+                            "source face boundary disagrees with render triangles");
                     }
                     for(unsigned corner=0;corner<count;++corner) {
                         bool found=false;
@@ -764,15 +784,10 @@ void geometry(const GltfSource& data,const aiScene& imported,ModelAsset& asset) 
                         }
                         check(found,"source face corner is not part of its triangles");
                     }
-                    // Attribute generation can split one source corner into
-                    // multiple render vertices. Preserve the quad only when
-                    // both triangles still share its four render corners.
-                    bool coherent=true;
-                    for(unsigned triangle=0;triangle<(count==4?2u:1u);++triangle)for(unsigned at=0;at<3;++at) {
-                        const auto vertex=p.indices[std::size_t(face.triangles[triangle])*3+at];
-                        if(std::find(face.vertices.begin(),face.vertices.begin()+count,vertex)==face.vertices.begin()+count)coherent=false;
-                    }
-                    if(coherent)p.sourceFaces.push_back(face);
+                    // Logical corners survive normal/tangent splits. Each
+                    // representative retains the original source position;
+                    // owned render triangles keep every shading alias.
+                    p.sourceFaces.push_back(face);
                 }
             }
             p.sourceVertexCount=p.vertices.size();p.sourceIndexCount=p.indices.size();

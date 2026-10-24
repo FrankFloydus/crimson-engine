@@ -20,6 +20,39 @@ float influence(const VertexPaintCandidate& vertex,const VertexPaintDab& dab,con
     const auto t=std::clamp(float((1-distance)/(1-brush.hardness)),0.f,1.f);
     return brush.strength*t*t*(3-2*t);
 }
+VertexPaintCandidate footprintCandidate(const VertexPaintFootprintSample& sample) {
+    return {sample.target,sample.vertex,sample.world,sample.pixel,sample.cell};
+}
+// Scatter the requested reduction of the sampled mask onto its contributing
+// controls. Solve the bounded, piecewise-linear reduction instead of merely
+// multiplying by the basis: that would barely erase a remote painted corner
+// when the corner nearest the brush is already Base. Higher-basis controls
+// change first; full opacity removes every contributing non-Base weight.
+std::array<float,4> baseFootprintAmounts(const VertexPaintFootprintInfluence& footprint,const std::array<Vec4,4>& weights) {
+    std::array<double,4> contribution{},slope{};std::array<float,4> amounts{};
+    const auto maximum=*std::max_element(footprint.basis.begin(),footprint.basis.end());
+    if(!(maximum>0))return amounts;
+    double mass{},derivative{};
+    for(unsigned i=0;i<footprint.cornerCount;++i) {
+        contribution[i]=footprint.basis[i]*std::max(0.,double(weights[i][1])+weights[i][2]+weights[i][3]);
+        slope[i]=footprint.basis[i]/maximum;mass+=contribution[i];derivative+=contribution[i]*slope[i];
+    }
+    if(!(mass>0&&derivative>0))return amounts;
+    const auto requested=std::clamp(double(footprint.amount),0.,1.)*mass;
+    double scale=requested/derivative;
+    for(unsigned iteration=0;iteration<4;++iteration) {
+        double removed{},remainingSlope{};
+        for(unsigned i=0;i<footprint.cornerCount;++i) {
+            if(scale*slope[i]>=1)removed+=contribution[i];
+            else remainingSlope+=contribution[i]*slope[i];
+        }
+        if(!(remainingSlope>0))break;
+        scale=std::max(scale,std::max(0.,requested-removed)/remainingSlope);
+    }
+    for(unsigned i=0;i<footprint.cornerCount;++i)if(contribution[i]>0)
+        amounts[i]=footprint.amount>=1?1.f:float(std::clamp(scale*slope[i],0.,1.));
+    return amounts;
+}
 }
 std::array<Vec3,VertexPaintCircleSegments+1> vertexPaintBrushCircle(Vec3 center,Vec3 normal,float radius) {
     std::array<Vec3,VertexPaintCircleSegments+1> points;
@@ -70,11 +103,12 @@ VertexPaintSeams buildVertexPaintSeams(std::span<const VertexPaintTarget> target
     }
     return result;
 }
-void VertexPaintBrushCache::clear() {width_=height_=columns_=0;candidates_.clear();bins_.clear();visibility_.clear();}
+void VertexPaintBrushCache::clear(bool retainFootprint) {width_=height_=columns_=0;candidates_.clear();bins_.clear();visibility_.clear();resetStrokeWeights();if(!retainFootprint)footprint_.clear();}
 void VertexPaintBrushCache::resetVisibility() {std::fill(visibility_.begin(),visibility_.end(),std::int8_t{-1});}
+void VertexPaintBrushCache::resetStrokeWeights() {strokeWeights_.clear();}
 bool VertexPaintBrushCache::prepare(std::span<const VertexPaintTarget> targets,const Mat4& vp,std::uint32_t width,std::uint32_t height) {
     CRIMSON_PROFILE_ZONE("Vertex paint candidate projection");
-    clear();if(!width||!height||width>16384||height>16384||!math::finite(vp))return false;
+    clear(true);if(!width||!height||width>16384||height>16384||!math::finite(vp)){clear();return false;}
     width_=width;height_=height;columns_=(width+BinSize-1)/BinSize;
     bins_.resize(std::size_t(columns_)*((height+BinSize-1)/BinSize));
     for(std::size_t target=0;target<targets.size();++target) {
@@ -90,6 +124,9 @@ bool VertexPaintBrushCache::prepare(std::span<const VertexPaintTarget> targets,c
             bins_[std::size_t(y)*columns_+x].push_back(index);
         }
     }
+    std::vector<VertexPaintFootprintMesh> meshes;meshes.reserve(targets.size());
+    for(const auto& target:targets)meshes.push_back({target.geometry,target.world});
+    if(!footprint_.prepare(meshes,vp,width,height)){clear();return false;}
     visibility_.assign(candidates_.size(),-1);return true;
 }
 std::optional<VertexPaintCandidate> VertexPaintBrushCache::prepareVisibility(const VertexPaintDab& dab,const VertexPaintBrush& brush,const Visibility& visible) {
@@ -104,13 +141,20 @@ std::optional<VertexPaintCandidate> VertexPaintBrushCache::prepareVisibility(con
         const auto& vertex=candidates_[candidate];if(visibility_[candidate]>=0||influence(vertex,dab,brush)<=0)continue;
         const auto answer=visible(vertex);if(!answer)return vertex;visibility_[candidate]=*answer?1:0;
     }
+    if(brush.layer==0) {
+        const auto footprint=footprint_.collect(dab.center,brush.radius,brush.strength,brush.hardness,
+            [&](const auto& sample){return visible(footprintCandidate(sample));});
+        if(footprint.missing)return footprintCandidate(*footprint.missing);
+    }
     return {};
 }
 VertexPaintBatch VertexPaintBrushCache::apply(std::span<const VertexPaintDab> dabs,const VertexPaintBrush& brush,
     std::span<const std::shared_ptr<const MeshPaintPayload>> weights,const Visibility& visible) {
     CRIMSON_PROFILE_ZONE("Vertex paint brush apply");
     VertexPaintBatch result;if(!validBrush(brush)||!visible||dabs.size()>8||!width_||!height_)return result;
-    std::vector<std::vector<std::uint32_t>> affected(dabs.size());
+    struct Influence {std::uint32_t target{},vertex{};float amount{};};
+    std::vector<std::vector<Influence>> affected(dabs.size());
+    std::vector<VertexPaintFootprintResult> footprints(dabs.size());
     for(std::size_t index=0;index<dabs.size();++index) {
         const auto& dab=dabs[index];if(!math::finite(dab.center)||!math::finite(dab.pixel)||!std::isfinite(dab.screenRadius)||dab.screenRadius<0)return {};
         const auto left=std::uint32_t(std::clamp(std::floor((dab.pixel[0]-dab.screenRadius)/BinSize),0.f,float(columns_-1)));
@@ -125,23 +169,65 @@ VertexPaintBatch VertexPaintBrushCache::apply(std::span<const VertexPaintDab> da
                 const auto answer=visible(vertex);if(!answer){result.missing=vertex;return result;}
                 visibility_[candidate]=*answer?1:0;
             }
-            if(visibility_[candidate])affected[index].push_back(candidate);
+            if(visibility_[candidate])affected[index].push_back({vertex.target,vertex.vertex,influence(vertex,dab,brush)});
+        }
+        if(brush.layer==0) {
+            footprints[index]=footprint_.collect(dab.center,brush.radius,brush.strength,brush.hardness,
+                [&](const auto& sample){return visible(footprintCandidate(sample));});
+            if(footprints[index].missing){result.missing=footprintCandidate(*footprints[index].missing);return result;}
+            for(const auto& footprint:footprints[index].influences) {
+                if(footprint.target>=weights.size()||!weights[footprint.target])return {};
+                for(unsigned corner=0;corner<footprint.cornerCount;++corner)if(footprint.vertices[corner]>=weights[footprint.target]->vertexCount)return {};
+            }
         }
     }
     // Preserve every dab and its order, while looking up exact visibility once
     // per projected vertex across overlapping batches in this frozen view.
-    std::vector<std::unordered_map<std::uint32_t,MeshPaintRgb>> edited(weights.size());
-    for(std::size_t dab=0;dab<dabs.size();++dab)for(const auto candidate:affected[dab]) {
-        const auto& vertex=candidates_[candidate];auto& changes=edited[vertex.target];
-        const auto previous=changes.find(vertex.vertex);
-        const auto value=previous==changes.end()?weights[vertex.target]->rgb(vertex.vertex):previous->second;
-        const auto next=blendMeshPaintRgb(value,brush.layer,influence(vertex,dabs[dab],brush));
-        if(next!=value)changes[vertex.vertex]=next;
+    // Resolve the complete batch before changing even fractional state. A
+    // deferred batch must be safe to retry without applying its earlier dabs
+    // twice. RGB8 publication must never become the next dab's baseline: soft
+    // strokes otherwise stop at a quantization plateau instead of converging.
+    strokeWeights_.resize(weights.size());
+    std::vector<std::vector<std::uint32_t>> edited(weights.size());
+    const auto readWeight=[&](std::uint32_t target,std::uint32_t vertex)->Vec4 {
+        const auto entry=strokeWeights_[target].find(vertex);if(entry!=strokeWeights_[target].end())return entry->second;
+        const auto rgb=weights[target]->rgb(vertex);
+        return {float(255-rgb[0]-rgb[1]-rgb[2]),float(rgb[0]),float(rgb[1]),float(rgb[2])};
+    };
+    const auto currentWeight=[&](std::uint32_t target,std::uint32_t vertex)->Vec4& {
+        auto [entry,inserted]=strokeWeights_[target].try_emplace(vertex);
+        if(inserted) {
+            const auto rgb=weights[target]->rgb(vertex);
+            entry->second={float(255-rgb[0]-rgb[1]-rgb[2]),float(rgb[0]),float(rgb[1]),float(rgb[2])};
+        }
+        return entry->second;
+    };
+    for(std::size_t dab=0;dab<dabs.size();++dab) {
+        for(const auto& footprint:footprints[dab].influences) {
+            std::array<Vec4,4> current{};
+            for(unsigned corner=0;corner<footprint.cornerCount;++corner)current[corner]=readWeight(footprint.target,footprint.vertices[corner]);
+            const auto amounts=baseFootprintAmounts(footprint,current);
+            for(unsigned corner=0;corner<footprint.cornerCount;++corner)if(amounts[corner]>0)
+                affected[dab].push_back({footprint.target,footprint.vertices[corner],amounts[corner]});
+        }
+        auto& influences=affected[dab];
+        std::sort(influences.begin(),influences.end(),[](const auto& a,const auto& b){return a.target!=b.target?a.target<b.target:a.vertex<b.vertex;});
+        for(std::size_t i=0;i<influences.size();) {
+            const auto vertex=influences[i++];float amount=vertex.amount;
+            while(i<influences.size()&&influences[i].target==vertex.target&&influences[i].vertex==vertex.vertex)amount=std::max(amount,influences[i++].amount);
+            auto& value=currentWeight(vertex.target,vertex.vertex);
+            for(auto& component:value)component*=1-amount;
+            value[brush.layer]+=255*amount;
+            edited[vertex.target].push_back(vertex.vertex);
+        }
     }
     for(std::size_t target=0;target<edited.size();++target)if(!edited[target].empty()) {
-        VertexPaintDabChanges changes;changes.target=std::uint32_t(target);changes.vertices.reserve(edited[target].size());
-        for(const auto& [vertex,rgb]:edited[target])if(rgb!=weights[target]->rgb(vertex))changes.vertices.push_back({vertex,rgb});
-        std::sort(changes.vertices.begin(),changes.vertices.end(),[](const auto& a,const auto& b){return a.vertex<b.vertex;});
+        auto& vertices=edited[target];std::sort(vertices.begin(),vertices.end());vertices.erase(std::unique(vertices.begin(),vertices.end()),vertices.end());
+        VertexPaintDabChanges changes;changes.target=std::uint32_t(target);changes.vertices.reserve(vertices.size());
+        for(const auto vertex:vertices) {
+            const auto rgb=normalizedMeshPaintRgb(strokeWeights_[target].at(vertex));
+            if(rgb!=weights[target]->rgb(vertex))changes.vertices.push_back({vertex,rgb});
+        }
         if(!changes.vertices.empty())result.changes.push_back(std::move(changes));
     }
     return result;

@@ -15,6 +15,8 @@ public:
     void setSurfaceQuery(VertexPaintSurfaceQuery query){surfaceQuery_=std::move(query);}
     void setEnabled(bool,SceneDocument&,Renderer&);
     bool enabled() const {return enabled_;}
+    bool showSubdivisions() const {return enabled_&&showSubdivisions_;}
+    void selectLayer(std::uint32_t layer) {if(layer<4)brush_.layer=layer;}
     bool active() const {return gesture_.active();}
     bool surfaceHeld() const {return active()||holdSurface_;}
     // Resolve release/commands before editor panels query document ownership.
@@ -31,7 +33,7 @@ public:
     void cancel(SceneDocument&,Renderer&);
 private:
     struct SurfaceTile {std::uint32_t x{},y{},width{},height{};std::vector<PickSurfaceSample> samples;std::uint64_t used{};};
-    bool enabled_{},waitForRelease_{},cursorReady_{},holdSurface_{};
+    bool enabled_{},waitForRelease_{},cursorReady_{},holdSurface_{},showSubdivisions_{};
     VertexPaintBrush brush_,strokeBrush_;
     VertexPaintTargetQuery query_;
     VertexPaintSurfaceQuery surfaceQuery_;
@@ -60,7 +62,7 @@ private:
     struct ProfileFrame;
     bool profiling_{};
     std::uint64_t cpuRays_{},gpuVisibilityChecks_{},appliedDabs_{},changedVertices_{};
-    void clear();
+    void clear(bool retainFootprint=false);
     void enqueue(Vec2,bool final=false);
     const PickSurfaceSample* surface(Vec2);
     bool request(SceneDocument&,Renderer&,Vec2,std::uint64_t&);

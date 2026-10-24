@@ -45,7 +45,7 @@ void VertexPaintTool::drawControls(SceneDocument& document,AssetLibrary& assets,
             const auto label=source?source->name:id.empty()?std::string("Default surface"):assets.displayName(id);
             ImGui::PushID(static_cast<int>(layer));
             const auto start=ImGui::GetCursorScreenPos();
-            if(ImGui::Selectable("##material",brush_.layer==layer,ImGuiSelectableFlags_AllowOverlap,{0,rowHeight}))brush_.layer=layer;
+            if(ImGui::Selectable("##material",brush_.layer==layer,ImGuiSelectableFlags_AllowOverlap,{0,rowHeight}))selectLayer(layer);
             const bool hovered=ImGui::IsItemHovered();const auto next=ImGui::GetCursorScreenPos();
             const ImVec2 imageStart{start.x+ImGui::GetStyle().FramePadding.x,start.y+ImGui::GetStyle().FramePadding.y};
             const auto thumbnail=id.empty()?bgfx::TextureHandle{BGFX_INVALID_HANDLE}:renderer.thumbnailTexture(id);

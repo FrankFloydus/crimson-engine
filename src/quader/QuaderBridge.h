@@ -15,6 +15,9 @@ struct QuaderBridgeHooks {
     std::function<std::string(const std::string&,bool normal)> resolveTexture;
     std::function<bool(const std::string&)> reservedAsset;
     std::function<std::uint64_t()> assetPolicyRevision;
+    // Capture immutable generations on the main thread; nullopt waits for assets.
+    std::function<std::optional<std::vector<QuaderPaintInput>>(EntityId)> capturePaintInputs;
+    std::function<bool(EntityId,const QuaderImportResult&)> paintInputsCurrent;
     // Must install the complete candidate in one document history transaction.
     std::function<bool(EntityId,const QuaderLink&,const QuaderImportResult&)> applyImport;
     // Notify the existing catalog/resource owners after files and scene commit.

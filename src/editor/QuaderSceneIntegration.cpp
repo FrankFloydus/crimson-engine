@@ -75,6 +75,18 @@ bool applyQuaderSceneImport(SceneDocument& document,EntityId owner,const QuaderL
             setModelMaterialOverride(remapped,afterSlots.at((*before)[index]),previous.modelMaterials[index]);
         }
         return remapped;
-    });
+    },[&](const EntityRecord& previous,const EntityRecord& incoming)->std::optional<SceneMeshPaint> {
+        const auto found=std::find_if(result.paintReplacements.begin(),result.paintReplacements.end(),[&](const auto& value){
+            return incoming.quaderGenerated && value.sourceKey==incoming.quaderGenerated->sourceKey;
+        });
+        if(found!=result.paintReplacements.end()) {
+            if(!previous.model || found->beforeModelId!=previous.model->id || found->before!=previous.meshPaint)
+                throw std::runtime_error("Quader paint changed during import preparation.");
+            return found->after;
+        }
+        if(previous.meshPaint && previous.model!=incoming.model)
+            throw std::runtime_error("Quader sync needs a validated paint migration before replacing painted geometry.");
+        return previous.meshPaint;
+    },result.topologyOnly);
 }
 }

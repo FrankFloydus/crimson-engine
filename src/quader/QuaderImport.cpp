@@ -577,6 +577,18 @@ QuaderImportResult prepareQuaderImport(const QuaderSourceScene& scene,const Quad
         const auto right=math::normalized(math::cross(direction,up),{1,0,0});up=math::normalized(math::cross(right,direction),{0,1,0});
         light.local={right[0],right[1],right[2],0,up[0],up[1],up[2],0,-direction[0],-direction[1],-direction[2],0,
             scaled(source.transform[12],options.scale),scaled(source.transform[13],options.scale),scaled(source.transform[14],options.scale),1};out.lights.push_back(std::move(light));}
+    out.paintInputs=options.paintInputs;
+    for(const auto& input:options.paintInputs) {
+        canceled(stop);
+        const auto mesh=std::find_if(out.meshes.begin(),out.meshes.end(),[&](const auto& value){return value.sourceKey==input.sourceKey;});
+        if(mesh==out.meshes.end() || mesh->modelId.empty()) {
+            require(!input.paint || input.paint->draws.empty(),"Quader sync cannot remove a painted mesh. Preserve or reset its paint explicitly first.");
+            continue;
+        }
+        const auto model=std::find_if(out.preparedModels.begin(),out.preparedModels.end(),[&](const auto& value){return value && value->id==mesh->modelId;});
+        require(model!=out.preparedModels.end(),"Quader sync is missing prepared paint destination geometry.");
+        out.paintReplacements.push_back(migrateQuaderPaint(input,**model,stop));
+    }
     localizeHierarchy(scene,out);context.finish();std::sort(out.assetIds.begin(),out.assetIds.end());out.assetIds.erase(std::unique(out.assetIds.begin(),out.assetIds.end()),out.assetIds.end());return std::move(out);
 }
 } // namespace crimson

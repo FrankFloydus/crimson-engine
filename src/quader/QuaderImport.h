@@ -1,6 +1,7 @@
 #pragma once
 
 #include "QuaderReader.h"
+#include "QuaderPaintMigration.h"
 #include "assets/AssetReferenceManager.h"
 #include "assets/ContentStorage.h"
 #include "assets/MaterialAsset.h"
@@ -55,6 +56,9 @@ struct QuaderImportResult {
     std::vector<QuaderMaterialInput> materialInputs;
     std::vector<std::string> assetIds;
     std::vector<std::shared_ptr<const ModelAsset>> preparedModels;
+    std::vector<QuaderPaintInput> paintInputs;
+    std::vector<QuaderPaintReplacement> paintReplacements;
+    bool topologyOnly{};
     std::uint32_t skippedCollisions{},skippedSpots{},skippedLights{};
 };
 struct QuaderPrepareOptions {
@@ -66,6 +70,7 @@ struct QuaderPrepareOptions {
     // Captured on the main thread. Deletion fallbacks keep their meaning for
     // old references; fresh source imports use a nondeleted asset generation.
     // Explicit nonbuiltin replacements remain authored import choices.
+    std::vector<QuaderPaintInput> paintInputs;
     std::unordered_map<std::string,std::string> materialOverrides;
     std::unordered_map<std::string,MaterialAsset> existingMaterials;
     std::unordered_map<std::string,std::array<std::string,2>> imageOverrides; // color/data, normal

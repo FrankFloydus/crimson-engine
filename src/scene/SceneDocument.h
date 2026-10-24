@@ -170,8 +170,9 @@ public:
     // Generated records use temporary IDs/parent IDs and stable source keys.
     // Reimport preserves matching persistent identities and all manual siblings.
     using ModelMaterialRemap = std::function<ModelMaterialOverrides(const EntityRecord&,const EntityRecord&)>;
+    using ModelPaintRemap = std::function<std::optional<SceneMeshPaint>(const EntityRecord&,const EntityRecord&)>;
     bool replaceQuaderImport(EntityId owner,const QuaderLink&,const std::vector<EntityRecord>& generated,
-        const ModelMaterialRemap& remapMaterials={});
+        const ModelMaterialRemap& remapMaterials={},const ModelPaintRemap& remapPaint={},bool preservePlacement=false);
     EntityId createModel(const std::string& assetId, const std::string& name, const Mat4& local = Mat4{});
     EntityId createDecal(const SceneDecal&,const std::string& name="Decal",const Mat4& local=Mat4{});
     EntityId createParticle(const std::string& assetId, const std::string& name = "Particle Effect", const Mat4& local = Mat4{});

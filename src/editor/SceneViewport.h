@@ -31,6 +31,7 @@ public:
     void setVertexPaintSurfaceQuery(VertexPaintSurfaceQuery query){vertexPaint_.setSurfaceQuery(std::move(query));}
     std::span<const std::string> vertexPaintPreviewMaterials() const{return vertexPaint_.previewMaterials();}
     bool vertexPaintEnabled() const {return vertexPaint_.enabled();}
+    bool showPaintSubdivisions() const {return vertexPaint_.showSubdivisions();}
     bool vertexPaintActive() const {return vertexPaint_.active();}
     bool vertexPaintSurfaceHeld() const {return vertexPaint_.surfaceHeld();}
     void setVertexPaintEnabled(bool enabled,SceneDocument& document,Renderer& renderer){cancel(document,renderer);vertexPaint_.setEnabled(enabled,document,renderer);}

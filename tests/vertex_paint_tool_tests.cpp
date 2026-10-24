@@ -17,29 +17,39 @@ struct Project {
     Project(){std::filesystem::create_directories(root);}
     ~Project(){std::error_code error;const auto path=std::filesystem::weakly_canonical(root,error),temp=std::filesystem::weakly_canonical(std::filesystem::temp_directory_path(),error);if(!error&&path.parent_path()==temp&&path.filename().string().starts_with("crimson-paint-tool-"))std::filesystem::remove_all(path,error);}
 };
-ModelPrimitive plane() {
+ModelPrimitive plane(bool separatedQuad=false) {
     ModelPrimitive p;p.vertices.resize(4);p.vertices[0].position={-1,-1,0};p.vertices[1].position={1,-1,0};p.vertices[2].position={1,1,0};p.vertices[3].position={-1,1,0};
-    p.indices={0,1,2,0,2,3};p.sourceFaces={{{0,1,2,3},{0,1},4}};return p;
+    p.indices={0,1,2,0,2,3};p.sourceFaces={{{0,1,2,3},{0,1},4}};
+    if(separatedQuad) {
+        for(std::uint32_t i=0;i<4;++i){auto vertex=p.vertices[i];vertex.position[0]+=4;p.vertices.push_back(vertex);}
+        p.indices.insert(p.indices.end(),{4,5,6,4,6,7});p.sourceFaces.push_back({{4,5,6,7},{2,3},4});
+    }
+    return p;
 }
 class Fixture {
 public:
-    Fixture():document(project.root) {
+    explicit Fixture(std::uint32_t level=4,bool separatedQuad=false):document(project.root) {
         context=ImGui::CreateContext();auto& io=ImGui::GetIO();io.IniFilename=nullptr;io.DisplaySize={800,600};io.DeltaTime=1.f/60;
         unsigned char* pixels{};int w{},h{};io.Fonts->GetTexDataAsRGBA32(&pixels,&w,&h);io.Fonts->SetTexID(static_cast<ImTextureID>(1));ImGui::NewFrame();
         entity=document.createBox("Room-shaped paint target");document.select({entity},entity);
-        const auto p=plane();geometry=buildMeshPaintGeometry(p,4);empty=makeMeshPaintPayload(std::uint32_t(geometry->vertices.size()));
+        const auto p=plane(separatedQuad);geometry=buildMeshPaintGeometry(p,level);empty=makeMeshPaintPayload(std::uint32_t(geometry->vertices.size()));
         const auto expanded=meshPaintRenderPrimitive(p,*geometry);bvh=build_shadow_ray_mesh(expanded);
         world=math::translation({3,.6666667f,22.75f})*math::scaling({2,1.3333334f,1});
         const auto center=math::transformPoint(world,{0,0,0});vp=math::perspective(1.2,800./600,.1,1000,ClipDepth::NegativeOneToOne)*math::lookAt(center+Vec3{0,0,4},center);
         tool.setTargetQuery([this](const SceneDocument&,EntityId id){VertexPaintTargets result;if(id!=entity)return result;VertexPaintTarget target;target.entity=entity;target.draw=2;target.primitive=7;target.sourcePrimitive=3;target.resourceRevision=71;target.sourceNode=4;target.materialId="paint-parent";target.materialSlot=1;target.world=world;target.geometry=geometry;target.weights=weights();result.draws.push_back(std::move(target));return result;});
-        tool.setSurfaceQuery([this](const SceneDocument&){VertexPaintSurfaceMesh surface{bvh,world,*math::inverse(world),bvh->bounds,entity,2,7,71,false,true};auto surfaces=std::vector{surface};if(occluded){surface.world=math::translation({0,0,.1f})*world;surface.inverse=*math::inverse(surface.world);surface.draw=3;surface.primitive=8;surfaces.push_back(surface);}return makeVertexPaintSurfaceSnapshot(std::move(surfaces),signature);});
+        tool.setSurfaceQuery([this](const SceneDocument&){VertexPaintSurfaceMesh surface{bvh,world,*math::inverse(world),bvh->bounds,entity,2,7,71,false,true};auto surfaces=std::vector{surface};if(occluded){surface.world=math::translation({0,0,.1f})*world;surface.inverse=*math::inverse(surface.world);surface.draw=3;surface.primitive=8;surfaces.push_back(surface);}auto snapshot=makeVertexPaintSurfaceSnapshot(std::move(surfaces),signature);if(unready){snapshot.ready=false;snapshot.diagnostic="Paint surface preparation is pending.";}return snapshot;});
         tool.setEnabled(true,document,renderer);
     }
     ~Fixture(){tool.cancel(document,renderer);ImGui::EndFrame();ImGui::DestroyContext(context);}
     void tick(Vec2 pixel={400,300},bool pressed=false,bool held=false,bool escape=false){tool.update(document,renderer,{},serial,vp,800,600,pixel,true,true,false,pressed,held,escape);}
     std::shared_ptr<const MeshPaintPayload> weights() const {const auto record=document.scene().find(entity);return record&&record->meshPaint&&!record->meshPaint->draws.empty()?record->meshPaint->draws.front().weights:empty;}
     std::size_t painted() const {const auto payload=weights();std::size_t count=0;for(std::uint32_t i=0;i<payload->vertexCount;++i)if(payload->rgb(i)!=MeshPaintRgb{})++count;return count;}
-    Project project;SceneDocument document;Renderer renderer;VertexPaintTool tool;EntityId entity{};std::uint64_t serial{},signature{1234};bool occluded{};
+    void seed(MeshPaintRgb rgb) {
+        std::vector<MeshPaintChange> values;for(std::uint32_t vertex=0;vertex<geometry->vertices.size();++vertex)values.push_back({vertex,rgb});
+        auto record=*document.scene().find(entity);record.meshPaint=SceneMeshPaint{geometry->level,MeshPaintRecipeVersion,{{2,3,geometry->level,geometry->sourceSignature,updateMeshPaintPayload(empty,values)}}};
+        require(document.updateEntity(entity,record,"Existing authored paint"),"Could not seed the saved-paint fixture.");
+    }
+    Project project;SceneDocument document;Renderer renderer;VertexPaintTool tool;EntityId entity{};std::uint64_t serial{},signature{1234};bool occluded{},unready{};
     Mat4 world,vp;std::shared_ptr<const MeshPaintGeometry> geometry;std::shared_ptr<const MeshPaintPayload> empty;std::shared_ptr<const ShadowRayMesh> bvh;ImGuiContext* context{};
 };
 void firstClickAndImmediateRelease() {
@@ -98,6 +108,44 @@ void dragAndCancellation() {
     fixture.tick({400,350},false,false);fixture.tick({400,330},true,true);++fixture.signature;fixture.tick({400,335},false,true);
     require(!fixture.tool.active()&&sameEntity(*fixture.document.scene().find(fixture.entity),painted),"An occluder/source change retained a stale stroke.");
 }
+void baseInsideCoarseCell() {
+    Fixture fixture(0,true);fixture.seed({35,180,20});fixture.tool.selectLayer(0);
+    const auto center=math::transformPoint(fixture.world,{0,0,0});
+    require(std::none_of(fixture.geometry->vertices.begin(),fixture.geometry->vertices.end(),[&](const auto& vertex){return math::length(math::transformPoint(fixture.world,vertex.position)-center)<=.5;}),"The coarse-cell regression accidentally placed a vertex inside the brush.");
+    const auto baseline=*fixture.document.scene().find(fixture.entity);const auto saved=fixture.weights();const auto savedBytes=meshPaintBytes(*saved);const auto history=fixture.document.history().size();
+    const auto centerOverlay=[&]{float value=0;for(const auto vertex:fixture.geometry->cells.front().vertices)for(const auto weight:fixture.weights()->rgb(vertex))value+=weight*.25f;return value;};
+    const auto before=centerOverlay();
+    fixture.tick({400,300},true,true);
+    require(fixture.tool.active()&&fixture.document.transactionActive()&&centerOverlay()<before,"Base painting in a coarse cell did not erase the overlay directly under the brush.");
+    require(meshPaintBytes(*saved)==savedBytes,"Base cleanup mutated existing immutable paint pages.");
+    for(std::uint32_t vertex=0;vertex<fixture.geometry->vertices.size();++vertex)
+        if(fixture.geometry->vertices[vertex].position[0]>2)require(fixture.weights()->rgb(vertex)==saved->rgb(vertex),"A Base brush changed an unrelated disconnected quad.");
+    fixture.tool.prepareUi(fixture.document,fixture.renderer,fixture.serial,{400,300},true,false,false,false);
+    require(!fixture.tool.active()&&!fixture.document.transactionActive(),"Coarse-cell Base cleanup retained ownership after release.");
+    require(fixture.document.history().size()==history+1,"Coarse-cell Base cleanup was not one undo command.");
+    const auto cleaned=*fixture.document.scene().find(fixture.entity);
+    require(fixture.document.begin("Immediate command after Base cleanup"),"Base cleanup blocked an editor command after release.");fixture.document.cancel();
+    require(fixture.document.undo()&&sameEntity(*fixture.document.scene().find(fixture.entity),baseline),"Undo did not restore exact pre-existing paint after Base cleanup.");
+    require(fixture.document.redo()&&sameEntity(*fixture.document.scene().find(fixture.entity),cleaned),"Redo did not restore the exact Base cleanup.");
+    fixture.tick({400,300},true,true);require(fixture.tool.active()&&centerOverlay()<before,"Base could not start another cleanup stroke immediately.");
+    fixture.tick({410,300},false,true,true);
+    require(!fixture.tool.active()&&!fixture.document.transactionActive()&&sameEntity(*fixture.document.scene().find(fixture.entity),cleaned),"Canceling Base cleanup failed to preserve the preceding authored paint exactly.");
+}
+void baseVisibilityAndUnreadyRelease() {
+    for(const bool unready:{false,true}) {
+        Fixture fixture(0);fixture.seed({35,180,20});fixture.tool.selectLayer(0);fixture.unready=unready;fixture.occluded=!unready;++fixture.signature;
+        const auto baseline=*fixture.document.scene().find(fixture.entity);const auto history=fixture.document.history().size();
+        // An unfinished CPU snapshot has no valid brush hit yet. This fixture
+        // deliberately exercises preparation ownership without a GPU backend.
+        fixture.tick();fixture.tick({400,300},true,true);
+        require(!fixture.tool.active()&&!fixture.document.transactionActive(),"Unverified Base cleanup acquired document ownership.");
+        require(fixture.serial==0,"An unready CPU paint surface attempted a GPU request.");
+        fixture.tick({400,300},false,false);
+        require(!fixture.tool.active()&&!fixture.document.transactionActive()&&!fixture.tool.surfaceHeld(),"An unavailable Base surface retained a held stroke after release.");
+        require(fixture.document.history().size()==history&&sameEntity(*fixture.document.scene().find(fixture.entity),baseline),"Base cleanup crossed an occluder or changed paint before surface verification.");
+        require(fixture.document.begin("Immediate command after unready Base click"),"An unready Base click blocked editor commands after release.");fixture.document.cancel();
+    }
+}
 void drawIdentityOcclusion() {
     Fixture fixture;fixture.occluded=true;++fixture.signature;fixture.tick({400,300},true,true);fixture.tick({400,300},false,false);
     require(!fixture.tool.active()&&!fixture.document.transactionActive()&&fixture.painted()==0,"A nearer non-Blend slot of the same mesh failed to block painting.");
@@ -122,4 +170,4 @@ void longMovementCost() {
     std::cout<<"Long world-distance CPU drag + release: "<<elapsed<<" ms; scene publications "<<fixture.document.scene().revision()-revision<<".\n";
 }
 }
-int main(){try{firstClickAndImmediateRelease();uiOwnershipAndEnabledControls();dragAndCancellation();drawIdentityOcclusion();actualCursorRadius();longMovementCost();std::cout<<"Vertex paint production first click, enabled UI, command boundaries, world cursor, occlusion, drag, release and cancellation passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{firstClickAndImmediateRelease();uiOwnershipAndEnabledControls();dragAndCancellation();baseInsideCoarseCell();baseVisibilityAndUnreadyRelease();drawIdentityOcclusion();actualCursorRadius();longMovementCost();std::cout<<"Vertex paint production first click, coarse-cell Base cleanup, saved paint, enabled UI, command boundaries, world cursor, occlusion, drag, release and cancellation passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
