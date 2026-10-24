@@ -32,6 +32,7 @@ public:
     void drawCursor(ImDrawList&,const ViewportRegion&,Vec2 pointer,std::uint32_t width,std::uint32_t height) const;
     void cancel(SceneDocument&,Renderer&);
 private:
+    friend struct VertexPaintToolTestAccess;
     struct SurfaceTile {std::uint32_t x{},y{},width{},height{};std::vector<PickSurfaceSample> samples;std::uint64_t used{};};
     bool enabled_{},waitForRelease_{},cursorReady_{},holdSurface_{},showSubdivisions_{};
     VertexPaintBrush brush_,strokeBrush_;
@@ -62,6 +63,7 @@ private:
     struct ProfileFrame;
     bool profiling_{};
     std::uint64_t cpuRays_{},gpuVisibilityChecks_{},appliedDabs_{},changedVertices_{};
+    std::uint64_t candidatePreparationCount_{};
     void clear(bool retainFootprint=false);
     void enqueue(Vec2,bool final=false);
     const PickSurfaceSample* surface(Vec2);

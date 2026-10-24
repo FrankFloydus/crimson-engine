@@ -55,6 +55,10 @@ struct QuaderImportResult {
     std::optional<std::uint64_t> locationRevision;
     std::vector<QuaderMaterialInput> materialInputs;
     std::vector<std::string> assetIds;
+    // Complete native graphs read from the source, independent of whether an
+    // immutable model package was reused. Existing preserved graphs stay owned
+    // by their material documents and are not republished from disk here.
+    std::vector<std::shared_ptr<const MaterialAsset>> preparedMaterials;
     std::vector<std::shared_ptr<const ModelAsset>> preparedModels;
     std::vector<QuaderPaintInput> paintInputs;
     std::vector<QuaderPaintReplacement> paintReplacements;

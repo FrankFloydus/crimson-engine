@@ -1127,10 +1127,54 @@ void materialSyncTransactions(){
     pump([&]{return published>beforeAuto;},8000);require(published==beforeAuto+1&&loadMaterialAsset(destination,sharedId).name==expectedName,"Automatic reimport ignored disabled material sync.");
     targets[0].link.refreshMaterials=true;expectedName=sourceName;const auto beforeAutoRefresh=published;
     pump([&]{return published>beforeAutoRefresh;},8000);require(published==beforeAutoRefresh+1&&loadMaterialAsset(destination,sharedId).name==sourceName,"Automatic reimport did not apply enabled material sync.");
+
+    // Import is an explicit refresh even when this exact completed source save
+    // has already been consumed by automatic synchronization.
+    targets[0].link.autoSync=false;const auto consumedKey=targets[0].consumedSaveKey;
+    for(unsigned repeat=0;repeat<2;++repeat) {
+        local=loadMaterialAsset(destination,sharedId);local.name="Edited after consumed save "+std::to_string(repeat);
+        materialOutputNode(local.graph).output.roughness=.93f;saveMaterialAsset(destination,local);
+        writeFileAtomically(resolveAssetPath(destination,imageId),"Edited after consumed texture "+std::to_string(repeat));
+        const auto beforeManual=published;bridge.requestImport(7,targets[0].link,1);pump([&]{return !bridge.busy(7);});
+        require(published==beforeManual+1&&targets[0].consumedSaveKey==consumedKey&&loadMaterialAsset(destination,sharedId).name==sourceName&&
+            fileBytes(resolveAssetPath(destination,imageId))==sourcePixels,
+            "Explicit material sync reused a consumed save instead of restoring the Quader material and texture.");
+    }
+}
+void sameGenerationMaterialRefreshKeepsPaint(){
+    Temporary temporary;auto source=synthetic();source.lights.clear();
+    source.materials.push_back({"33333333-3333-4333-8333-333333333333",true});source.meshes[0].surfaces[0].material=0;
+    QuaderSourceMaterial surface;surface.identity=source.materials[0];surface.name="Native surface";surface.color={.2f,.3f,.4f};surface.roughness=.45f;surface.fingerprint=source.fingerprint;
+    source.readMaterial=[&](std::uint32_t index){require(index==0,"Unexpected synthetic material index.");return surface;};
+    QuaderPrepareOptions options;options.projectRoot=temporary.root;const auto first=prepareQuaderImport(source,options);commit(temporary.root,first);
+    const auto model=first.preparedModels.front();const auto materialId=model->materialIds.front();
+    auto local=loadMaterialAsset(temporary.root,materialId);local.name="Authored local graph";materialOutputNode(local.graph).output.roughness=.97f;saveMaterialAsset(temporary.root,local);
+    const auto localBytes=fileBytes(resolveAssetPath(temporary.root,materialId));
+    QuaderPaintInput input;input.sourceKey=first.meshes[0].sourceKey;input.modelId=model->id;input.paint.emplace();input.paint->subdivisionLevel=5;
+    const auto geometry=buildMeshPaintGeometry(model->primitives.front(),5);const auto payload=makeMeshPaintPayload(static_cast<std::uint32_t>(geometry->vertices.size()));
+    input.paint->draws.push_back({0,0,5,geometry->sourceSignature,payload});options.paintInputs.push_back(input);
+    // The immutable generation identity is sufficient for an unchanged surface;
+    // old CPU geometry need not be resident to refresh its shared material.
+    surface.name="Latest Quader graph";surface.color={.8f,.7f,.6f};surface.roughness=.21f;
+    const auto preserved=prepareQuaderImport(source,options);
+    require(preserved.meshes[0].modelId==model->id&&preserved.paintReplacements.size()==1&&preserved.paintReplacements[0].after==input.paint&&
+        preserved.paintReplacements[0].after->draws.front().weights==payload&&preserved.preparedMaterials.empty()&&fileBytes(resolveAssetPath(temporary.root,materialId))==localBytes,
+        "Disabled material sync changed the existing graph or exact paint field.");
+    require(std::none_of(preserved.files.begin(),preserved.files.end(),[](const auto& file){return file.id.ends_with(".crimson-material");}),"Disabled material sync staged a local graph replacement.");
+    options.refreshMaterials=true;const auto refreshed=prepareQuaderImport(source,options);
+    require(refreshed.meshes[0].modelId==model->id&&refreshed.paintReplacements.size()==1&&refreshed.paintReplacements[0].after==input.paint&&
+        refreshed.paintReplacements[0].after->draws.front().weights==payload&&refreshed.preparedMaterials.size()==1&&
+        refreshed.preparedMaterials.front()->id==materialId&&refreshed.preparedMaterials.front()->name==surface.name,
+        "Material-only refresh rebuilt or changed existing paint despite an unchanged immutable model generation.");
+    require(std::any_of(refreshed.files.begin(),refreshed.files.end(),[&](const auto& file){return fileAssetId(refreshed,file)==materialId;}),"Same-generation material refresh did not stage the source graph.");
+    require(refreshed.preparedModels.front()->materials.front().name==surface.name,"A reused model package replaced the freshly read source material graph.");
+    commit(temporary.root,refreshed);const auto actual=loadMaterialAsset(temporary.root,materialId);
+    require(actual.id==materialId&&actual.name==surface.name,"Same-generation refresh changed material identity or retained the old graph.");
+    near(materialOutputNode(actual.graph).output.roughness,surface.roughness);
 }
 }
 int main(int argc,char** argv){try{
     if(argc==4&&std::string(argv[1])=="--verify-import"){verifyImport(pathFromUtf8(argv[2]),argv[3]);return 0;}
     require(argc==1,"Usage: quader_bridge_tests [--verify-import <project.qproj> <scene-id>]");
-    geometryAndLights();uvInterpolationPublication();sourceHierarchyPlacement();currentSourceMeshSet();geometryReuseIgnoresNamesAndPlacement();authoredMeshOwnership();contentOnlyOwnershipMigration();legacyUnusedFallbackPackages();deletedGeometryReimport();reservedGeometryMembersAndCorruption();clusteredPointLightCapacity();completionRecords();nativeReaderHierarchy();nativeReaderHierarchy(fixture().parent_path()/"schema20/hierarchy");nativeReaderMaterials();sceneScopedContentLayout();genericSceneNameAdoption();renamedSceneContentFolders();deletedMaterialsAndTexturesReimport();modernProjectManifest();coordinatorTransactions();topologyUpgradeAndPaintInputGuards();materialSyncTransactions();std::cout<<"Quader reader, import, hierarchy, source mesh ownership, current mesh set, collision, deletion/reimport, material, completed-save and publication checks passed.\n";return 0;}
+    geometryAndLights();uvInterpolationPublication();sourceHierarchyPlacement();currentSourceMeshSet();geometryReuseIgnoresNamesAndPlacement();authoredMeshOwnership();contentOnlyOwnershipMigration();legacyUnusedFallbackPackages();deletedGeometryReimport();reservedGeometryMembersAndCorruption();clusteredPointLightCapacity();completionRecords();nativeReaderHierarchy();nativeReaderHierarchy(fixture().parent_path()/"schema20/hierarchy");nativeReaderMaterials();sceneScopedContentLayout();genericSceneNameAdoption();renamedSceneContentFolders();deletedMaterialsAndTexturesReimport();modernProjectManifest();coordinatorTransactions();topologyUpgradeAndPaintInputGuards();materialSyncTransactions();sameGenerationMaterialRefreshKeepsPaint();std::cout<<"Quader reader, import, hierarchy, source mesh ownership, current mesh set, collision, deletion/reimport, material, completed-save and publication checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

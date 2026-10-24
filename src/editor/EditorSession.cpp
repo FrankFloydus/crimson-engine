@@ -215,6 +215,9 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
             if(path.extension()!=".crimson-quader")assets.onFileChanged(path);
             changed.push_back(path);
         }
+        // Shared material generations change independently of immutable model
+        // IDs. Finish file invalidation before publishing their complete graphs.
+        for(const auto& material:result.preparedMaterials)assets.publishMaterial(material);
         materialEditor_.filesChanged(changed);
     };
     { CRIMSON_PROFILE_ZONE("Quader resource observation");quader_.update(targets,document_.documentGeneration(),play_.playing() || document_.transactionActive() || editor_.playTransitionBlocked(),hooks); }

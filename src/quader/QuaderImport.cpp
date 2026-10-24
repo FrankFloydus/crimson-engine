@@ -294,7 +294,9 @@ struct Preparation {
                 }
                 const auto imageId=availableFileId(originalImageId);
                 images[slot]=publishedId(imageId);file(imageId,png(texture,slot,source.normalDirectX),!options.refreshMaterials);out.assetIds.push_back(publishedId(imageId));}
-            auto candidate=materialAsset(source,publishedId(id),images);file(id,serializeMaterialAsset(candidate));materials[publishedId(id)]=std::move(candidate);out.assetIds.push_back(publishedId(id));}
+            auto candidate=materialAsset(source,publishedId(id),images);file(id,serializeMaterialAsset(candidate));
+            out.preparedMaterials.push_back(std::make_shared<const MaterialAsset>(candidate));
+            materials[publishedId(id)]=std::move(candidate);out.assetIds.push_back(publishedId(id));}
         return result;
     }
     std::string identityKey(const QuaderSourceTexture& texture,std::size_t slot,bool directX)const{return identity(scene,texture,slot,directX);}
@@ -583,6 +585,13 @@ QuaderImportResult prepareQuaderImport(const QuaderSourceScene& scene,const Quad
         const auto mesh=std::find_if(out.meshes.begin(),out.meshes.end(),[&](const auto& value){return value.sourceKey==input.sourceKey;});
         if(mesh==out.meshes.end() || mesh->modelId.empty()) {
             require(!input.paint || input.paint->draws.empty(),"Quader sync cannot remove a painted mesh. Preserve or reset its paint explicitly first.");
+            continue;
+        }
+        // Model generations are immutable. Refreshing shared materials must
+        // retain the exact paint field without rebuilding or validating an
+        // unchanged subdivision (including preserved incompatible payloads).
+        if(mesh->modelId==input.modelId) {
+            out.paintReplacements.push_back({input.sourceKey,input.modelId,input.paint,input.paint});
             continue;
         }
         const auto model=std::find_if(out.preparedModels.begin(),out.preparedModels.end(),[&](const auto& value){return value && value->id==mesh->modelId;});

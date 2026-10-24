@@ -12,6 +12,49 @@
 
 namespace {
 void require(bool value,const char* message) { if (!value) throw std::runtime_error(message); }
+void immutableDescriptorRetries() {
+    using namespace crimson;
+    PreviewDescriptorState descriptors;
+    const PreviewValidationKey validation{1,2,3,4,128};
+    require(!descriptors.matches(42,validation,5),"An unpublished dependency descriptor was reused.");
+    descriptors.publish(42,validation,5);
+    // A chart/model/shader can remain pending for many frames without changing
+    // the saved source generation that its eventual render must consume.
+    for(unsigned retry=0;retry<512;++retry)
+        require(descriptors.matches(42,validation,5),"A readiness retry discarded immutable source descriptors.");
+    require(!descriptors.matches(43,validation,5),"Changed source bytes reused the previous descriptor publication.");
+    require(!descriptors.matches(42,validation,6),"A relocated source reused its previous location generation.");
+    for(unsigned field=0;field<5;++field) {
+        auto changed=validation;
+        switch(field) {
+        case 0:++changed.catalog;break;
+        case 1:++changed.policy;break;
+        case 2:++changed.rendererShader;break;
+        case 3:++changed.materialShader;break;
+        case 4:++changed.edge;break;
+        }
+        require(!descriptors.matches(42,changed,5),"Changed render/deletion validation reused a stale descriptor.");
+    }
+    descriptors.invalidate();
+    require(!descriptors.matches(42,validation,5),"An explicit source/deletion invalidation retained a usable descriptor.");
+    descriptors.publish(43,validation,6);
+    require(descriptors.matches(43,validation,6)&&!descriptors.matches(42,validation,5),
+        "Descriptor publication did not replace the exact source and location generation together.");
+}
+void sourcePathNormalization() {
+    using namespace crimson;
+    namespace fs=std::filesystem;
+    const auto first=fs::path("Content/First.png"),second=fs::path("Content/Second.png");
+    const std::vector<fs::path> files{second,first,"content/FIRST.PNG","Content/./First.png",
+        "Content/nested/../Second.png",fs::absolute(first)};
+    const auto unique=uniquePreviewSourceFiles(files);
+    require(unique.size()==2,"Preview source paths retained lexical/case/absolute aliases.");
+    require(resourcePathKey(unique[0])==resourcePathKey(first)&&resourcePathKey(unique[1])==resourcePathKey(second),
+        "Preview source normalization changed canonical dependency order.");
+    require(unique[0]==first&&unique[1]==second,"Preview source normalization lost the first original source spelling.");
+    require(uniquePreviewSourceFiles(unique)==unique,"Normalizing an already prepared source descriptor changed it.");
+    require(uniquePreviewSourceFiles({}).empty(),"An empty source descriptor acquired a dependency.");
+}
 void fairRequestScheduling() {
     using namespace crimson;
     const std::vector<std::string> visible{"expensive-pending","material-b","material-c","material-d"};
@@ -175,6 +218,7 @@ void persistentCache() {
 }
 int main() {
     try {
+        immutableDescriptorRetries();sourcePathNormalization();
         crimson::PreviewDependencies sources;
         sources.files={"assets/textures/albedo.png","assets/textures/normal.png"};
         sources.sourceFingerprints={11,22};

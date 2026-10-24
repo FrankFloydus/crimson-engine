@@ -9,6 +9,11 @@
 #include <iostream>
 #include <stdexcept>
 
+namespace crimson {
+struct VertexPaintToolTestAccess {
+    static std::uint64_t candidatePreparations(const VertexPaintTool& tool){return tool.candidatePreparationCount_;}
+};
+}
 namespace {
 using namespace crimson;
 void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
@@ -37,7 +42,7 @@ public:
         world=math::translation({3,.6666667f,22.75f})*math::scaling({2,1.3333334f,1});
         const auto center=math::transformPoint(world,{0,0,0});vp=math::perspective(1.2,800./600,.1,1000,ClipDepth::NegativeOneToOne)*math::lookAt(center+Vec3{0,0,4},center);
         tool.setTargetQuery([this](const SceneDocument&,EntityId id){VertexPaintTargets result;if(id!=entity)return result;VertexPaintTarget target;target.entity=entity;target.draw=2;target.primitive=7;target.sourcePrimitive=3;target.resourceRevision=71;target.sourceNode=4;target.materialId="paint-parent";target.materialSlot=1;target.world=world;target.geometry=geometry;target.weights=weights();result.draws.push_back(std::move(target));return result;});
-        tool.setSurfaceQuery([this](const SceneDocument&){VertexPaintSurfaceMesh surface{bvh,world,*math::inverse(world),bvh->bounds,entity,2,7,71,false,true};auto surfaces=std::vector{surface};if(occluded){surface.world=math::translation({0,0,.1f})*world;surface.inverse=*math::inverse(surface.world);surface.draw=3;surface.primitive=8;surfaces.push_back(surface);}auto snapshot=makeVertexPaintSurfaceSnapshot(std::move(surfaces),signature);if(unready){snapshot.ready=false;snapshot.diagnostic="Paint surface preparation is pending.";}return snapshot;});
+        tool.setSurfaceQuery([this](const SceneDocument&){VertexPaintSurfaceMesh surface{bvh,world,*math::inverse(world),bvh->bounds,entity,2,7,71,false,true};auto surfaces=std::vector{surface};if(occluded){surface.world=math::translation(occluderOffset)*world;surface.inverse=*math::inverse(surface.world);surface.draw=3;surface.primitive=8;surfaces.push_back(surface);}auto snapshot=makeVertexPaintSurfaceSnapshot(std::move(surfaces),signature);snapshot.raycast=[this,raycast=std::move(snapshot.raycast)](const Ray& ray){++surfaceRays;return raycast(ray);};if(unready){snapshot.ready=false;snapshot.diagnostic="Paint surface preparation is pending.";}return snapshot;});
         tool.setEnabled(true,document,renderer);
     }
     ~Fixture(){tool.cancel(document,renderer);ImGui::EndFrame();ImGui::DestroyContext(context);}
@@ -49,7 +54,7 @@ public:
         auto record=*document.scene().find(entity);record.meshPaint=SceneMeshPaint{geometry->level,MeshPaintRecipeVersion,{{2,3,geometry->level,geometry->sourceSignature,updateMeshPaintPayload(empty,values)}}};
         require(document.updateEntity(entity,record,"Existing authored paint"),"Could not seed the saved-paint fixture.");
     }
-    Project project;SceneDocument document;Renderer renderer;VertexPaintTool tool;EntityId entity{};std::uint64_t serial{},signature{1234};bool occluded{},unready{};
+    Project project;SceneDocument document;Renderer renderer;VertexPaintTool tool;EntityId entity{};std::uint64_t serial{},signature{1234},surfaceRays{};bool occluded{},unready{};Vec3 occluderOffset{0,0,.1f};
     Mat4 world,vp;std::shared_ptr<const MeshPaintGeometry> geometry;std::shared_ptr<const MeshPaintPayload> empty;std::shared_ptr<const ShadowRayMesh> bvh;ImGuiContext* context{};
 };
 void firstClickAndImmediateRelease() {
@@ -150,6 +155,48 @@ void drawIdentityOcclusion() {
     Fixture fixture;fixture.occluded=true;++fixture.signature;fixture.tick({400,300},true,true);fixture.tick({400,300},false,false);
     require(!fixture.tool.active()&&!fixture.document.transactionActive()&&fixture.painted()==0,"A nearer non-Blend slot of the same mesh failed to block painting.");
 }
+void changingOccludersRetainSelectedGeometry() {
+    Fixture fixture(5);const auto baseline=*fixture.document.scene().find(fixture.entity);
+    fixture.tick();const auto preparations=VertexPaintToolTestAccess::candidatePreparations(fixture.tool);
+    require(preparations==1,"The first dense-mesh hover did not prepare its selected geometry once.");
+    const auto stableStart=fixture.surfaceRays;fixture.tick();const auto stableRays=fixture.surfaceRays-stableStart;
+    for(unsigned frame=0;frame<8;++frame) {
+        ++fixture.signature;const auto firstRay=fixture.surfaceRays;fixture.tick();
+        require(VertexPaintToolTestAccess::candidatePreparations(fixture.tool)==preparations,"Changing occluders rebuilt the unchanged selected-mesh projection and footprint.");
+        require(fixture.surfaceRays-firstRay>stableRays,"Changing occluders retained stale cached candidate visibility.");
+    }
+    require(sameEntity(*fixture.document.scene().find(fixture.entity),baseline),"Hover cache refresh changed authored paint.");
+    // The center remains visible while a newly arrived non-Blend draw covers
+    // only the right edge of the brush. Previously cached visible controls must
+    // become hidden without rebuilding any selected geometry.
+    fixture.occluded=true;fixture.occluderOffset={2.25f,0,.1f};++fixture.signature;
+    fixture.tick({400,300},true,true);
+    require(fixture.tool.active()&&fixture.painted()>0,"A partial occluder prevented painting the visible brush center.");
+    const auto vertex=[&](float x) {
+        const auto found=std::find_if(fixture.geometry->vertices.begin(),fixture.geometry->vertices.end(),[&](const auto& v){return math::length(v.position-Vec3{x,0,0})<1e-6;});
+        require(found!=fixture.geometry->vertices.end(),"The dense visibility fixture has no expected brush control.");
+        return std::uint32_t(found-fixture.geometry->vertices.begin());
+    };
+    require(fixture.weights()->rgb(vertex(.1875f))==MeshPaintRgb{}&&fixture.weights()->rgb(vertex(-.1875f))!=MeshPaintRgb{},"An occluder change painted previously cached controls through the new foreground draw.");
+    require(VertexPaintToolTestAccess::candidatePreparations(fixture.tool)==preparations,"A visibility-only change rebuilt selected geometry when starting a stroke.");
+    fixture.tool.prepareUi(fixture.document,fixture.renderer,fixture.serial,{400,300},true,false,false,false);
+    require(!fixture.tool.active()&&!fixture.document.transactionActive(),"A retained geometry cache delayed stroke release.");
+    require(fixture.document.undo()&&sameEntity(*fixture.document.scene().find(fixture.entity),baseline),"A cached visibility stroke failed to undo exactly.");
+    fixture.occluded=false;++fixture.signature;fixture.tick();
+    const auto center=math::transformPoint(fixture.world,{0,0,0});
+    fixture.vp=math::perspective(1.2,800./600,.1,1000,ClipDepth::NegativeOneToOne)*math::lookAt(center+Vec3{0,0,4.2f},center);
+    fixture.tick();
+    require(VertexPaintToolTestAccess::candidatePreparations(fixture.tool)==preparations+1,"A changed camera retained stale projected candidates.");
+    fixture.world=math::translation({.01f,0,0})*fixture.world;fixture.tick();
+    require(VertexPaintToolTestAccess::candidatePreparations(fixture.tool)==preparations+2,"A changed selected transform retained stale projected candidates.");
+    fixture.geometry=buildMeshPaintGeometry(plane(),4);fixture.empty=makeMeshPaintPayload(std::uint32_t(fixture.geometry->vertices.size()));
+    fixture.bvh=build_shadow_ray_mesh(meshPaintRenderPrimitive(plane(),*fixture.geometry));++fixture.signature;fixture.tick();
+    require(VertexPaintToolTestAccess::candidatePreparations(fixture.tool)==preparations+3,"Changed selected topology retained stale projected candidates.");
+    fixture.tick({400,300},true,true);require(fixture.tool.active(),"The refreshed target could not begin a new stroke.");
+    fixture.vp=math::perspective(1.2,800./600,.1,1000,ClipDepth::NegativeOneToOne)*math::lookAt(center+Vec3{0,0,4.4f},center);
+    fixture.tick({400,300},false,true);
+    require(!fixture.tool.active()&&!fixture.document.transactionActive()&&sameEntity(*fixture.document.scene().find(fixture.entity),baseline),"A real view change failed to cancel a cached stroke and restore its exact paint.");
+}
 void actualCursorRadius() {
     Fixture fixture;fixture.tick();
     ImDrawList draw(ImGui::GetDrawListSharedData());draw._ResetForNewFrame();draw.PushClipRectFullScreen();fixture.tool.drawCursor(draw,{0,0,800,600,true},{400,300},800,600);draw.PopClipRect();
@@ -170,4 +217,4 @@ void longMovementCost() {
     std::cout<<"Long world-distance CPU drag + release: "<<elapsed<<" ms; scene publications "<<fixture.document.scene().revision()-revision<<".\n";
 }
 }
-int main(){try{firstClickAndImmediateRelease();uiOwnershipAndEnabledControls();dragAndCancellation();baseInsideCoarseCell();baseVisibilityAndUnreadyRelease();drawIdentityOcclusion();actualCursorRadius();longMovementCost();std::cout<<"Vertex paint production first click, coarse-cell Base cleanup, saved paint, enabled UI, command boundaries, world cursor, occlusion, drag, release and cancellation passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{firstClickAndImmediateRelease();uiOwnershipAndEnabledControls();dragAndCancellation();baseInsideCoarseCell();baseVisibilityAndUnreadyRelease();drawIdentityOcclusion();changingOccludersRetainSelectedGeometry();actualCursorRadius();longMovementCost();std::cout<<"Vertex paint production first click, coarse-cell Base cleanup, saved paint, enabled UI, command boundaries, world cursor, changing occluders, geometry caching, drag, release and cancellation passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

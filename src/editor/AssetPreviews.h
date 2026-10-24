@@ -42,6 +42,20 @@ struct PreviewValidationKey {
     std::uint32_t edge{};
     bool operator==(const PreviewValidationKey&) const = default;
 };
+// Dependency descriptors are immutable for an exact signature and source
+// location generation. Geometry/shader readiness retries retain that publication.
+struct PreviewDescriptorState {
+    std::uint64_t signature{},sourceLocations{};
+    PreviewValidationKey validation;
+    bool valid{};
+    bool matches(std::uint64_t expected,const PreviewValidationKey& key,std::uint64_t locations) const {
+        return valid&&signature==expected&&validation==key&&sourceLocations==locations;
+    }
+    void publish(std::uint64_t value,const PreviewValidationKey& key,std::uint64_t locations) {
+        signature=value;validation=key;sourceLocations=locations;valid=true;
+    }
+    void invalidate(){valid=false;}
+};
 struct PreviewCacheState {
     std::uint64_t checked{},published{};
     bool needsDiskRead(std::uint64_t signature) {

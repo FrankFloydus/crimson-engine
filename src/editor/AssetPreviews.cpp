@@ -56,10 +56,6 @@ uint64_t materialPreviewHash(const MaterialAsset& material) {
 }
 uint64_t animationPreviewHash(const AnimationAsset& animation) {return textHash(serializeAnimationAsset(animation));}
 uint64_t decalPreviewHash(const DecalAsset& decal) {auto key=textHash(serializeDecalAsset(decal));hash(key,3u);return key;}
-std::vector<std::filesystem::path> uniqueFiles(std::vector<std::filesystem::path> files) {
-    std::sort(files.begin(),files.end(),[](const auto& a,const auto& b){return resourcePathKey(a)<resourcePathKey(b);});
-    files.erase(std::unique(files.begin(),files.end(),[](const auto& a,const auto& b){return resourcePathKey(a)==resourcePathKey(b);}),files.end()); return files;
-}
 struct PreviewPins {
     std::shared_ptr<const SceneSnapshot> scene;
     std::shared_ptr<const MaterialAsset> material;
@@ -146,14 +142,14 @@ struct AssetPreviews::Impl {
         uint64_t sourceKey{},signature{},rendering{};
         PreviewCacheState cacheState;
         PreviewRetryState retry;
-        PreviewValidationKey validated;
+        PreviewDescriptorState descriptors;
         PreviewValidationKey indexValidation;
         std::vector<std::filesystem::path> files;
         std::vector<PreviewMaterialFingerprint> materials;
         std::vector<PreviewAnimationFingerprint> animations;
         std::vector<PreviewDecalFingerprint> decals;
         std::vector<PreviewSourceLocation> locations;
-        bool clean{},indexChecked{};
+        bool indexChecked{};
         bool wanted{},forceScene{},saveRequested{};
         std::string error;
         std::unique_ptr<DecalResources> decalResources;
@@ -274,7 +270,7 @@ struct AssetPreviews::Impl {
             if(current && renderer.setThumbnail(id,cached.signature,*cached.image)) {
                 entry.signature=cached.signature;entry.cacheState.published=cached.signature;
                 entry.files=cached.files;entry.materials=cached.materials;entry.animations=cached.animations;entry.decals=cached.decals;entry.locations=cached.locations;
-                entry.clean=true;entry.validated=validation;entry.retry.reset();entry.error.clear();entry.diskIndex={};
+                entry.descriptors.publish(entry.signature,validation,storageRevision);entry.retry.reset();entry.error.clear();entry.diskIndex={};
                 ++statistics.diskHits;return true;
             }
         }
@@ -376,14 +372,17 @@ struct AssetPreviews::Impl {
         shared::profiling::CpuZone requestZone{location};requestZone.text(id);
         ++statistics.requests;
         if (assets.references().deleted(id) || !entry.retry.ready(PreviewRetryState::Clock::now())) return;
+        {
+        CRIMSON_PROFILE_ZONE("Thumbnail descriptor validation");
         // The submitted packet pins a complete exact generation until readback.
         // Its unchanged inputs need no source traversal or new cache read while
         // that same thumbnail is already being rendered.
-        if(entry.clean && entry.validated==validation && !entry.forceScene && entry.rendering &&
+        if(entry.descriptors.matches(entry.signature,validation,storageRevision) && !entry.forceScene && entry.rendering &&
             entry.rendering==entry.signature && renderer.thumbnailBusy())return;
-        if(entry.clean && entry.validated==validation && !entry.forceScene && !entry.saveRequested)
+        if(entry.descriptors.matches(entry.signature,validation,storageRevision) && !entry.forceScene && !entry.saveRequested)
             if(warmCache(id,entry,entry.signature))return;
-        if(!entry.clean && indexedCache(id,entry))return;
+        if(!entry.descriptors.valid && indexedCache(id,entry))return;
+        }
         if(std::chrono::steady_clock::now()>=validationDeadline)return;
         ++statistics.validations;
         SceneSettings settings; settings.antiAliasing=AntiAliasing::Smaa;
@@ -591,7 +590,7 @@ struct AssetPreviews::Impl {
             // Pending charts/materials still need source-change notifications.
             // Publish their dependency descriptors before they become drawable.
             auto observed=files;observed.insert(observed.end(),validationFiles.begin(),validationFiles.end());
-            entry.files=uniqueFiles(std::move(observed));entry.locations=locations;
+            entry.files=uniquePreviewSourceFiles(std::move(observed));entry.locations=locations;
             entry.materials=materialVersions;entry.animations=animationVersions;entry.decals=decalVersions;
         }
         }
@@ -617,7 +616,7 @@ struct AssetPreviews::Impl {
         if (entry.sourceKey!=sourceKey || !entry.dependencies) {
             entry.sourceKey=sourceKey; entry.signature=0; entry.cacheState.checked=0;
             files.insert(files.end(),validationFiles.begin(),validationFiles.end());
-            files=uniqueFiles(std::move(files)); ResourceRequestOptions options; options.variant="preview-sources:"+std::to_string(sourceKey);
+            files=uniquePreviewSourceFiles(std::move(files)); ResourceRequestOptions options; options.variant="preview-sources:"+std::to_string(sourceKey);
             options.priority=ResourcePriority::Preview; options.dependencies=files; options.assetDependencies={id};
             options.dependencyValidation=DependencyValidation::FileState;
             entry.dependencies=resources.request<PreviewDependencies>(AssetRef<PreviewDependencies>{id},[files](std::stop_token token) {
@@ -634,14 +633,18 @@ struct AssetPreviews::Impl {
         if (entry.dependencies.state()==ResourceState::Failed) { entry.error=entry.dependencies.diagnostic(); return; }
         if (entry.dependencies.state()!=ResourceState::Ready) return;
         const auto dependencies=entry.dependencies.snapshot(); if (!dependencies) return;
-        auto signature=sourceKey; hash(signature,dependencies->fingerprint); entry.signature=signature;
-        validationFiles.insert(validationFiles.end(),dependencies->files.begin(),dependencies->files.end());
-        std::sort(animationVersions.begin(),animationVersions.end(),[](const auto& a,const auto& b){return a.id<b.id;});
-        animationVersions.erase(std::unique(animationVersions.begin(),animationVersions.end(),[](const auto& a,const auto& b){return a.id==b.id;}),animationVersions.end());
-        std::sort(decalVersions.begin(),decalVersions.end(),[](const auto& a,const auto& b){return a.id<b.id;});
-        decalVersions.erase(std::unique(decalVersions.begin(),decalVersions.end(),[](const auto& a,const auto& b){return a.id==b.id;}),decalVersions.end());
-        entry.files=uniqueFiles(std::move(validationFiles));entry.materials=std::move(materialVersions);entry.animations=std::move(animationVersions);entry.decals=std::move(decalVersions);entry.locations=std::move(locations);
-        entry.clean=true;entry.validated=validation;
+        auto signature=sourceKey; hash(signature,dependencies->fingerprint);
+        if(!entry.descriptors.matches(signature,validation,storageRevision)) {
+            CRIMSON_PROFILE_ZONE("Thumbnail descriptor publication");
+            validationFiles.insert(validationFiles.end(),dependencies->files.begin(),dependencies->files.end());
+            std::sort(animationVersions.begin(),animationVersions.end(),[](const auto& a,const auto& b){return a.id<b.id;});
+            animationVersions.erase(std::unique(animationVersions.begin(),animationVersions.end(),[](const auto& a,const auto& b){return a.id==b.id;}),animationVersions.end());
+            std::sort(decalVersions.begin(),decalVersions.end(),[](const auto& a,const auto& b){return a.id<b.id;});
+            decalVersions.erase(std::unique(decalVersions.begin(),decalVersions.end(),[](const auto& a,const auto& b){return a.id==b.id;}),decalVersions.end());
+            entry.files=uniquePreviewSourceFiles(std::move(validationFiles));entry.materials=std::move(materialVersions);entry.animations=std::move(animationVersions);entry.decals=std::move(decalVersions);entry.locations=std::move(locations);
+            entry.descriptors.publish(signature,validation,storageRevision);
+        }
+        entry.signature=signature;
         if (warmCache(id,entry,signature)) { if (entry.cacheState.published==signature) entry.saveRequested=false; return; }
         if (renderer.thumbnailBusy() || entry.rendering==signature) return;
         // Exact source/PNG validation needs no receiver geometry. Only an
@@ -784,7 +787,7 @@ void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible,uin
                 return !sources.matches(source.id,source.file);
             })) {
                 entry.scene={};entry.scenePlan.reset();entry.dependencies={};entry.diskIndex={};entry.sourceKey=0;entry.signature=0;
-                entry.clean=false;entry.indexChecked=true;entry.retry.reset();++impl_->statistics.invalidations;
+                entry.descriptors.invalidate();entry.indexChecked=true;entry.retry.reset();++impl_->statistics.invalidations;
             }
         }
     }
@@ -805,7 +808,7 @@ void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible,uin
         // Catalog growth and model hydration do not change existing previews.
         // Authored material/animation publication can change an unsaved preview
         // without a file event; compare only its actual authored dependencies.
-        for(auto& [id,entry]:impl_->entries)if(entry.clean) {
+        for(auto& [id,entry]:impl_->entries)if(entry.descriptors.valid) {
             (void)id;
             const auto changed=std::any_of(entry.materials.begin(),entry.materials.end(),[&](const auto& expected){
                 const auto current=impl_->assets.peekMaterial(expected.id);return current && materialPreviewHash(*current)!=expected.fingerprint;
@@ -815,7 +818,7 @@ void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible,uin
                 const auto current=impl_->assets.findAnimation(expected.id);return !current||impl_->animationHash(*current)!=expected.fingerprint;
             });
             if(changed) {
-                entry.clean=false;entry.scenePlan.reset();entry.indexChecked=true;entry.diskIndex={};entry.sourceKey=0;entry.signature=0;
+                entry.descriptors.invalidate();entry.scenePlan.reset();entry.indexChecked=true;entry.diskIndex={};entry.sourceKey=0;entry.signature=0;
                 entry.retry.reset();++impl_->statistics.invalidations;
             }
         }
@@ -883,7 +886,7 @@ void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible,uin
 }
 void AssetPreviews::requestSceneSave(const std::string& id) {
     if (id.empty()) return;
-    auto& entry=impl_->entries[id];entry.kind=AssetKind::Scene;entry.saveRequested=true;entry.forceScene=true;entry.clean=false;entry.scenePlan.reset();entry.indexChecked=true;entry.retry.reset();
+    auto& entry=impl_->entries[id];entry.kind=AssetKind::Scene;entry.saveRequested=true;entry.forceScene=true;entry.descriptors.invalidate();entry.scenePlan.reset();entry.indexChecked=true;entry.retry.reset();
 }
 void AssetPreviews::invalidate(const std::string& id) {
     const auto source=AssetSourceSnapshot(impl_->root).find(id);
@@ -894,7 +897,7 @@ void AssetPreviews::invalidate(const std::string& id) {
         const bool affected=assetId==id || std::any_of(entry.locations.begin(),entry.locations.end(),[&](const auto& location){return location.id==id;});
         if(!affected)continue;
         entry.retry.reset();entry.cacheState.checked=0;entry.sourceKey=0;entry.signature=0;entry.error.clear();
-        entry.clean=false;entry.scenePlan.reset();entry.indexChecked=true;entry.diskIndex={};entry.cached={};++impl_->statistics.invalidations;
+        entry.descriptors.invalidate();entry.scenePlan.reset();entry.indexChecked=true;entry.diskIndex={};entry.cached={};++impl_->statistics.invalidations;
         if(entry.kind==AssetKind::Scene)entry.forceScene=true;
     }
 }
@@ -906,7 +909,7 @@ void AssetPreviews::invalidateFile(const std::filesystem::path& file) {
         if(!affected && !id.empty())affected=std::any_of(entry.locations.begin(),entry.locations.end(),[&](const auto& source){return source.id==id;});
         if(!affected)continue;
         entry.retry.reset();entry.cacheState.checked=0;entry.sourceKey=0;entry.signature=0;entry.error.clear();
-        entry.clean=false;entry.scenePlan.reset();entry.indexChecked=true;entry.diskIndex={};entry.cached={};++impl_->statistics.invalidations;
+        entry.descriptors.invalidate();entry.scenePlan.reset();entry.indexChecked=true;entry.diskIndex={};entry.cached={};++impl_->statistics.invalidations;
         if(entry.kind==AssetKind::Scene)entry.forceScene=true;
     }
 }

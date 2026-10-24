@@ -4,8 +4,10 @@
 #include "resources/ImageDecoder.h"
 #include "resources/Paths.h"
 #include "resources/ResourceManager.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include <lodepng.h>
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <array>
 #include <fstream>
 #include <stdexcept>
@@ -33,6 +35,17 @@ std::string storedPath(const std::filesystem::path& root,const std::filesystem::
 std::filesystem::path restoredPath(const std::filesystem::path& root,const Json& path) {
     auto file=pathFromUtf8(path.get<std::string>());return file.is_absolute()?file:(root/file).lexically_normal();
 }
+}
+std::vector<std::filesystem::path> uniquePreviewSourceFiles(std::vector<std::filesystem::path> files) {
+    CRIMSON_PROFILE_ZONE("Thumbnail source path normalization");
+    struct Source {std::string key;std::filesystem::path file;};
+    std::vector<Source> sources;sources.reserve(files.size());
+    for(auto& file:files)sources.push_back({resourcePathKey(file),std::move(file)});
+    std::stable_sort(sources.begin(),sources.end(),[](const auto& a,const auto& b){return a.key<b.key;});
+    sources.erase(std::unique(sources.begin(),sources.end(),[](const auto& a,const auto& b){return a.key==b.key;}),sources.end());
+    files.clear();files.reserve(sources.size());
+    for(auto& source:sources)files.push_back(std::move(source.file));
+    return files;
 }
 std::filesystem::path assetPreviewImagePath(const std::filesystem::path& folder,const std::string& id,std::uint64_t signature) {
     return folder/(streaming::detail::hex(textHash(id))+"-"+streaming::detail::hex(signature)+".png");

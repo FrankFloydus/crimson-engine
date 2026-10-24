@@ -24,6 +24,9 @@ struct CachedAssetPreview {
     std::shared_ptr<const DecodedImage> image;
     std::vector<PreviewDecalFingerprint> decals;
 };
+// Retain one original spelling for each case-insensitive absolute lexical path.
+// Source keys are computed once per input, before sorting the descriptors.
+std::vector<std::filesystem::path> uniquePreviewSourceFiles(std::vector<std::filesystem::path>);
 // CPU-only persistent preview lookup. The stable descriptor is validated before
 // decoding its PNG; it never requires a model, environment bake, or GPU owner.
 std::filesystem::path assetPreviewImagePath(const std::filesystem::path& folder,const std::string& id,std::uint64_t signature);

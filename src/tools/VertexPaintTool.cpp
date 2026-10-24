@@ -19,6 +19,7 @@ struct VertexPaintTool::ProfileFrame {
         shared::profiling::counter("Vertex paint pending GPU",tool.pending_?1:0);
         shared::profiling::counter("Vertex paint queued dabs",double(tool.points_.size()));
         shared::profiling::counter("Vertex paint projected candidates",double(tool.brushCache_.candidates().size()));
+        shared::profiling::counter("Vertex paint candidate preparations",double(tool.candidatePreparationCount_));
         shared::profiling::counter("Vertex paint CPU rays",double(tool.cpuRays_));
         shared::profiling::counter("Vertex paint GPU visibility checks",double(tool.gpuVisibilityChecks_));
         shared::profiling::counter("Vertex paint applied dabs",double(tool.appliedDabs_));
@@ -263,9 +264,18 @@ void VertexPaintTool::update(SceneDocument& document,Renderer& renderer,const st
     auto currentSurface=[&]{CRIMSON_PROFILE_ZONE("Vertex paint surface query");return surfaceQuery_?surfaceQuery_(document):VertexPaintSurfaceSnapshot{};}();
     if(active()&&(!currentSurface.ready||currentSurface.signature!=surfaceSnapshot_.signature)){diagnostic_="The painting surface changed.";cancel(document,renderer);return;}
     if(!active()) {
-        if(viewChanged||currentSurface.signature!=surfaceSnapshot_.signature){
-            const bool cameraOnly=documentGeneration_==document.documentGeneration()&&currentSurface.signature==surfaceSnapshot_.signature;
-            if(pending_)renderer.cancelPicking();clear(cameraOnly);
+        if(viewChanged){
+            // Projection changes invalidate projected candidates. The footprint
+            // hierarchy still depends only on selected geometry and its world
+            // transforms; prepare() validates those independently of occluders.
+            const bool sameDocument=documentGeneration_==document.documentGeneration();
+            if(pending_)renderer.cancelPicking();clear(sameDocument);
+        } else if(currentSurface.signature!=surfaceSnapshot_.signature||currentSurface.ready!=surfaceSnapshot_.ready) {
+            // Animated or otherwise changing occluders invalidate visibility,
+            // not the selected mesh's projection, seam map or footprint BVH.
+            // Hover owns no stroke, so discard stale readbacks immediately.
+            if(pending_)renderer.cancelPicking();pending_.reset();missingSurface_.reset();surfaces_.clear();
+            brushCache_.resetVisibility();holdSurface_=false;cursorHit_.reset();cursorReady_=false;
         }
         surfaceSnapshot_=std::move(currentSurface);projection_=vp;width_=width;height_=height;documentGeneration_=document.documentGeneration();
         CRIMSON_PROFILE_ZONE("Vertex paint target query");
@@ -275,6 +285,7 @@ void VertexPaintTool::update(SceneDocument& document,Renderer& renderer,const st
         hoverTargets_=std::move(selected);
         if(!same) {
             paletteMaterial_.clear();inverses_.clear();seams_.clear();
+            ++candidatePreparationCount_;
             if(!brushCache_.prepare(hoverTargets_,vp,width,height))hoverTargets_.clear();
             for(const auto& target:hoverTargets_){const auto inverse=math::inverse(target.world);if(!inverse){hoverTargets_.clear();break;}inverses_.push_back(*inverse);}
             seams_=buildVertexPaintSeams(hoverTargets_);

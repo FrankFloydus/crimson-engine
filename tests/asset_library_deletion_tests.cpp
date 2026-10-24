@@ -14,11 +14,13 @@
 #include "crimson-renderer/MaterialGraphGpu.h"
 #include "editor/PreparedMaterialSignature.h"
 #include "editor/MaterialPreview.h"
+#include "editor/MaterialDocument.h"
 #include <crimson/renderer/forward/MaterialGraphImageBake.h>
 #include "scene/SceneDocument.h"
 #include "scene/SceneExtraction.h"
 #include "model_fixtures.h"
 #include "quader_bundle_fixture.h"
+#include "quader/QuaderImport.h"
 #include <bgfx/platform.h>
 
 #include <algorithm>
@@ -45,15 +47,17 @@ fs::path fixturePath(const fs::path& root,const std::string& id) {
 }
 struct Project {
     fs::path root;
-    Project(){
+    Project(bool shortPath=false){
         static unsigned sequence{};
-        root=fs::temp_directory_path()/("crimson-library-delete-test-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+"-"+std::to_string(++sequence));
+        const std::string prefix=shortPath?"cqp-":"crimson-library-delete-test-";
+        root=fs::temp_directory_path()/(prefix+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+"-"+std::to_string(++sequence));
         fs::create_directories(root/"assets");
     }
     ~Project(){
         std::error_code error;const auto temp=fs::weakly_canonical(fs::temp_directory_path(),error);if(error)return;
         const auto target=fs::weakly_canonical(root,error);
-        if(!error&&target.parent_path()==temp&&target.filename().string().starts_with("crimson-library-delete-test-"))fs::remove_all(target,error);
+        const auto name=target.filename().string();
+        if(!error&&target.parent_path()==temp&&(name.starts_with("crimson-library-delete-test-")||name.starts_with("cqp-")))fs::remove_all(target,error);
     }
 };
 std::shared_ptr<ModelAsset> seedModel(const Project& project,bool embedded=false){
@@ -931,6 +935,75 @@ void changedUsagePreservesConsumerAssignments() {
         library.resolvedModelMaterials(*geometry,ModelMaterialOverrides{AssetRef<MaterialAsset>{meshMaterial.id}}).front().baseColor==savedSurface.surface.baseColor&&
         library.preparedParticleMaterial(particleMaterial.id)->ready&&library.preparedParticleMaterial(particleMaterial.id)->diagnostic.empty(),
         "Restoring shader/blend did not resume the existing saved assignments or clear compatibility diagnostics.");
+}
+void quaderSameGenerationMaterialPublication(){
+    // Expanded immutable members and atomic temporary suffixes must stay below
+    // Windows' ordinary path limit even with the user's longer temp directory.
+    Project p{true};initializeContentStorage(p.root);
+    QuaderSourceScene source;source.project.id="66666666-6666-4666-8666-666666666666";
+    source.id="11111111-1111-4111-8111-111111111111";source.relativePath="Scenes/surface.qdr";source.fingerprint={123,456};
+    source.materials.push_back({"33333333-3333-4333-8333-333333333333",true});
+    QuaderSourceMaterial surface;surface.identity=source.materials.front();surface.name="Initial Quader surface";
+    surface.color={.2f,.3f,.4f};surface.roughness=.45f;surface.fingerprint=source.fingerprint;
+    source.readMaterial=[&](std::uint32_t index){require(index==0,"Unexpected publication fixture material.");return surface;};
+    QuaderSourceMesh mesh;mesh.name="Triangle";mesh.displayEntity=1;mesh.geometryEntity=2;
+    mesh.vertices={{{0,0,0},{0,0,1},{0,0}},{{1,0,0},{0,0,1},{1,0}},{{0,1,0},{0,0,1},{0,1}}};
+    mesh.indices={0,1,2};mesh.surfaces={{0,0,3}};source.meshes.push_back(std::move(mesh));
+    const auto prepare=[&](const QuaderPrepareOptions& settings){
+        try{return prepareQuaderImport(source,settings);}
+        catch(const std::exception& error){throw std::runtime_error("Quader material publication preparation in "+p.root.generic_string()+": "+error.what());}
+    };
+    const auto commit=[&](const QuaderImportResult& result){
+        try{commitAssetTransaction(p.root,result.files);registerAssetPaths(p.root,result.locations);}
+        catch(const std::exception& error){throw std::runtime_error("Quader material publication commit in "+p.root.generic_string()+": "+error.what());}
+    };
+    QuaderPrepareOptions options;options.projectRoot=p.root;const auto initial=prepare(options);commit(initial);
+    AssetLibrary library(p.root);const auto model=library.findModel(initial.meshes.front().modelId);
+    require(model&&model->materialIds.size()==1,"Quader material publication fixture did not retain one source slot.");
+    const auto materialId=model->materialIds.front();const auto original=library.findMaterial(materialId);const auto revision=library.materialRevision(materialId);
+    require(original&&original->name==surface.name,"Initial native material was not resident.");
+    MaterialDocument cleanDocument(p.root);require(cleanDocument.load(materialId)&&!cleanDocument.dirty(),cleanDocument.status());
+    // Clean open documents retain their material authority until the editor
+    // consumes the notification. Import publication must already be coherent.
+    library.protectMaterialDocument(materialId);
+    surface.name="Refreshed Quader surface";surface.color={.8f,.6f,.4f};surface.roughness=.17f;
+    options.refreshMaterials=true;const auto refreshed=prepare(options);
+    require(refreshed.meshes.front().modelId==model->id&&refreshed.preparedMaterials.size()==1&&
+        refreshed.preparedMaterials.front()->id==materialId&&refreshed.preparedMaterials.front()->name==surface.name,
+        "Same-generation import omitted the complete fresh native graph or changed its stable identity.");
+    commit(refreshed);
+    require(loadMaterialAsset(p.root,materialId).name==surface.name,"Material refresh did not overwrite the same-ID native file.");
+    library.publishManagedModels(refreshed.preparedModels);
+    for(const auto& file:refreshed.files) {
+        const auto path=checkedManagedAssetPath(p.root,file.id);const auto relative=path.lexically_relative(p.root).generic_string();
+        if(relative.starts_with(".crimson/cache/"))continue;
+        library.noteAssetWrite(assetIdAtPath(p.root,path));
+        if(path.extension()!=".crimson-quader")library.onFileChanged(path);
+    }
+    require(library.findModel(model->id)==model&&library.findMaterial(materialId)==original,
+        "Resident-model fixture did not reproduce the model-only publication's retained native graph.");
+    // Finish the explicit publication path used by EditorSession. No watcher
+    // delivery or clean document redraw is needed to publish the graph.
+    for(const auto& material:refreshed.preparedMaterials)library.publishMaterial(material);
+    require(library.materialRevision(materialId)>revision&&library.findMaterial(materialId)->name==surface.name&&
+        materialOutputNode(library.findMaterial(materialId)->graph).output.baseColor==surface.color&&
+        library.resolvedModelMaterials(*model).front().roughness==surface.roughness&&library.findModel(model->id)==model,
+        "Prepared native publication retained a stale live graph or replaced unchanged resident geometry.");
+    require(cleanDocument.externalFileChanged()&&!cleanDocument.dirty()&&cleanDocument.load(materialId)&&
+        cleanDocument.definition().name==surface.name&&!cleanDocument.dirty()&&!cleanDocument.externalFileChanged(),
+        "The clean open material could not consume its refreshed file without a conflict or dirty edit.");
+    const auto published=library.findMaterial(materialId);const auto publishedRevision=library.materialRevision(materialId);
+    for(const auto& material:refreshed.preparedMaterials)library.publishMaterial(material);
+    require(library.findMaterial(materialId)==published&&library.materialRevision(materialId)==publishedRevision,
+        "An identical explicit native material publication advanced the live generation.");
+    auto local=*published;local.name="Current authored graph";materialOutputNode(local.graph).output.roughness=.79f;
+    library.publishMaterial(std::make_shared<const MaterialAsset>(local));const auto authored=library.findMaterial(materialId);
+    options.refreshMaterials=false;surface.name="Unsynchronized source graph";const auto preserved=prepare(options);
+    require(preserved.preparedMaterials.empty(),"Disabled sync published a preserved disk graph over current material authority.");
+    for(const auto& material:preserved.preparedMaterials)library.publishMaterial(material);
+    require(library.findMaterial(materialId)==authored&&library.resolvedModelMaterials(*model).front().roughness==.79f&&
+        loadMaterialAsset(p.root,materialId).name==published->name,
+        "Disabled sync overwrote the current authored graph or native material file.");
 }
 void boxMaterialDeletionAndPublication(){
     Project p;initializeContentStorage(p.root);
@@ -2320,6 +2393,9 @@ void decalAssetLibraryDeletion() {
 }
 
 int main(int argc,char** argv){try{
+    if(argc==2&&std::string(argv[1])=="--quader-material-publication") {
+        quaderSameGenerationMaterialPublication();std::cout<<"Quader same-generation native material publication and Sync-Off authority checks passed.\n";return 0;
+    }
     if(argc==2&&std::string(argv[1])=="--decal-assets") {decalAssetLibraryDeletion();std::cout<<"Decal typed assets, coverage deletion, replacement and scene/history retention passed.\n";return 0;}
     if(argc==2&&std::string(argv[1])=="--animation-assets") {
         animationAssetLibrary();std::cout<<"Animation import, authoring retention, typed references and transactional deletion passed.\n";return 0;
