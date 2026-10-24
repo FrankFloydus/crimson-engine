@@ -2788,9 +2788,9 @@
           "debanding": true,
           "dither": {
             "enabled": true,
-            "pattern": "Bayer4x4",
+            "pattern": "Bayer8x8",
             "size": 1,
-            "strength": 0.6800000071525574
+            "strength": 0.8100000023841858
           },
           "enabled": true,
           "fog": {
@@ -2844,12 +2844,12 @@
           "intensity": 0.05999999865889549,
           "map": "697786b9-e9b0-4625-945f-4aa9f25cb686",
           "pixelization": {
-            "enabled": false,
-            "pixelSize": 2
+            "enabled": true,
+            "pixelSize": 3
           },
           "posterization": {
             "enabled": true,
-            "levels": 10
+            "levels": 22
           },
           "procedural": {
             "groundBottom": [
@@ -2885,7 +2885,7 @@
             "enabled": true,
             "quality": 1,
             "radius": 0.41999998688697815,
-            "strength": 1.649999976158142
+            "strength": 1.440000057220459
           },
           "ssgi": {
             "bounces": 1,
@@ -5826,6 +5826,78 @@
         ],
         "edgeSoftness": 1.0,
         "enabled": true,
+        "flicker": {
+          "afterglow": 0.0,
+          "behavior": "strobe",
+          "brightnessBias": 0.0,
+          "brightnessRandomness": 0.0,
+          "color": {
+            "amount": 1.0,
+            "enabled": false,
+            "invert": false,
+            "maximumTemperatureShift": 150.0,
+            "maximumTint": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "minimumTemperatureShift": -150.0,
+            "minimumTint": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "response": 1.0
+          },
+          "duration": 30.0,
+          "enabled": false,
+          "eventFrequency": 1.0,
+          "failureLevel": 0.0,
+          "failureMaximum": 0.800000011920929,
+          "failureMinimum": 0.10000000149011612,
+          "fallTime": 0.0,
+          "flashMaximum": 0.07999999821186066,
+          "flashMinimum": 0.019999999552965164,
+          "flashesMaximum": 5,
+          "flashesMinimum": 2,
+          "flutterAmount": 0.699999988079071,
+          "flutterRate": 8.0,
+          "gapMaximum": 0.15000000596046448,
+          "gapMinimum": 0.029999999329447746,
+          "intensity": {
+            "enabled": true,
+            "invert": false,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "response": 1.0
+          },
+          "period": 0.10000000149011612,
+          "playback": "Loop",
+          "pulseWidth": 0.11999999731779099,
+          "radius": {
+            "enabled": false,
+            "invert": false,
+            "maximum": 1.100000023841858,
+            "minimum": 0.8999999761581421,
+            "response": 1.0
+          },
+          "recoveryTime": 0.11999999731779099,
+          "restMaximum": 4.0,
+          "restMinimum": 1.0,
+          "riseTime": 0.0,
+          "secondarySpacing": 0.20000000298023224,
+          "secondaryStrength": 0.6000000238418579,
+          "seed": 1,
+          "slowAmount": 0.30000001192092896,
+          "slowRate": 1.0,
+          "smoothness": 0.699999988079071,
+          "speed": 1.0,
+          "stableMaximum": 8.0,
+          "stableMinimum": 2.0,
+          "startDelay": 0.0,
+          "timeOffset": 0.0,
+          "timingRandomness": 0.0
+        },
         "indirectEnergy": 1.0,
         "intensity": 5.199999809265137,
         "nearFalloffRadius": 0.0,
@@ -6775,8 +6847,8 @@
         0.0,
         1.0,
         0.0,
-        0.4065743684768677,
-        1.7853538990020752,
+        0.22136741876602173,
+        1.8760104179382324,
         24.093650817871094,
         1.0
       ],
@@ -6791,12 +6863,85 @@
           0.7348135709762573,
           0.5302287936210632
         ],
+        "colorMode": "Temperature",
         "edgeSoftness": 1.0,
         "enabled": true,
+        "flicker": {
+          "afterglow": 0.0,
+          "behavior": "unstable_incandescent",
+          "brightnessBias": 0.0,
+          "brightnessRandomness": 0.3499999940395355,
+          "color": {
+            "amount": 1.0,
+            "enabled": false,
+            "invert": false,
+            "maximumTemperatureShift": 150.0,
+            "maximumTint": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "minimumTemperatureShift": -150.0,
+            "minimumTint": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "response": 1.0
+          },
+          "duration": 30.0,
+          "enabled": false,
+          "eventFrequency": 1.0,
+          "failureLevel": 0.25,
+          "failureMaximum": 0.5,
+          "failureMinimum": 0.07999999821186066,
+          "fallTime": 0.1599999964237213,
+          "flashMaximum": 0.11999999731779099,
+          "flashMinimum": 0.02500000037252903,
+          "flashesMaximum": 6,
+          "flashesMinimum": 2,
+          "flutterAmount": 0.699999988079071,
+          "flutterRate": 8.0,
+          "gapMaximum": 0.18000000715255737,
+          "gapMinimum": 0.029999999329447746,
+          "intensity": {
+            "enabled": true,
+            "invert": false,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "response": 1.0
+          },
+          "period": 1.0,
+          "playback": "Loop",
+          "pulseWidth": 0.5,
+          "radius": {
+            "enabled": false,
+            "invert": false,
+            "maximum": 1.100000023841858,
+            "minimum": 0.8999999761581421,
+            "response": 1.0
+          },
+          "recoveryTime": 0.4000000059604645,
+          "restMaximum": 4.0,
+          "restMinimum": 1.0,
+          "riseTime": 0.019999999552965164,
+          "secondarySpacing": 0.20000000298023224,
+          "secondaryStrength": 0.6000000238418579,
+          "seed": 1,
+          "slowAmount": 0.30000001192092896,
+          "slowRate": 1.0,
+          "smoothness": 0.699999988079071,
+          "speed": 1.0,
+          "stableMaximum": 9.0,
+          "stableMinimum": 3.0,
+          "startDelay": 0.0,
+          "timeOffset": 0.0,
+          "timingRandomness": 0.800000011920929
+        },
         "indirectEnergy": 1.0,
-        "intensity": 5.199999809265137,
+        "intensity": 1.0,
         "nearFalloffRadius": 0.0,
-        "radius": 2.4000000953674316,
+        "radius": 2.0,
         "rangeFalloffExponent": 4.0,
         "roles": {
           "receiverMask": 3,
@@ -6805,7 +6950,8 @@
         "shadowDepthBias": 0.004999999888241291,
         "shadowNormalBias": 1.0,
         "sourceRadius": 0.0,
-        "specularStrength": 1.0
+        "specularStrength": 1.0,
+        "temperatureKelvin": 1800.0
       },
       "visible": true
     },
@@ -8496,7 +8642,7 @@
         1.0,
         0.0,
         2.970562219619751,
-        0.9339306354522705,
+        2.9479787349700928,
         24.55353355407715,
         1.0
       ],
@@ -8507,16 +8653,17 @@
         "attenuation": 2.0,
         "castShadows": true,
         "color": [
-          0.5302287936210632,
-          0.8143743872642517,
-          0.9166666865348816
+          0.6200000047683716,
+          0.8600000143051147,
+          1.0
         ],
+        "colorMode": "Temperature",
         "edgeSoftness": 1.0,
         "enabled": true,
         "indirectEnergy": 1.0,
-        "intensity": 4.599999904632568,
+        "intensity": 5.0,
         "nearFalloffRadius": 0.0,
-        "radius": 7.800000190734863,
+        "radius": 5.0,
         "rangeFalloffExponent": 4.0,
         "roles": {
           "receiverMask": 3,
@@ -8525,7 +8672,8 @@
         "shadowDepthBias": 0.004999999888241291,
         "shadowNormalBias": 1.0,
         "sourceRadius": 0.0,
-        "specularStrength": 1.0
+        "specularStrength": 1.0,
+        "temperatureKelvin": 2200.0
       },
       "visible": true
     },
@@ -58586,19 +58734,19 @@
     "fov": 45.0,
     "near": 0.0013988493010401726,
     "position": [
-      2.5428030490875244,
-      3.1048924922943115,
-      22.004196166992188
+      2.50553035736084,
+      2.8568332195281982,
+      19.3371524810791
     ],
     "target": [
-      31.434818267822266,
-      2.6607682704925537,
-      32.175167083740234
+      3.831846237182617,
+      -2.669037103652954,
+      44.667930603027344
     ],
     "up": [
-      0.013677436858415604,
-      0.999894917011261,
-      0.004808669909834862
+      0.011135234497487545,
+      0.9770832061767578,
+      0.21256615221500397
     ]
   },
   "settings": {
