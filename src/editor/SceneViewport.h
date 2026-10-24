@@ -25,10 +25,13 @@ public:
     void cancel(SceneDocument&, Renderer&);
     bool interacting() const { return transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || materialDrop_.active() || decalDrop_.active() || vertexPaint_.active(); }
     void setVertexPaintTargetQuery(VertexPaintTargetQuery query){vertexPaint_.setTargetQuery(std::move(query));}
+    void setVertexPaintSurfaceQuery(VertexPaintSurfaceQuery query){vertexPaint_.setSurfaceQuery(std::move(query));}
+    std::span<const std::string> vertexPaintPreviewMaterials() const{return vertexPaint_.previewMaterials();}
     bool vertexPaintEnabled() const {return vertexPaint_.enabled();}
     bool vertexPaintActive() const {return vertexPaint_.active();}
+    bool vertexPaintSurfaceHeld() const {return vertexPaint_.surfaceHeld();}
     void setVertexPaintEnabled(bool enabled,SceneDocument& document,Renderer& renderer){cancel(document,renderer);vertexPaint_.setEnabled(enabled,document,renderer);}
-    void drawVertexPaintControls(SceneDocument& document,Renderer& renderer){vertexPaint_.drawControls(document,renderer);}
+    void drawVertexPaintControls(SceneDocument& document,AssetLibrary& assets,Renderer& renderer){vertexPaint_.drawControls(document,assets,renderer);}
     void beginDecalPlacement(EntityId entity) { decalDrop_.beginReplace(entity);decalPlacementJustArmed_=true; }
     void focus(Camera&, const SceneDocument&, const AssetLibrary&, float aspect, bool preserveLens=false);
     void drawDecalPlacementPlane(const Mat4&,const Camera&,bgfx::TextureHandle,const Vec4&);

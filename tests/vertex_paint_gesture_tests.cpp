@@ -1,6 +1,7 @@
 #include "editor/VertexPaintGesture.h"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
@@ -59,6 +60,12 @@ void brushVisibilityAndOrder() {
     VertexPaintBrushCache zero;require(zero.prepare(targets,Mat4{},200,200),"Could not prepare zero-strength fixture.");brush.strength=0;
     const auto blank=zero.apply(dabs,brush,weights,[](const auto&)->std::optional<bool>{throw std::runtime_error("Zero-strength dab queried visibility.");});
     require(!blank.missing&&blank.changes.empty(),"A zero-strength dab created paint data.");
+    VertexPaintBrushCache hover;require(hover.prepare(targets,Mat4{},200,200),"Could not prepare hover visibility.");brush.strength=.5f;std::size_t hoverQueries=0;
+    const auto missing=hover.prepareVisibility(dabs.front(),brush,[&](const auto& vertex)->std::optional<bool>{++hoverQueries;if(vertex.vertex==3)return {};return true;});
+    require(missing.has_value()&&weights.front()->rgb(1)==MeshPaintRgb{},"Hover visibility preparation changed paint or ignored an unknown brush edge.");
+    require(!hover.prepareVisibility(dabs.front(),brush,[&](const auto&)->std::optional<bool>{++hoverQueries;return true;}),"Hover visibility did not become ready after its missing surface arrived.");
+    require(hoverQueries==5,"Hover visibility repeated already validated vertices.");
+    require(!hover.prepareVisibility(dabs.front(),brush,[](const auto&)->std::optional<bool>{throw std::runtime_error("Prepared hover visibility was queried again.");}),"A prepared hover footprint became unknown.");
 }
 void worldRadiusAndFalloff() {
     auto mesh=target();mesh.world=math::scaling({4,1,1});VertexPaintBrushCache cache;
@@ -70,6 +77,19 @@ void worldRadiusAndFalloff() {
     require(result.changes.size()==1&&result.changes[0].vertices.size()==2,"World-space radius followed local/nonuniform scale.");
     require(result.changes[0].vertices[0].vertex==1&&result.changes[0].vertices[0].rgb==MeshPaintRgb{0,255,0},"Full-strength center did not paint its selected layer.");
     require(result.changes[0].vertices[1].vertex==3&&result.changes[0].vertices[1].rgb[1]>=127&&result.changes[0].vertices[1].rgb[1]<=128,"Smooth radial falloff changed its midpoint.");
+}
+void worldBrushOutline() {
+    const auto center=Vec3{3.25f,-.7f,22.75f},normal=math::normalized(Vec3{.3f,.8f,.5f});
+    const auto circle=vertexPaintBrushCircle(center,normal,.5f);
+    require(circle.front()==circle.back(),"The world brush outline did not close.");
+    for(const auto point:circle) {
+        require(std::abs(math::length(point-center)-.5)<.00001,"The displayed brush boundary changed its authored metre radius.");
+        require(std::abs(math::dot(point-center,normal))<.00001,"The displayed brush boundary left the hit tangent plane.");
+    }
+    const auto wide=math::perspective(1.2,1,.1,1000,ClipDepth::NegativeOneToOne),zoom=math::perspective(.6,1,.1,1000,ClipDepth::NegativeOneToOne);
+    const auto ring=vertexPaintBrushCircle({0,0,-4},{0,0,1},.5f);
+    const auto radius=[&](const Mat4& viewProjection){float radius=0;for(const auto point:ring){const auto p=math::project(point,viewProjection,{0,0,800,800},ClipDepth::NegativeOneToOne);require(p.has_value(),"A visible outline point did not project.");radius=std::max(radius,float(std::hypot((*p)[0]-400,(*p)[1]-400)));}return radius;};
+    require(radius(zoom)>radius(wide)*2,"The brush outline did not follow the viewport's zoom.");
 }
 struct Project {
     std::filesystem::path root=std::filesystem::temp_directory_path()/("crimson-vertex-paint-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -104,4 +124,4 @@ void transactionalGesture(const std::filesystem::path& root) {
     require(!document.transactionActive()&&sameEntity(*document.scene().find(entity),beforeCancel),"Context loss retained authored stroke changes.");
 }
 }
-int main(){try{sourceMeshSeams();brushVisibilityAndOrder();worldRadiusAndFalloff();Project project;transactionalGesture(project.root);std::cout<<"Vertex paint source seams, visibility, batched dabs, world brush and transactional history passed.\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+int main(){try{sourceMeshSeams();brushVisibilityAndOrder();worldRadiusAndFalloff();worldBrushOutline();Project project;transactionalGesture(project.root);std::cout<<"Vertex paint source seams, visibility, batched dabs, world brush and transactional history passed.\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

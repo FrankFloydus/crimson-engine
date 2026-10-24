@@ -5,6 +5,7 @@
 #include "resources/StreamingModel.h"
 #include "scene/SceneExtraction.h"
 #include <algorithm>
+#include <bit>
 #include <sstream>
 #include <unordered_set>
 
@@ -17,8 +18,13 @@ struct ModelData final:ModelAsset {
     std::shared_ptr<const ModelAsset> source;
     std::uint64_t revision{},signature{};
 };
+struct SurfaceData final:ModelAsset {
+    std::shared_ptr<const ModelAsset> source;
+    std::vector<std::shared_ptr<const ShadowRayMesh>> meshes;
+};
 void cancelled(std::stop_token stop){if(stop.stop_requested())throw std::runtime_error("Mesh paint preparation cancelled.");}
 void mix(std::uint64_t& hash,std::uint64_t value){hash^=value+0x9e3779b97f4a7c15ull+(hash<<6)+(hash>>2);}
+bool rigidSource(const ModelAsset& model){return model.skins.empty()&&model.animations.empty()&&std::none_of(model.primitives.begin(),model.primitives.end(),[](const auto& primitive){return primitive.hasSkinning||!primitive.morphTargets.empty();});}
 std::uint64_t paintKey(const std::optional<SceneMeshPaint>& paint){std::uint64_t hash=1469598103934665603ull;if(paint)for(const auto& draw:paint->draws){mix(hash,draw.draw);mix(hash,draw.primitive);mix(hash,draw.level);mix(hash,draw.sourceSignature);mix(hash,draw.weights?draw.weights->fingerprint:0);}return hash;}
 std::size_t bytes(const ModelData& model){std::size_t total=sizeof(ModelData);std::unordered_set<const MeshPaintGeometry*> geometries;
     for(const auto& p:model.primitives)total+=sizeof(ModelPrimitive)+p.vertices.size()*sizeof(ModelVertex)+p.indices.size()*sizeof(std::uint32_t);
@@ -27,7 +33,7 @@ std::size_t bytes(const ModelData& model){std::size_t total=sizeof(ModelData);st
     if(model.resampled)for(const auto& d:model.resampled->draws)if(d.weights)for(const auto& page:d.weights->pages)if(page)total+=sizeof(MeshPaintPage);return total;
 }
 std::shared_ptr<ModelData> build(const std::shared_ptr<const ModelAsset>& source,EntityId entity,std::uint32_t level,std::uint64_t revision,std::optional<SceneMeshPaint> paint,bool resample,std::stop_token stop){
-    cancelled(stop);if(!source->skins.empty()||!source->animations.empty())throw std::runtime_error("Vertex painting supports rigid static meshes.");
+    cancelled(stop);if(!rigidSource(*source))throw std::runtime_error("Vertex painting supports rigid static meshes.");
     auto result=std::make_shared<ModelData>();static_cast<ModelAsset&>(*result)=*source;result->source=source;result->revision=revision;result->stream.reset();result->primitives.clear();result->paintedDraws.clear();result->signature=revision;mix(result->signature,level);
     std::vector<std::shared_ptr<const ModelPrimitive>> originals(source->primitives.size());std::vector<std::shared_ptr<const MeshPaintGeometry>> geometries(source->primitives.size());
     std::uint64_t vertexTotal{},triangleTotal{};
@@ -58,7 +64,7 @@ ResourceHandle<ModelAsset> MeshPaintResources::request(const EntityRecord& recor
     if(!record.model){diagnostic="Select a rigid mesh.";return {};}
     if(level>MaximumMeshPaintLevel){diagnostic="Subdivision Level must be from 0 to 5.";return {};}
     const auto source=assets_.findModel(record.model->id,record.primitive);if(!source){diagnostic=assets_.modelDiagnostic(record.model->id);if(diagnostic.empty())diagnostic="Preparing original mesh geometry.";return {};}
-    if(!record.modelAnimation.asset.empty()||!record.modelRagdoll.asset.empty()||!source->skins.empty()||!source->animations.empty()){diagnostic="Vertex painting supports rigid static meshes.";return {};}
+    if(!record.modelAnimation.asset.empty()||!record.modelRagdoll.asset.empty()||!rigidSource(*source)){diagnostic="Vertex painting supports rigid static meshes.";return {};}
     const auto revision=std::max<std::uint64_t>(1,assets_.modelRevision(record.model->id));std::string key=source->id+":"+std::to_string(revision)+":"+std::to_string(record.id)+":"+std::to_string(level);
     if(resample)key+=":"+std::to_string(paintKey(record.meshPaint));
     auto& entry=(resample?resampling_:geometry_)[key];entry.used=std::chrono::steady_clock::now();entry.entity=record.id;
@@ -86,13 +92,89 @@ VertexPaintTargets MeshPaintResources::targets(const SceneDocument& document,Ent
     const auto prepared=prepare(*record,ResourcePriority::Selected);out.diagnostic=prepared.diagnostic;if(!prepared.ready||!out.diagnostic.empty())return out;
     try{const auto materials=assets_.resolvedModelMaterials(*prepared.asset,record->modelMaterials);for(const auto& draw:prepared.draws){const auto& p=prepared.asset->primitives[draw.primitive];if(p.material>=materials.size()||!materials[p.material].graph)continue;const auto& output=materialOutputNode(*materials[p.material].graph).output;
             if(output.shading!=MaterialShading::BlendPbr||output.blend!=MaterialBlend::Opaque||output.tessellation.enabled)continue;
-            VertexPaintTarget target;target.entity=entity;target.draw=draw.draw;target.primitive=draw.primitive;target.sourcePrimitive=draw.sourcePrimitive;target.resourceRevision=prepared.revision;target.sourceNode=prepared.asset->draws[draw.draw].node;target.world=*world*prepared.asset->draws[draw.draw].transform;target.geometry=draw.geometry;target.weights=draw.weights;out.draws.push_back(std::move(target));}
+            VertexPaintTarget target;target.entity=entity;target.draw=draw.draw;target.primitive=draw.primitive;target.sourcePrimitive=draw.sourcePrimitive;target.resourceRevision=prepared.revision;target.materialSlot=p.material;
+            target.materialId=p.material<record->modelMaterials.size()&&!record->modelMaterials[p.material].empty()?record->modelMaterials[p.material].id:
+                p.material<prepared.asset->materialIds.size()?prepared.asset->materialIds[p.material]:importedMaterialId(record->model->id,p.material);
+            target.sourceNode=prepared.asset->draws[draw.draw].node;target.world=*world*prepared.asset->draws[draw.draw].transform;target.geometry=draw.geometry;target.weights=draw.weights;out.draws.push_back(std::move(target));}
         if(out.draws.empty())out.diagnostic="Assign an opaque Blend material to this mesh.";
     }catch(const std::exception& error){out.draws.clear();out.diagnostic=error.what();}return out;
 }
+VertexPaintSurfaceSnapshot MeshPaintResources::surfaces(const SceneDocument& document,const SurfaceBoundsQuery& surfaceBounds) {
+    std::vector<VertexPaintSurfaceMesh> surfaces;std::uint64_t signature=1469598103934665603ull;
+    std::uint64_t readiness=1469598103934665603ull;
+    const auto valueHash=[&](const auto& value){const auto* bytes=reinterpret_cast<const unsigned char*>(&value);for(std::size_t i=0;i<sizeof(value);++i){signature^=bytes[i];signature*=1099511628211ull;}};
+    try {
+    for(const auto& occurrence:extractScene(document.scene()).models) {
+        if(!occurrence.visible)continue;
+        auto model=assets_.findModel(occurrence.assetId,occurrence.primitive);
+        if(!model)continue;
+        const auto revision=std::max<std::uint64_t>(1,assets_.modelRevision(occurrence.assetId));
+        auto materials=assets_.resolvedModelMaterials(*model,occurrence.materialOverrides);
+        const bool rigid=occurrence.animation.asset.empty()&&occurrence.ragdoll.asset.empty()&&rigidSource(*model);
+        if(!rigid) {
+            const auto inverse=math::inverse(occurrence.world);if(!inverse)continue;
+            const auto state=surfaceBounds?surfaceBounds(occurrence,model):SurfaceBounds{};const auto bounds=state.bounds;
+            if(!bounds.valid)return {0,false,"Preparing animated viewport surfaces.",{}};
+            valueHash(occurrence.id);valueHash(revision);valueHash(occurrence.world);valueHash(bounds.minimum);valueHash(bounds.maximum);valueHash(bounds.valid);valueHash(rigid);valueHash(state.signature);
+            surfaces.push_back({{},occurrence.world,*inverse,bounds,occurrence.id,UINT32_MAX,UINT32_MAX,revision,true,false});
+            continue;
+        }
+        bool painted=rigid&&occurrence.meshPaint.has_value();
+        if(rigid&&!painted)for(const auto& material:materials)painted|=material.graph&&materialOutputNode(*material.graph).output.shading==MaterialShading::BlendPbr;
+        bool geometryReady=true;
+        if(painted) {
+            const auto prepared=prepare(occurrence,ResourcePriority::Selected);
+            if(prepared.ready)model=prepared.asset;else geometryReady=false;
+        }
+        const auto key=model->id+":"+std::to_string(revision);
+        auto& entry=surfaceModels_[key];entry.used=std::chrono::steady_clock::now();
+        if(rigid&&geometryReady&&!entry.resource) {
+            ResourceRequestOptions options;options.priority=ResourcePriority::Selected;options.retainLoader=false;options.cancelWhenUnused=true;options.assetDependencies={occurrence.assetId};
+            if(model->stream)for(const auto& p:model->stream->primitives)if(!p.levels.empty())options.dependencies.push_back(p.levels[0].file);
+            entry.resource=resources_.requestDerived<ModelAsset>("vertex-paint-surface:"+key,[model](std::stop_token stop) {
+                auto data=std::make_shared<SurfaceData>();data->source=model;data->meshes.resize(model->primitives.size());std::size_t bytes=sizeof(SurfaceData)+data->meshes.capacity()*sizeof(data->meshes.front());
+                for(std::uint32_t primitive=0;primitive<model->primitives.size();++primitive) {
+                    cancelled(stop);const auto* original=&model->primitives[primitive];std::shared_ptr<const ModelGeometryLevel> lod;
+                    if(original->vertices.empty()&&model->stream&&primitive<model->stream->primitives.size()&&!model->stream->primitives[primitive].levels.empty()) {
+                        lod=streaming::loadModelLod(model->stream->primitives[primitive].levels[0],primitive,0,false,stop);original=&lod->geometry;
+                    }
+                    data->meshes[primitive]=build_shadow_ray_mesh(*original,stop);if(data->meshes[primitive])bytes+=data->meshes[primitive]->bytes();
+                }
+                return ResourceLoadResult<ModelAsset>{data,bytes,0,{}};
+            },std::move(options));
+        }
+        const auto snapshot=entry.resource.snapshot();const auto data=snapshot&&entry.resource.state()==ResourceState::Ready?std::static_pointer_cast<const SurfaceData>(snapshot.shared()):nullptr;
+        valueHash(occurrence.id);valueHash(revision);valueHash(occurrence.world);valueHash(rigid);valueHash(geometryReady);mix(readiness,bool(data));
+        for(const auto c:model->id)valueHash(c);
+        bool hashedCoverage=false;
+        for(std::uint32_t drawIndex=0;drawIndex<model->draws.size();++drawIndex) {
+            const auto& draw=model->draws[drawIndex];if(draw.primitive>=model->primitives.size())continue;
+            const auto& primitive=model->primitives[draw.primitive];
+            const auto world=occurrence.world*draw.transform;const auto inverse=math::inverse(world);if(!inverse)continue;
+            bool exact=rigid&&geometryReady,doubleSided=false;float displacement{};
+            if(primitive.material<materials.size()) {
+                const auto& material=materials[primitive.material];doubleSided=material.doubleSided;
+                if(material.graph) {const auto& output=materialOutputNode(*material.graph).output;exact&=output.blend==MaterialBlend::Opaque&&!output.tessellation.enabled;doubleSided=output.doubleSided;displacement=materialTessellationDisplacementExtent(output.tessellation);}
+                else exact&=!material.alphaMask&&!material.alphaBlend;
+            }else exact=false;
+            if(!exact&&!hashedCoverage&&surfaceBounds) {valueHash(surfaceBounds(occurrence,model).signature);hashedCoverage=true;}
+            const auto mesh=data&&draw.primitive<data->meshes.size()&&displacement==0?data->meshes[draw.primitive]:nullptr;
+            auto bounds=mesh?mesh->bounds:primitive.bounds;
+            if(displacement>0&&bounds.valid)for(unsigned axis=0;axis<3;++axis){bounds.minimum[axis]-=displacement;bounds.maximum[axis]+=displacement;}
+            valueHash(draw.primitive);valueHash(draw.transform);valueHash(exact);valueHash(doubleSided);valueHash(displacement);
+            surfaces.push_back({mesh,world,*inverse,bounds,occurrence.id,drawIndex,draw.primitive,revision,doubleSided,exact&&bool(data)});
+        }
+    }
+    }catch(const std::exception& error){return {0,false,error.what(),{}};}
+    mix(readiness,signature);
+    if(surfaceSnapshot_.ready&&surfaceSnapshotKey_==readiness)return surfaceSnapshot_;
+    surfaceSnapshotKey_=readiness;
+    surfaceSnapshot_=makeVertexPaintSurfaceSnapshot(std::move(surfaces),signature);return surfaceSnapshot_;
+}
 bool MeshPaintResources::subdivision(const EntityRecord& record,std::uint32_t level,SceneMeshPaint& result,std::string& diagnostic){const auto handle=request(record,level,ResourcePriority::Selected,true,diagnostic);const auto snapshot=handle.snapshot();if(!snapshot||handle.state()!=ResourceState::Ready)return false;const auto data=std::static_pointer_cast<const ModelData>(snapshot.shared());if(!data->resampled)return false;result=*data->resampled;diagnostic.clear();return true;}
 std::string MeshPaintResources::status(EntityId entity)const{const auto found=statuses_.find(entity);return found==statuses_.end()?std::string{}:found->second;}
-void MeshPaintResources::collect(){const auto now=std::chrono::steady_clock::now();const auto expired=[&](const auto& entry){return now-entry.second.used>resources_.config().idleGrace;};std::erase_if(geometry_,expired);std::erase_if(resampling_,expired);
+void MeshPaintResources::collect(){const auto now=std::chrono::steady_clock::now();const auto expired=[&](const auto& entry){return now-entry.second.used>resources_.config().idleGrace;};std::erase_if(geometry_,expired);std::erase_if(resampling_,expired);std::erase_if(surfaceModels_,expired);
+    if(surfaceModels_.empty()){surfaceSnapshot_={};surfaceSnapshotKey_=0;}
     std::unordered_set<EntityId> live;for(const auto& [key,entry]:geometry_){(void)key;live.insert(entry.entity);}for(const auto& [key,entry]:resampling_){(void)key;live.insert(entry.entity);}std::erase_if(statuses_,[&](const auto& entry){return !live.contains(entry.first);});}
-void MeshPaintResources::clear(){geometry_.clear();resampling_.clear();statuses_.clear();}
+void MeshPaintResources::clear(){geometry_.clear();resampling_.clear();surfaceModels_.clear();surfaceSnapshot_={};surfaceSnapshotKey_=0;statuses_.clear();}
 }

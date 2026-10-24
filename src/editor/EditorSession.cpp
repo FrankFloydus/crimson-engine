@@ -43,6 +43,7 @@ EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& as
     editor_.setDecalFrameQuery([this](EntityId id){return decals_.surfaceFrame(id);});
     editor_.setRagdollActiveQuery([this](EntityId id){return play_.ragdollActive(id);});
     editor_.setVertexPaintTargetQuery([this](const SceneDocument& document,EntityId entity){return prepared_.vertexPaintTargets(document,entity);});
+    editor_.setVertexPaintSurfaceQuery([this](const SceneDocument& document){return prepared_.vertexPaintSurfaces(document);});
     setMeshPaintSubdivisionQuery(document_,[this](const EntityRecord& record,std::uint32_t level,SceneMeshPaint& result,std::string& diagnostic) {
         return prepared_.meshPaintSubdivision(record,level,result,diagnostic);
     });
@@ -553,9 +554,9 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     };
     if(!play_.playing())navigationPreview_.update(document,[this](const std::string& id){return collisions_.query(id);},agentProfiles);
     const auto& renderScene=play_.playing()?play_.presentationScene():document.scene();
-    // A paint stroke reuses visible-surface tiles. Keep all edit-preview
-    // occluders at the displayed pose and material time until it completes.
-    const bool painting=!play_.playing()&&editor_.vertexPaintActive();
+    // GPU paint-surface preparation reuses visible tiles without owning editor
+    // commands. Keep its displayed occluders stable through the ensuing stroke.
+    const bool painting=!play_.playing()&&editor_.vertexPaintSurfaceHeld();
     const auto editPreviewSeconds=painting?0.f:simulationSeconds;
     const MaterialEvaluationContext materialContext=painting?displayedMaterialContext_:
         MaterialEvaluationContext{play_.playing()?play_.tickCount()*PlaySession::FixedStep:materialGameSeconds_,materialRealSeconds_};

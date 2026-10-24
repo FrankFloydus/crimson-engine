@@ -335,6 +335,23 @@ std::shared_ptr<const ModelPose> EditorResources::pose(const ExtractedModel& mod
     entry.seconds=model.animationSeconds;entry.loop=model.animation.loopOverride;entry.wanted=true;
     return value;
 }
+VertexPaintSurfaceSnapshot EditorResources::vertexPaintSurfaces(const SceneDocument& document) {
+    return meshPaint_.surfaces(document,[this](const ExtractedModel& occurrence,const std::shared_ptr<const ModelAsset>& asset) {
+        MeshPaintResources::SurfaceBounds state;state.bounds=asset->bounds;
+        const auto found=poses_.find(occurrence.id);
+        if(found!=poses_.end()&&found->second.value) {
+            math::include(state.bounds,found->second.value->bounds);hash(state.signature,found->second.value->signature);
+        }else if(!occurrence.animation.asset.empty()||!occurrence.ragdoll.asset.empty()||!asset->skins.empty()||!asset->animations.empty()||
+            std::any_of(asset->primitives.begin(),asset->primitives.end(),[](const auto& p){return p.hasSkinning||!p.morphTargets.empty();}))state.bounds={};
+        const auto source=assets_.findModel(occurrence.assetId,occurrence.primitive);
+        const auto key=materialPreparationKey((source?source->id:occurrence.assetId)+(asset->id.starts_with("mesh-paint:")?":paint-occurrence:"+std::to_string(occurrence.id):""),occurrence.materialOverrides);
+        if(const auto prepared=entries_.find(key);prepared!=entries_.end()&&prepared->second.current)for(const auto& binding:prepared->second.current->textures) {
+            if(binding.graph){hash(state.signature,binding.graph->coverageSignature(materialContext_));for(const auto value:binding.graph->sourceFingerprints)hash(state.signature,value);}
+            else for(const auto value:binding.sourceFingerprints)hash(state.signature,value);
+        }
+        return state;
+    });
+}
 Aabb EditorResources::modelBounds(const ExtractedModel& model,const std::shared_ptr<const ModelAsset>& source) {
     if(!source)return {};
     const auto asset=model.primitive && source->id==model.assetId && isBuiltinModel(model.assetId)?

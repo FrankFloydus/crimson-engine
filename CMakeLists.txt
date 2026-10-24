@@ -101,6 +101,7 @@ target_compile_definitions(crimson-scene PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-scene PRIVATE /W4 /permissive- /utf-8)
 target_sources(crimson-scene PRIVATE src/assets/RagdollAsset.cpp src/scene/LightAuthoring.cpp src/runtime/SceneLights.cpp)
 target_sources(crimson-scene PRIVATE src/editor/VertexPaintGesture.cpp)
+target_sources(crimson-scene PRIVATE src/editor/VertexPaintSurface.cpp)
 
 add_library(crimson-materials src/assets/MaterialGraph.cpp src/assets/GrungeGenerator.cpp src/assets/MaterialAsset.cpp src/editor/MaterialDocument.cpp src/editor/MaterialGraphActions.cpp src/assets/DecalAsset.cpp src/editor/DecalDocument.cpp)
 target_include_directories(crimson-materials PUBLIC src)
@@ -264,6 +265,7 @@ add_executable(crimson-renderer WIN32
     src/tools/ColliderInspector.cpp
     src/tools/PrimitiveMeshInspector.cpp
     src/tools/VertexPaintTool.cpp
+    src/tools/VertexPaintToolControls.cpp
     src/tools/AssetBrowser.cpp
     src/tools/AssetBrowserPaths.cpp
     src/tools/ParticleEditor.cpp
@@ -846,6 +848,15 @@ if(BUILD_TESTING)
     target_link_libraries(vertex_paint_gesture_tests PRIVATE crimson-scene)
     target_compile_options(vertex_paint_gesture_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME vertex_paint_gesture_core COMMAND vertex_paint_gesture_tests)
+    add_executable(vertex_paint_surface_tests tests/vertex_paint_surface_tests.cpp)
+    target_link_libraries(vertex_paint_surface_tests PRIVATE crimson-scene)
+    target_compile_options(vertex_paint_surface_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME vertex_paint_surface_core COMMAND vertex_paint_surface_tests)
+    add_executable(vertex_paint_tool_tests tests/vertex_paint_tool_tests.cpp src/tools/VertexPaintTool.cpp)
+    target_link_libraries(vertex_paint_tool_tests PRIVATE crimson-scene Crimson::Renderer imgui::imgui)
+    target_compile_definitions(vertex_paint_tool_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX BX_CONFIG_DEBUG=$<IF:$<CONFIG:Debug>,1,0>)
+    target_compile_options(vertex_paint_tool_tests PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus /Zc:preprocessor)
+    add_test(NAME vertex_paint_tool_core COMMAND vertex_paint_tool_tests)
     add_executable(blend_material_host_tests tests/blend_material_host_tests.cpp)
     target_link_libraries(blend_material_host_tests PRIVATE crimson-material-shaders)
     target_compile_options(blend_material_host_tests PRIVATE /W4 /permissive- /utf-8)

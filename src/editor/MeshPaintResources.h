@@ -28,6 +28,9 @@ public:
     PreparedMeshPaintModel prepare(const EntityRecord&,ResourcePriority=ResourcePriority::Visible);
     PreparedMeshPaintModel prepare(const ExtractedModel&,ResourcePriority=ResourcePriority::Visible);
     VertexPaintTargets targets(const SceneDocument&,EntityId);
+    struct SurfaceBounds {Aabb bounds;std::uint64_t signature{};};
+    using SurfaceBoundsQuery=std::function<SurfaceBounds(const ExtractedModel&,const std::shared_ptr<const ModelAsset>&)>;
+    VertexPaintSurfaceSnapshot surfaces(const SceneDocument&,const SurfaceBoundsQuery& bounds={});
     bool subdivision(const EntityRecord&,std::uint32_t level,SceneMeshPaint&,std::string& diagnostic);
     std::string status(EntityId) const;
     void collect();
@@ -36,6 +39,9 @@ private:
     struct Entry {ResourceHandle<ModelAsset> resource;std::chrono::steady_clock::time_point used;EntityId entity{};bool repairRequested{};};
     AssetLibrary& assets_;ResourceManager& resources_;
     std::unordered_map<std::string,Entry> geometry_,resampling_;
+    std::unordered_map<std::string,Entry> surfaceModels_;
+    VertexPaintSurfaceSnapshot surfaceSnapshot_;
+    std::uint64_t surfaceSnapshotKey_{};
     std::unordered_map<EntityId,std::string> statuses_;
     ResourceHandle<ModelAsset> request(const EntityRecord&,std::uint32_t,ResourcePriority,bool resample,std::string&);
 };

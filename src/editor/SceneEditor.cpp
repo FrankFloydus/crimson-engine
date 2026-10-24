@@ -527,7 +527,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     if (resetLayout) { ImGui::DockBuilderRemoveNode(ImGui::GetID("CrimsonDockSpace")); panels_={}; }
     layout();
     preferences_.draw(renderer.graphicsBackend());
-    viewport_.drawVertexPaintControls(document,renderer);
+    viewport_.drawVertexPaintControls(document,assets,renderer);
     const auto* context=ImGui::GetCurrentContext();
     const auto preferencesWindow=[&](const ImGuiWindow* window) {
         return preferences_.isOpen() && window && std::string_view(window->RootWindow->Name)=="Preferences";
@@ -572,6 +572,8 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     frame.createNavigationAgentProfile=browser.createNavigationAgentProfile;frame.navigationAgentProfileFolder=std::move(browser.navigationAgentProfileFolder);
     frame.openNavigationAgentProfile=browser.openNavigationAgentProfile.empty()?std::move(openProfile):std::move(browser.openNavigationAgentProfile);
     frame.visiblePreviewIds=std::move(browser.visiblePreviewIds);
+    for(const auto& id:viewport_.vertexPaintPreviewMaterials())
+        if(std::find(frame.visiblePreviewIds.begin(),frame.visiblePreviewIds.end(),id)==frame.visiblePreviewIds.end())frame.visiblePreviewIds.push_back(id);
     frame.createParticle=browser.createParticle;frame.particleFolder=std::move(browser.particleFolder);
     frame.openParticle=browser.openParticle.empty()?std::move(openParticle):std::move(browser.openParticle);
     frame.playParticleEntity=playParticle;

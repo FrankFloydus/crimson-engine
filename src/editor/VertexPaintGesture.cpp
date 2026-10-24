@@ -20,6 +20,17 @@ float influence(const VertexPaintCandidate& vertex,const VertexPaintDab& dab,con
     return brush.strength*t*t*(3-2*t);
 }
 }
+std::array<Vec3,VertexPaintCircleSegments+1> vertexPaintBrushCircle(Vec3 center,Vec3 normal,float radius) {
+    std::array<Vec3,VertexPaintCircleSegments+1> points;
+    normal=math::normalized(normal);
+    const auto tangent=math::normalized(math::cross(normal,std::abs(normal[1])<.9f?Vec3{0,1,0}:Vec3{1,0,0}));
+    const auto bitangent=math::cross(normal,tangent);
+    for(std::size_t i=0;i<VertexPaintCircleSegments;++i) {
+        const auto angle=double(i)*6.283185307179586/VertexPaintCircleSegments;
+        points[i]=center+(tangent*std::cos(angle)+bitangent*std::sin(angle))*radius;
+    }
+    points.back()=points.front();return points;
+}
 VertexPaintSeams buildVertexPaintSeams(std::span<const VertexPaintTarget> targets) {
     VertexPaintSeams result(targets.size());
     using EdgeKey=std::tuple<EntityId,std::int32_t,std::uint32_t,std::array<float,3>,std::array<float,3>>;
@@ -58,6 +69,7 @@ VertexPaintSeams buildVertexPaintSeams(std::span<const VertexPaintTarget> target
     return result;
 }
 void VertexPaintBrushCache::clear() {width_=height_=columns_=0;candidates_.clear();bins_.clear();visibility_.clear();}
+void VertexPaintBrushCache::resetVisibility() {std::fill(visibility_.begin(),visibility_.end(),std::int8_t{-1});}
 bool VertexPaintBrushCache::prepare(std::span<const VertexPaintTarget> targets,const Mat4& vp,std::uint32_t width,std::uint32_t height) {
     clear();if(!width||!height||width>16384||height>16384||!math::finite(vp))return false;
     width_=width;height_=height;columns_=(width+BinSize-1)/BinSize;
@@ -76,6 +88,19 @@ bool VertexPaintBrushCache::prepare(std::span<const VertexPaintTarget> targets,c
         }
     }
     visibility_.assign(candidates_.size(),-1);return true;
+}
+std::optional<VertexPaintCandidate> VertexPaintBrushCache::prepareVisibility(const VertexPaintDab& dab,const VertexPaintBrush& brush,const Visibility& visible) {
+    if(!validBrush(brush)||!visible||!width_||!height_||!math::finite(dab.center)||!math::finite(dab.pixel)||!std::isfinite(dab.screenRadius)||dab.screenRadius<0)return {};
+    const auto left=std::uint32_t(std::clamp(std::floor((dab.pixel[0]-dab.screenRadius)/BinSize),0.f,float(columns_-1)));
+    const auto right=std::uint32_t(std::clamp(std::floor((dab.pixel[0]+dab.screenRadius)/BinSize),0.f,float(columns_-1)));
+    const auto rows=(height_+BinSize-1)/BinSize;
+    const auto top=std::uint32_t(std::clamp(std::floor((dab.pixel[1]-dab.screenRadius)/BinSize),0.f,float(rows-1)));
+    const auto bottom=std::uint32_t(std::clamp(std::floor((dab.pixel[1]+dab.screenRadius)/BinSize),0.f,float(rows-1)));
+    for(auto y=top;y<=bottom;++y)for(auto x=left;x<=right;++x)for(const auto candidate:bins_[std::size_t(y)*columns_+x]) {
+        const auto& vertex=candidates_[candidate];if(visibility_[candidate]>=0||influence(vertex,dab,brush)<=0)continue;
+        const auto answer=visible(vertex);if(!answer)return vertex;visibility_[candidate]=*answer?1:0;
+    }
+    return {};
 }
 VertexPaintBatch VertexPaintBrushCache::apply(std::span<const VertexPaintDab> dabs,const VertexPaintBrush& brush,
     std::span<const std::shared_ptr<const MeshPaintPayload>> weights,const Visibility& visible) {

@@ -1,5 +1,6 @@
 #pragma once
 #include "scene/SceneDocument.h"
+#include "VertexPaintSurface.h"
 #include <crimson/renderer/forward/MeshPaint.h>
 #include <functional>
 #include <memory>
@@ -14,6 +15,8 @@ struct VertexPaintTarget {
     EntityId entity{};
     std::uint32_t draw{},primitive{},sourcePrimitive{};
     std::uint64_t resourceRevision{};
+    std::uint32_t materialSlot{};
+    std::string materialId;
     std::int32_t sourceNode{-1};
     Mat4 world;
     std::shared_ptr<const MeshPaintGeometry> geometry;
@@ -27,6 +30,10 @@ using VertexPaintSeams=std::vector<std::unordered_map<std::uint32_t,std::vector<
 // occurrence can prove a material seam. Coincident points alone cannot.
 VertexPaintSeams buildVertexPaintSeams(std::span<const VertexPaintTarget>);
 struct VertexPaintBrush {float radius{.5f},strength{.5f},hardness{.5f};std::uint32_t layer{1};};
+inline constexpr std::size_t VertexPaintCircleSegments=96;
+// The displayed brush boundary is a world-radius circle on the hit tangent
+// plane. Perspective and affine mesh scale are applied only by projection.
+std::array<Vec3,VertexPaintCircleSegments+1> vertexPaintBrushCircle(Vec3 center,Vec3 normal,float radius);
 struct VertexPaintDab {Vec3 center;Vec2 pixel;float screenRadius{};};
 struct VertexPaintCandidate {
     std::uint32_t target{},vertex{};
@@ -45,9 +52,11 @@ class VertexPaintBrushCache {
 public:
     bool prepare(std::span<const VertexPaintTarget>,const Mat4& viewProjection,std::uint32_t width,std::uint32_t height);
     using Visibility=std::function<std::optional<bool>(const VertexPaintCandidate&)>;
+    std::optional<VertexPaintCandidate> prepareVisibility(const VertexPaintDab&,const VertexPaintBrush&,const Visibility&);
     VertexPaintBatch apply(std::span<const VertexPaintDab>,const VertexPaintBrush&,
         std::span<const std::shared_ptr<const MeshPaintPayload>>,const Visibility&);
     std::span<const VertexPaintCandidate> candidates() const {return candidates_;}
+    void resetVisibility();
     void clear();
 private:
     static constexpr std::uint32_t BinSize=32;

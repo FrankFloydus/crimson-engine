@@ -501,7 +501,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
         }
     }
     ImGui::End();
-    if((vertexPaint_.active() || transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active()) && (frame.viewport.width<=0 || frame.viewport.height<=0))cancel(document,renderer);
+    if((vertexPaint_.surfaceHeld() || transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active()) && (frame.viewport.width<=0 || frame.viewport.height<=0))cancel(document,renderer);
     if(materialDrop_.active() && (frame.viewport.width<=0 || frame.viewport.height<=0)) {
         materialDrop_.cancel();renderer.cancelPicking();++serial_;
     }

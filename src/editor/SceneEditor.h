@@ -39,6 +39,7 @@ public:
     std::uint16_t pointShadowResolution() const { return static_cast<std::uint16_t>(preferences_.values().pointShadowResolution); }
     std::uint32_t thumbnailDemand() const { return browser_.thumbnailDemand(); }
     bool vertexPaintActive() const { return viewport_.vertexPaintActive(); }
+    bool vertexPaintSurfaceHeld() const { return viewport_.vertexPaintSurfaceHeld(); }
     const PanelVisibility& panels() const { return panels_; }
     void setPanels(const PanelVisibility& panels) { panels_=panels; }
     const OverlayVisibility& overlays() const { return overlays_; }
@@ -57,6 +58,7 @@ public:
     void setParticleBoundsQuery(ParticleBoundsQuery query) { viewport_.setParticleBoundsQuery(std::move(query)); }
     void setCollisionMeshQuery(CollisionMeshQuery query) { viewport_.setCollisionMeshQuery(std::move(query)); }
     void setVertexPaintTargetQuery(VertexPaintTargetQuery query){viewport_.setVertexPaintTargetQuery(std::move(query));}
+    void setVertexPaintSurfaceQuery(VertexPaintSurfaceQuery query){viewport_.setVertexPaintSurfaceQuery(std::move(query));}
     void setQuaderBridge(QuaderBridge* bridge){quader_=bridge;}
     void setAgentProfileQuery(NavigationAgentProfileQuery query) { viewport_.setAgentProfileQuery(std::move(query)); }
     void setNavigationBuildStatus(std::function<std::string(const std::string&)> query) { navigationBuildStatus_=std::move(query); }
