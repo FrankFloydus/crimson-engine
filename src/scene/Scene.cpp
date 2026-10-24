@@ -48,6 +48,10 @@ template<class T> void validateLight(const std::optional<T>& light) {
         throw std::runtime_error("Light color and intensity must be finite and nonnegative.");
     if (!validIndirectEnergy(light->indirectEnergy))
         throw std::runtime_error("Light GI energy must be finite and between zero and sixteen.");
+    if (!validLightColorMode(light->colorMode) || !validLightTemperature(light->temperatureKelvin))
+        throw std::runtime_error("Light color mode or temperature is invalid.");
+    if (!validLightFlicker(light->flicker))
+        throw std::runtime_error("Light flickering settings are invalid.");
 }
 std::vector<EntityId> cameraFollowOrder(const std::vector<EntityRecord>& records) {
     std::unordered_map<EntityId,const EntityRecord*> indexed;

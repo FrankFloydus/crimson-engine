@@ -16,6 +16,7 @@
 #include "Tools.h"
 #include "QuaderInspector.h"
 #include "LightingControls.h"
+#include "LightInspectorControls.h"
 #include "scene/SceneDocument.h"
 #include "scene/SceneComponents.h"
 #include "scene/SceneOutlinerRows.h"
@@ -46,8 +47,8 @@ namespace {
 constexpr const char* EntityPayload = "CRIMSON_SCENE_ENTITIES";
 enum class Edit { None, Name, InlineName, Visible,
     PositionX, PositionY, PositionZ, RotationX, RotationY, RotationZ, ScaleX, ScaleY, ScaleZ,
-    DirectionEnabled, DirectionColor, DirectionIntensity,DirectionIndirectEnergy,DirectionShadows,DirectionDistance,DirectionDepthBias,DirectionNormalBias,DirectionAngularDiameter,
-    PointEnabled, PointColor, PointIntensity, PointRadius, PointNearFalloff, PointSpecular, PointShadows, PointDepthBias, PointNormalBias,
+    DirectionEnabled, DirectionIntensity,DirectionIndirectEnergy,DirectionShadows,DirectionDistance,DirectionDepthBias,DirectionNormalBias,DirectionAngularDiameter,
+    PointEnabled, PointIntensity, PointRadius, PointNearFalloff, PointSpecular, PointShadows, PointDepthBias, PointNormalBias,
     PointFalloffExponent,PointEdgeSoftness,PointSourceRadius,PointIndirectEnergy,PointAttenuation,
     DirectionReceivers,DirectionCasters,
     PointReceivers,PointCasters,
@@ -88,7 +89,8 @@ enum class Edit { None, Name, InlineName, Visible,
     VolumeEnabled,VolumeSize,VolumeCellSize,VolumeCellHeight,VolumeSimplification,VolumeProfiles,
     ColliderShape,ColliderSizeX,ColliderSizeY,ColliderSizeZ,ColliderRadius,ColliderHeight,ColliderSource,ColliderVisible,ColliderColor,
     CameraOffset,CameraRotation,CameraFov,CameraNear,CameraFar,
-    DecalTint,DecalOpacity,DecalFeather,DecalPriority };
+    DecalTint,DecalOpacity,DecalFeather,DecalPriority,
+    LightExtendedFirst,LightExtendedLast=static_cast<int>(LightExtendedFirst)+static_cast<int>(LightInspectorControl::Count)-1 };
 enum class Panel { None, Outliner, Inspector };
 Panel owner(Edit edit) {
     if (edit==Edit::None) return Panel::None;
@@ -98,6 +100,7 @@ Panel owner(Edit edit) {
 bool transformEdit(Edit edit) { return edit>=Edit::PositionX && edit<=Edit::ScaleZ; }
 bool environmentEdit(Edit edit) { return edit>=Edit::Exposure && edit<=Edit::EnvironmentSsrBias; }
 bool lightRoleEdit(Edit edit) { return edit>=Edit::DirectionReceivers && edit<=Edit::PointCasters; }
+bool lightExtendedEdit(Edit edit) {return edit>=Edit::LightExtendedFirst && edit<=Edit::LightExtendedLast;}
 struct PanelsState {
     SceneDocument* document{};
     uint64_t documentGeneration{};
@@ -116,6 +119,8 @@ struct PanelsState {
     std::unordered_map<EntityId,ColliderInspectorState> colliders;
     std::unordered_map<EntityId,PrimitiveMeshInspectorState> primitives;
     std::unordered_map<EntityId,GameplayTagPickerState> tags;
+    std::unordered_map<EntityId,LightInspectorState> lights;
+    ImGuiID lightActiveInput{};
     std::string materialDiagnostic;
     std::string ragdollDiagnostic;
     SceneOutlinerColorPopupState outlinerColor;
@@ -127,17 +132,23 @@ struct PanelsState {
     bool cameraTemplatesAvailable{};
 };
 void releasePanelInputs(PanelsState& state) {
+    if(state.lightActiveInput) {
+        if(auto* context=ImGui::GetCurrentContext();context&&context->ActiveId==state.lightActiveInput)ImGui::ClearActiveID();
+        state.lightActiveInput=0;
+    }
     for(auto& [id,collider]:state.colliders)releaseColliderInspector(collider);
     for(auto& [id,primitive]:state.primitives)releasePrimitiveMeshInspector(primitive);
 }
 PanelsState& stateFor(SceneDocument& document) {
     static PanelsState state;
     if (state.document!=&document || state.documentGeneration!=document.documentGeneration()) {
+        releasePanelInputs(state);
         state={}; state.document=&document;state.documentGeneration=document.documentGeneration();
     }
     std::erase_if(state.transforms,[&](const auto& entry){return !document.scene().contains(entry.first);});
     std::erase_if(state.cameraControls,[&](const auto& entry){return !document.scene().contains(entry.first);});
     std::erase_if(state.tags,[&](const auto& entry){return !document.scene().contains(entry.first);});
+    std::erase_if(state.lights,[&](const auto& entry){return !document.scene().contains(entry.first);});
     for(auto it=state.colliders.begin();it!=state.colliders.end();) {
         if(document.scene().contains(it->first)){++it;continue;}
         releaseColliderInspector(it->second);it=state.colliders.erase(it);
@@ -299,6 +310,10 @@ bool beginEdit(SceneDocument& document, PanelsState& state, Edit edit, const cha
 void finishEdit(SceneDocument& document, PanelsState& state, Edit edit) {
     if (state.active!=edit || (state.inspectorEntity && state.editingEntity!=state.inspectorEntity)) return;
     document.commit(); state.active=Edit::None;
+    if(lightExtendedEdit(edit) && state.lightActiveInput) {
+        if(ImGui::GetCurrentContext()->ActiveId==state.lightActiveInput)ImGui::ClearActiveID();
+        state.lightActiveInput=0;
+    }
     if (transformEdit(edit)) { auto& transform=state.transforms[state.editingEntity];transform.editing=false;transform.refresh=true; }
 }
 void propertyEdit(SceneDocument& document, PanelsState& state, Edit edit, const char* label,
@@ -333,20 +348,46 @@ void drawName(SceneDocument& document, PanelsState& state, const EntityRecord& r
         finishEdit(document,state,Edit::Name);
     }
 }
-void lightControls(SceneDocument& document, PanelsState& state, EntityId id, bool directional) {
+void lightControls(SceneDocument& document, PanelsState& state, EntityId id, bool directional,const LightPreviewContext& preview) {
     const auto record=document.scene().find(id);
     if (!record) return;
     ImGui::PushID(directional ? "directional" : "point");
     const auto enabled=directional ? record->directional->enabled : record->point->enabled;
-    auto color=directional ? record->directional->color : record->point->color;
     auto intensity=directional ? record->directional->intensity : record->point->intensity;
     bool value=enabled;
     const bool enabledChanged=resettableProperty(value,directional?SceneDirectionalLight{}.enabled:ScenePointLight{}.enabled,[&]{return ImGui::Checkbox("Enabled",&value);});
     propertyEdit(document,state,directional ? Edit::DirectionEnabled : Edit::PointEnabled,"Enable light",enabledChanged,
         changeEntity(id,[directional,value](auto& entity){if (directional) entity.directional->enabled=value; else entity.point->enabled=value;}));
-    const bool colorChanged=resettableProperty(color,directional?SceneDirectionalLight{}.color:ScenePointLight{}.color,[&]{return ImGui::ColorEdit3("Color",color.data(),ImGuiColorEditFlags_Float);});
-    propertyEdit(document,state,directional ? Edit::DirectionColor : Edit::PointColor,"Change light color",colorChanged,
-        changeEntity(id,[directional,color](auto& entity){if (directional) entity.directional->color=color; else entity.point->color=color;}));
+    LightInspectorValue appearance;
+    appearance.directional=directional;
+    appearance.colorMode=directional?record->directional->colorMode:record->point->colorMode;
+    appearance.color=directional?record->directional->color:record->point->color;
+    appearance.temperatureKelvin=directional?record->directional->temperatureKelvin:record->point->temperatureKelvin;
+    appearance.intensity=intensity;appearance.radius=directional?0:record->point->radius;
+    appearance.flicker=directional?record->directional->flicker:record->point->flicker;
+    bool activeExtendedDrawn=false;
+    const auto extendedEdit=[&](LightInspectorControl control,const char* label,bool changed) {
+        const auto property=static_cast<Edit>(static_cast<unsigned>(Edit::LightExtendedFirst)+static_cast<unsigned>(control));
+        propertyEdit(document,state,property,label,changed,changeEntity(id,[directional,appearance,control](auto& entity) {
+            const auto apply=[&](auto& light) {
+                switch(control) {
+                    case LightInspectorControl::FixturePreset:
+                        light.colorMode=appearance.colorMode;light.intensity=appearance.intensity;
+                        if(appearance.colorMode==LightColorMode::Temperature)light.temperatureKelvin=appearance.temperatureKelvin;else light.color=appearance.color;
+                        break;
+                    case LightInspectorControl::ColorMode:light.colorMode=appearance.colorMode;break;
+                    case LightInspectorControl::Color:light.color=appearance.color;break;
+                    case LightInspectorControl::Temperature:light.temperatureKelvin=appearance.temperatureKelvin;break;
+                    default:light.flicker=appearance.flicker;break;
+                }
+            };
+            if(directional)apply(*entity.directional);else {apply(*entity.point);if(control==LightInspectorControl::FixturePreset)entity.point->radius=appearance.radius;}
+        }));
+        if(state.active==property && ImGui::GetCurrentContext()->ActiveId)state.lightActiveInput=ImGui::GetCurrentContext()->ActiveId;
+        activeExtendedDrawn|=state.active==property;
+    };
+    drawLightAppearanceControls(appearance,state.lights[id],extendedEdit);
+    intensity=appearance.intensity;
     const bool intensityChanged=resettableProperty(intensity,directional?SceneDirectionalLight{}.intensity:ScenePointLight{}.intensity,[&]{return ImGui::DragFloat("Intensity",&intensity,directional ? .02f : .1f,0,10000,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
     propertyEdit(document,state,directional ? Edit::DirectionIntensity : Edit::PointIntensity,"Change light intensity",intensityChanged,
         changeEntity(id,[directional,intensity](auto& entity){if (directional) entity.directional->intensity=intensity; else entity.point->intensity=intensity;}));
@@ -439,6 +480,8 @@ void lightControls(SceneDocument& document, PanelsState& state, EntityId id, boo
         ImGui::TreePop();
     }
     if(lightRoleEdit(state.active) && (!activeRoleDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
+    drawLightFlickerControls(appearance,state.lights[id],extendedEdit,preview);
+    if(lightExtendedEdit(state.active) && (!activeExtendedDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
     ImGui::PopID();
 }
 void materialSlotControl(SceneDocument& document,PanelsState& state,const EntityRecord& record,const ModelAsset& model,
@@ -1533,7 +1576,7 @@ void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEd
 }
 
 void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits,
-                        std::uint64_t* playParticle,std::string* openParticle,QuaderBridge* quader,std::string* openMaterial,const NavigationInspectorContext& navigation,const std::array<std::string,32>* collisionLayerNames,const GameplayInspectorContext& gameplay,std::string* openAnimation,const DecalInspectorContext& decals,const RagdollInspectorContext& ragdolls) {
+                        std::uint64_t* playParticle,std::string* openParticle,QuaderBridge* quader,std::string* openMaterial,const NavigationInspectorContext& navigation,const std::array<std::string,32>* collisionLayerNames,const GameplayInspectorContext& gameplay,std::string* openAnimation,const DecalInspectorContext& decals,const RagdollInspectorContext& ragdolls,const LightPreviewContext& lights) {
     auto& state=stateFor(document);
     const auto& collisionNames=collisionLayerNames?*collisionLayerNames:defaultCollisionLayerNames();
     const bool canceled=cancelPanelEdit(document,state,Panel::Inspector,allowEdits);
@@ -1604,14 +1647,14 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                 }
             }
             if(section==SceneComponentKind::Directional && record.directional) {
-                if(componentHeader(state,record,SceneComponentKind::Directional))lightControls(document,state,record.id,true);
+                if(componentHeader(state,record,SceneComponentKind::Directional))lightControls(document,state,record.id,true,lights);
                 else if((state.active>=Edit::DirectionEnabled && state.active<=Edit::DirectionAngularDiameter) ||
-                        (state.active>=Edit::DirectionReceivers && state.active<=Edit::DirectionCasters))finishEdit(document,state,state.active);
+                        (state.active>=Edit::DirectionReceivers && state.active<=Edit::DirectionCasters) || lightExtendedEdit(state.active))finishEdit(document,state,state.active);
             }
             if(section==SceneComponentKind::Point && record.point) {
-                if(componentHeader(state,record,SceneComponentKind::Point))lightControls(document,state,record.id,false);
+                if(componentHeader(state,record,SceneComponentKind::Point))lightControls(document,state,record.id,false,lights);
                 else if((state.active>=Edit::PointEnabled && state.active<=Edit::PointAttenuation) ||
-                        (state.active>=Edit::PointReceivers && state.active<=Edit::PointCasters))finishEdit(document,state,state.active);
+                        (state.active>=Edit::PointReceivers && state.active<=Edit::PointCasters) || lightExtendedEdit(state.active))finishEdit(document,state,state.active);
             }
             if (section==SceneComponentKind::Model && record.model && componentHeader(state,record,SceneComponentKind::Model)) {
                 if(isBuiltinModel(record.model->id)) {

@@ -46,6 +46,7 @@ public:
     double interpolation() const{return remainder_/FixedStep;}
     std::uint64_t tickCount() const{return ticks_;}
     std::uint64_t droppedTicks() const{return droppedTicks_;}
+    double lightPresentationSeconds() const{return lightSeconds_;}
     const EntityAttributes& attributes() const{return attributes_;}
     std::vector<AttributeSnapshot> attributeSnapshots(EntityId id) const{return attributes_.snapshot(id);}
     std::optional<AttributeValue> attributeValue(EntityId id,const GameplayTag& tag) const{return attributes_.value(id,tag);}
@@ -194,7 +195,7 @@ private:
     std::optional<Mat4> lastControlledPose_;
     std::string status_;
     std::uint64_t editRevision_{},agentsRevision_{},ticks_{},droppedTicks_{};
-    double remainder_{};
+    double remainder_{},lightSeconds_{};
     bool suspended_{},failed_{};
     void advanceInternal(double,Vec2,const Camera&,bool,GameInput* = nullptr);
     void refreshPresentation();

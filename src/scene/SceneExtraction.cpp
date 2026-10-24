@@ -1,5 +1,6 @@
 #include "SceneExtraction.h"
 #include "physics/ColliderGeometry.h"
+#include "LightAuthoring.h"
 
 #include <algorithm>
 #include <cmath>
@@ -59,7 +60,7 @@ Vec3 directionalLightDirection(const Mat4& world) {
     return math::normalized(math::transformDirection(world,{0,0,-1}),{0,0,-1});
 }
 
-ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery&) {
+ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery&,std::optional<double> lightSeconds) {
     ExtractedScene result;
     result.environment=resolveEnvironment(scene);
     // Actor ownership is independent of input and physics.
@@ -109,14 +110,18 @@ ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery
         if(!visible)continue;
         if (const auto* light = registry.try_get<SceneDirectionalLight>(entity)) {
             const auto direction=directionalLightDirection(*world);
-            result.directional.push_back({direction,light->color,light->intensity,light->enabled,id,light->castShadows,
+            const auto presentation=evaluateLightPresentation(light->colorMode,light->color,light->temperatureKelvin,
+                light->intensity,0,light->flicker,lightSeconds.value_or(0),lightSeconds.has_value());
+            result.directional.push_back({direction,presentation.color,presentation.intensity,light->enabled,id,light->castShadows,
                 light->shadowDistance,light->shadowDepthBias,light->shadowNormalBias,light->roles,light->indirectEnergy,light->shadowAngularDiameter});
             if (id==result.environment.sun)
-                result.proceduralSun={direction*-1.f,light->color,light->intensity,light->enabled};
+                result.proceduralSun={direction*-1.f,presentation.color,presentation.intensity,light->enabled};
         }
         if (const auto* light = registry.try_get<ScenePointLight>(entity)) {
             const auto position = math::transformPoint(*world,{0,0,0});
-            result.points.push_back({position,light->color,light->intensity,light->enabled,light->radius,id,
+            const auto presentation=evaluateLightPresentation(light->colorMode,light->color,light->temperatureKelvin,
+                light->intensity,light->radius,light->flicker,lightSeconds.value_or(0),lightSeconds.has_value());
+            result.points.push_back({position,presentation.color,presentation.intensity,light->enabled,presentation.radius,id,
                 light->castShadows,light->shadowDepthBias,light->shadowNormalBias,light->roles,
                 light->nearFalloffRadius,light->specularStrength,light->rangeFalloffExponent,light->edgeSoftness,light->sourceRadius,light->attenuation,light->indirectEnergy});
         }

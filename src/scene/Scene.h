@@ -5,6 +5,7 @@
 #include "SceneComponentKind.h"
 #include "SceneDecal.h"
 #include "PrimitiveMesh.h"
+#include "LightAuthoring.h"
 #include "crimson-renderer/RenderTypes.h"
 #include <crimson/renderer/forward/MeshShading.h>
 #include "resources/AssetRef.h"
@@ -72,6 +73,9 @@ struct SceneDirectionalLight {
     LightRoles roles{};
     float indirectEnergy{1.f};
     float shadowAngularDiameter{.53f}; // Apparent light diameter in degrees.
+    LightColorMode colorMode{LightColorMode::Color};
+    float temperatureKelvin{6500};
+    LightFlickerSettings flicker{};
     bool operator==(const SceneDirectionalLight&) const = default;
 };
 struct ScenePointLight {
@@ -88,6 +92,9 @@ struct ScenePointLight {
     float sourceRadius{0};
     float attenuation{2};
     float indirectEnergy{1.f};
+    LightColorMode colorMode{LightColorMode::Color};
+    float temperatureKelvin{6500};
+    LightFlickerSettings flicker{};
     bool operator==(const ScenePointLight&) const = default;
 };
 // Global lighting settings are authored on ordinary entities. Spatial transforms

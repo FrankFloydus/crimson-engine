@@ -343,7 +343,9 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
             }
         }
     }
-    const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_,navigationProfileEditor_,collisionLayersEditor_,gameplayEffectEditor_,animationEditor_,decalEditor_,gameplay,captures,&ragdollEditor_);
+    if(!play_.playing())editLights_.synchronize(document.documentGeneration());
+    const auto lightPreview=play_.playing()?LightPreviewContext{}:editLights_.previewContext();
+    const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_,navigationProfileEditor_,collisionLayersEditor_,gameplayEffectEditor_,animationEditor_,decalEditor_,gameplay,captures,&ragdollEditor_,lightPreview);
     const auto sceneCamera=frame.viewportCamera.value_or(settings_.camera);
     if(frame.togglePlay)playActionPending_=play_.playing()?PlayAction::Stop:PlayAction::Start;
     if(frame.createParticle) particleEditor_.requestCreate(frame.particleFolder,assets);
@@ -545,7 +547,9 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     const auto& renderScene=play_.playing()?play_.presentationScene():document.scene();
     const MaterialEvaluationContext materialContext{play_.playing()?play_.tickCount()*PlaySession::FixedStep:materialGameSeconds_,materialRealSeconds_};
     prepared_.setMaterialContext(materialContext);
-    auto extracted=extractScene(renderScene,agentProfiles);
+    if(!play_.playing())editLights_.advance(document.documentGeneration(),simulationSeconds);
+    const auto lightSeconds=play_.playing()?std::optional{play_.lightPresentationSeconds()}:editLights_.sampleTime();
+    auto extracted=extractScene(renderScene,agentProfiles,lightSeconds);
     auto decalScene=decals_.prepare(renderScene,extracted);
     if(!frame.decalPlacement&&materialDocumentCurrent&&!pendingDecalPlacement_&&(frame.decalPreview||!frame.decalDragId.empty())) {
         SceneDecal value;Mat4 previewFrame;bool show=false;

@@ -1,5 +1,6 @@
 #pragma once
 #include "GameplayInspectorContext.h"
+#include "runtime/SceneLights.h"
 #include "math/Math.h"
 #include <optional>
 #include <cstdint>
@@ -39,5 +40,6 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                         std::string* openMaterial=nullptr,const NavigationInspectorContext& navigation={},
                         const std::array<std::string,32>* collisionLayerNames=nullptr,
                         const GameplayInspectorContext& gameplay={},std::string* openAnimation=nullptr,
-                        const DecalInspectorContext& decals={},const RagdollInspectorContext& ragdolls={});
+                        const DecalInspectorContext& decals={},const RagdollInspectorContext& ragdolls={},
+                        const LightPreviewContext& lights={});
 } // namespace crimson

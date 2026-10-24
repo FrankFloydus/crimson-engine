@@ -70,7 +70,7 @@ bool PlaySession::start(const SceneDocument& authored) {
         navigation_=std::make_unique<NavigationWorld>(*resources_,projectRoot_/".crimson"/"cache"/"navigation");
         physics_->setAgentProfiles([this](const std::string& id){const auto found=frameProfiles_.find(id);return found==frameProfiles_.end()?nullptr:found->second;});
         reconcileProfiles();physics_->reconcile(document_->scene(),{},meshColliders_);reconcileNavigation();agents_.clear();
-        remainder_=0;ticks_=droppedTicks_=0;suspended_=failed_=false;
+        remainder_=lightSeconds_=0;ticks_=droppedTicks_=0;suspended_=failed_=false;
         firstPerson_.reset();pendingJump_=false;traceVisualization_.clear();traceCamera_=NoEntity;
         controlled_=inputOwner_=NoEntity;inputCancellation_=0;lastControlledPose_.reset();
         editRevision_=document_->scene().revision();reconcileAttributes();reconcileAgents();resetInterpolation();reconcileParticles(0);
@@ -86,7 +86,7 @@ void PlaySession::stop() {
     triggerEvents_.clear();
     meshColliders_.clear();
     particles_=SceneParticles{};navigation_.reset();agents_.clear();enemies_.clear();physics_.reset();document_.reset();previous_.clear();current_.clear();frameProfiles_.clear();acceptedProfiles_.clear();supportedProfiles_.clear();
-    presentation_.apply({},{});remainder_=0;ticks_=droppedTicks_=0;editRevision_=agentsRevision_=0;suspended_=failed_=false;status_.clear();
+    presentation_.apply({},{});remainder_=lightSeconds_=0;ticks_=droppedTicks_=0;editRevision_=agentsRevision_=0;suspended_=failed_=false;status_.clear();
     navigationUpdate_={};navigationDomain_=navigationSceneRevision_=navigationGeometryRevision_=0;navigationVolume_.reset();navigationTransaction_=navigationCoalescing_=false;
     firstPerson_.reset();pendingJump_=false;traceVisualization_.clear();traceCamera_=NoEntity;
     controlled_=inputOwner_=NoEntity;inputCancellation_=0;lastControlledPose_.reset();
@@ -591,6 +591,10 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         if(seconds>bounded)droppedTicks_+=static_cast<std::uint64_t>(std::min((seconds-bounded)/FixedStep,1e12));
         remainder_=std::max(0.0,remainder_-static_cast<double>(available)*FixedStep);
         if(remainder_>=FixedStep)remainder_=std::fmod(remainder_,FixedStep);
+        // Accepted fixed time plus the render-frame remainder. Keep a separate
+        // accumulator so suspension discarding a remainder never rewinds light
+        // phase, and discarded catch-up ticks do not advance it.
+        lightSeconds_=std::min(1.e12,lightSeconds_+std::max(0.,bounded-static_cast<double>(available-executed)*FixedStep));
         if(input && acceptsInput)updateFirstPerson(*input,*controlledRecord->playerInput,*controlledRecord->movement,seconds);
         refreshPresentation();reconcileParticles(0);
         // Fire after render-frame look, tilt and stair compensation have all

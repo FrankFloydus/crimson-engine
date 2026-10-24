@@ -115,11 +115,19 @@ void fixedTimingAndInterpolation() {
     for(int i=0;i<60;++i)a.advance(1.0/60.0,Vec2{1,0},camera());
     for(int i=0;i<240;++i)b.advance(1.0/240.0,Vec2{1,0},camera());
     require(a.tickCount()==60 && b.tickCount()==60 && std::abs(x(a.document().scene())-x(b.document().scene()))<1e-4,"Render frame size changed fixed simulation results.");
+    require(std::abs(a.lightPresentationSeconds()-1)<1e-8&&std::abs(a.lightPresentationSeconds()-b.lightPresentationSeconds())<1e-8,
+        "Render-frame partition changed the accepted light presentation clock.");
     const float completed=x(a.document().scene());a.advance(PlaySession::FixedStep*.5,Vec2{},camera());
     require(x(a.presentationScene())<completed && x(a.presentationScene())>completed-.1f,"Presentation did not interpolate completed actor poses.");
-    const auto before=a.tickCount();a.advance(10,Vec2{1,0},camera());require(a.tickCount()==before+8 && a.droppedTicks()>0,"Catch-up was not bounded.");
+    require(std::abs(a.lightPresentationSeconds()-1-PlaySession::FixedStep*.5)<1e-8,"Light phase did not include the fixed-step remainder.");
+    const auto before=a.tickCount();const auto beforeLight=a.lightPresentationSeconds();a.advance(10,Vec2{1,0},camera());require(a.tickCount()==before+8 && a.droppedTicks()>0,"Catch-up was not bounded.");
+    require(std::abs(a.lightPresentationSeconds()-beforeLight-8*PlaySession::FixedStep)<1e-8,"Discarded simulation stalls advanced light phase.");
+    const auto pausedLight=a.lightPresentationSeconds();
     a.advance(5,Vec2{1,0},camera(),false);const float suspended=x(a.document().scene());const auto suspendedTicks=a.tickCount();
     a.advance(5,Vec2{1,0},camera(),true);require(a.tickCount()==suspendedTicks && x(a.document().scene())==suspended,"Focus resume replayed suspended wall time.");
+    require(a.lightPresentationSeconds()==pausedLight,"Suspension or resume rewound or advanced light phase.");
+    a.stop();require(a.lightPresentationSeconds()==0,"Stop retained the runtime light clock.");
+    require(startWithNavigation(a,authored)&&a.lightPresentationSeconds()==0,"A new Play run retained the prior light phase.");
     SceneDocument turning(root);fixture(turning);
     constexpr double radians=std::numbers::pi/180;
     turning.edit("Facing",[](auto& records,auto&){for(auto& record:records)if(record.id==2)record.local=math::translation({0,.05f,0})*math::rotation(math::axisAngle({0,1,0},179*radians));});

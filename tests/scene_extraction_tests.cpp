@@ -259,6 +259,39 @@ void independentActorOwnership() {
     const auto switched=extractScene(scene);
     for(size_t i=0;i<first.models.size();++i)require(switched.models[i].actorOwner==first.models[i].actorOwner,"Input ownership changed nested actor membership.");
 }
+void lightTemperatureAndFlicker() {
+    Scene scene;
+    auto point=entity(1,"Temperature point",0,math::scaling({3,4,5}));point.point.emplace();
+    point.point->color={.2f,.4f,.6f};point.point->colorMode=LightColorMode::Temperature;point.point->temperatureKelvin=2800;
+    point.point->intensity=20;point.point->radius=9;point.point->flicker.enabled=true;
+    point.point->flicker.intensity.minimum=point.point->flicker.intensity.maximum=.25f;
+    point.point->flicker.radius.enabled=true;point.point->flicker.radius.minimum=point.point->flicker.radius.maximum=1.5f;
+    point.point->flicker.color.enabled=true;
+    point.point->flicker.color.minimumTemperatureShift=point.point->flicker.color.maximumTemperatureShift=500;
+    auto twin=point;twin.id=2;twin.name="Synchronized point";
+    auto sun=entity(3,"Temperature sun",0,Mat4{});sun.directional.emplace();
+    sun.directional->colorMode=point.point->colorMode;sun.directional->temperatureKelvin=point.point->temperatureKelvin;
+    sun.directional->intensity=20;sun.directional->flicker=point.point->flicker;
+    auto environment=entity(4,"Linked sky",0,Mat4{});environment.environment.emplace();
+    environment.environment->sun=sun.id;environment.environment->environment.source=EnvironmentSource::ProceduralSky;
+    scene.apply({twin,environment,sun,point},{environment.id});
+    const auto before=scene.records();const auto revision=scene.revision();
+    const auto base=extractScene(scene);
+    require(close(base.points[0].color,temperatureColorSrgb(2800))&&base.points[0].intensity==20&&base.points[0].radius==9,
+        "Saved/base extraction did not resolve temperature independently from flicker and transform scale.");
+    const auto sampled=extractScene(scene,{},2.5);
+    require(sampled.points[0].intensity==5&&sampled.points[0].radius==13.5f&&close(sampled.points[0].color,temperatureColorSrgb(3300)),
+        "Timed extraction did not apply relative intensity, radius and Kelvin channels.");
+    require(sampled.points[0].color==sampled.points[1].color&&sampled.points[0].intensity==sampled.points[1].intensity&&
+        sampled.points[0].radius==sampled.points[1].radius,"Matching light settings used entity identity to change flicker.");
+    require(sampled.proceduralSun.color==sampled.directional[0].color&&sampled.proceduralSun.intensity==sampled.directional[0].intensity,
+        "Linked procedural sky and directional lighting sampled different flicker values.");
+    require(scene.revision()==revision,"Light presentation advanced the authored scene revision.");
+    const auto after=scene.records();require(before.size()==after.size(),"Light presentation changed authored entity membership.");
+    for(std::size_t i=0;i<before.size();++i)require(sameEntity(before[i],after[i]),"Light presentation changed authored light settings.");
+    point.point->colorMode=LightColorMode::Color;scene.apply({point},{});
+    require(extractScene(scene).points.front().color==point.point->color,"Switching back to Color lost retained manual RGB.");
+}
 void gizmoAffineRotation() {
     Mat4 shear; shear[4]=.4f; shear[8]=-.2f; shear[9]=.7f;
     const Mat4 parent=math::translation({7,3,-5})*math::rotation(math::axisAngle({0,1,0},.7))*math::scaling({-2,.5f,3});
@@ -542,6 +575,6 @@ void collisionFaces() {
 }
 }
 int main() {
-    try { run(); orientedSelectionBoxes();authoredPrimitiveBounds();lightOrientation(); proceduralSunExtraction();independentActorOwnership();gizmoAffineRotation();cameraPoseConversion();particleExtraction();hierarchicalVisibility();collisionPicking();clippedSelectionWires();collisionFaces();std::cout<<"Scene extraction checks passed.\n"; return 0; }
+    try { run(); orientedSelectionBoxes();authoredPrimitiveBounds();lightOrientation(); proceduralSunExtraction();independentActorOwnership();lightTemperatureAndFlicker();gizmoAffineRotation();cameraPoseConversion();particleExtraction();hierarchicalVisibility();collisionPicking();clippedSelectionWires();collisionFaces();std::cout<<"Scene extraction checks passed.\n"; return 0; }
     catch (const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

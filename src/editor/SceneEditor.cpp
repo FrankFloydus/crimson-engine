@@ -319,7 +319,8 @@ void SceneEditor::modals(SceneDocument& document, Camera& camera, AssetLibrary& 
 EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, AssetLibrary& assets,
                               Renderer& renderer, SDL_Window* window, bool navigationActive,
                               uint32_t bgfxFrame, bool quitRequested, ParticleEditor& particles, MaterialEditor& materials,NavigationAgentProfileEditor& profiles,CollisionLayersEditor& collisionLayers,GameplayEffectEditor& effects,AnimationEditor& animations,DecalEditor& decals,
-                              const GameplayInspectorContext& gameplay, profiling::CaptureController* captures,RagdollEditor* ragdolls) {
+                              const GameplayInspectorContext& gameplay, profiling::CaptureController* captures,RagdollEditor* ragdolls,
+                              const LightPreviewContext& lights) {
     documentReplaced_=false;
     editingAssets_=&assets;
     if(!document.transient() && deferred_!=Pending::None) {
@@ -543,7 +544,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     std::uint64_t playParticle{},placeDecal{},activateRagdoll{},resetRagdoll{};std::string openParticle,openMaterial,openProfile,openEffect,openAnimation,openDecal,openRagdoll;
     auto inspectorGameplay=gameplay;inspectorGameplay.openEffect=&openEffect;
     if (panels_.outliner) drawSceneOutliner(document,assets,!viewportBusy() && !actionPending);
-    if (panels_.inspector) drawSceneInspector(document,assets,renderer,!viewportBusy() && !actionPending,&playParticle,&openParticle,quader_,&openMaterial,{&navigationPreviewProfile_,&openProfile,navigationBuildStatus_},&collisionLayers.names(),inspectorGameplay,&openAnimation,{&openDecal,&placeDecal,decalStatus_,decalFrames_},{&openRagdoll,ragdollActive_,&activateRagdoll,&resetRagdoll});
+    if (panels_.inspector) drawSceneInspector(document,assets,renderer,!viewportBusy() && !actionPending,&playParticle,&openParticle,quader_,&openMaterial,{&navigationPreviewProfile_,&openProfile,navigationBuildStatus_},&collisionLayers.names(),inspectorGameplay,&openAnimation,{&openDecal,&placeDecal,decalStatus_,decalFrames_},{&openRagdoll,ragdollActive_,&activateRagdoll,&resetRagdoll},lights);
     if(placeDecal)viewport_.beginDecalPlacement(placeDecal);
     const bool cameraNavigationAllowed=viewedCamera_==NoEntity || pilotingCamera_;
     auto frame=viewport_.draw(settings.camera,document,assets,renderer,navigationActive || actionPending || preferencesMouse,bgfxFrame,preferencesKeyboard,

@@ -17,6 +17,7 @@
 #include "runtime/PlaySession.h"
 #include "runtime/GameInput.h"
 #include "runtime/SceneAnimations.h"
+#include "runtime/SceneLights.h"
 #include "tools/GameView.h"
 #include "tools/CommandBar.h"
 #include "AttributeDebug.h"
@@ -91,6 +92,7 @@ private:
     DecalEditor decalEditor_;
     SceneParticles particles_;
     SceneAnimations editAnimations_;
+    SceneLights editLights_;
     SceneSettings settings_;
     ResourceManager& resources_;
     EditorResources prepared_;

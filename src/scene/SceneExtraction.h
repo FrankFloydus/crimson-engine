@@ -4,6 +4,7 @@
 #include "physics/StaticCollision.h"
 
 #include <functional>
+#include <optional>
 #include <span>
 
 namespace crimson {
@@ -47,7 +48,10 @@ struct ExtractedScene {
 
 // The scene owns ECS traversal. Rendering receives copied presentation values,
 // with no EnTT handles, registry pointers, component pointers, or GPU ownership.
-ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery& profiles={});
+// No time samples authored base illumination (including Temperature mode).
+// A supplied time evaluates every light once for the shared Scene/Game frame.
+ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery& profiles={},
+                            std::optional<double> lightSeconds=std::nullopt);
 // Resolve any authored camera, including positional follow and full affine
 // parenting. Visibility controls its marker, not its view/control behavior.
 std::optional<Camera> resolveSceneCamera(const Scene& scene,EntityId id);

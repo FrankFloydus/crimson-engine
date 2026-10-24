@@ -26,6 +26,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -174,8 +175,89 @@ float readShadowAngularDiameter(const Json& source) {
         throw std::runtime_error("Directional shadow angular diameter must be finite and between zero and two degrees.");
     return value;
 }
+template<class T> void readLightField(const Json& object,const char* key,T& target) {
+    const auto found=object.find(key);
+    if(found==object.end())return;
+    if constexpr(std::is_same_v<T,bool>) {
+        if(!found->is_boolean())throw std::runtime_error("Light toggle must be a boolean.");
+    } else if constexpr(std::is_same_v<T,std::uint32_t>) {
+        if(!found->is_number_integer() || (found->is_number_unsigned()?found->get<std::uint64_t>()>UINT32_MAX:
+            found->get<std::int64_t>()<0 || found->get<std::int64_t>()>UINT32_MAX))
+            throw std::runtime_error("Light seed and counts must be unsigned 32-bit integers.");
+    } else if constexpr(std::is_same_v<T,float>) {
+        if(!found->is_number())throw std::runtime_error("Light numeric property must be a number.");
+    }
+    target=found->get<T>();
+}
+template<class T,class Visitor> void visitFlickerFields(T& value,const Visitor& field) {
+    field("enabled",value.enabled);field("speed",value.speed);field("duration",value.duration);
+    field("startDelay",value.startDelay);field("timeOffset",value.timeOffset);field("seed",value.seed);
+    field("timingRandomness",value.timingRandomness);field("brightnessRandomness",value.brightnessRandomness);
+    field("slowAmount",value.slowAmount);field("slowRate",value.slowRate);
+    field("flutterAmount",value.flutterAmount);field("flutterRate",value.flutterRate);
+    field("smoothness",value.smoothness);field("brightnessBias",value.brightnessBias);
+    field("stableMinimum",value.stableMinimum);field("stableMaximum",value.stableMaximum);
+    field("failureMinimum",value.failureMinimum);field("failureMaximum",value.failureMaximum);field("failureLevel",value.failureLevel);
+    field("flashesMinimum",value.flashesMinimum);field("flashesMaximum",value.flashesMaximum);
+    field("flashMinimum",value.flashMinimum);field("flashMaximum",value.flashMaximum);
+    field("gapMinimum",value.gapMinimum);field("gapMaximum",value.gapMaximum);
+    field("restMinimum",value.restMinimum);field("restMaximum",value.restMaximum);field("eventFrequency",value.eventFrequency);
+    field("riseTime",value.riseTime);field("fallTime",value.fallTime);field("recoveryTime",value.recoveryTime);field("afterglow",value.afterglow);
+    field("period",value.period);field("pulseWidth",value.pulseWidth);
+    field("secondaryStrength",value.secondaryStrength);field("secondarySpacing",value.secondarySpacing);
+}
+template<class T,class Visitor> void visitFlickerChannel(T& value,const Visitor& field) {
+    field("enabled",value.enabled);field("minimum",value.minimum);field("maximum",value.maximum);
+    field("invert",value.invert);field("response",value.response);
+}
+template<class T,class Visitor> void visitFlickerColor(T& value,const Visitor& field) {
+    field("enabled",value.enabled);field("minimumTint",value.minimumTint);field("maximumTint",value.maximumTint);
+    field("minimumTemperatureShift",value.minimumTemperatureShift);field("maximumTemperatureShift",value.maximumTemperatureShift);
+    field("invert",value.invert);field("response",value.response);field("amount",value.amount);
+}
+Json flickerJson(const LightFlickerSettings& value) {
+    Json result=Json::object();
+    visitFlickerFields(value,[&](const char* key,const auto& field){result[key]=field;});
+    result["behavior"]=lightFlickerBehaviorId(value.behavior);
+    result["playback"]=value.playback==LightFlickerPlayback::Loop?"Loop":"Once";
+    const auto encode=[&](Json& object){return [&object](const char* key,const auto& field){object[key]=field;};};
+    result["intensity"]=Json::object();visitFlickerChannel(value.intensity,encode(result["intensity"]));
+    result["radius"]=Json::object();visitFlickerChannel(value.radius,encode(result["radius"]));
+    result["color"]=Json::object();visitFlickerColor(value.color,encode(result["color"]));
+    return result;
+}
+LightFlickerSettings readFlicker(const Json& source) {
+    if(!source.is_object())throw std::runtime_error("Light flickering must be an object.");
+    LightFlickerSettings result;
+    visitFlickerFields(result,[&](const char* key,auto& field){readLightField(source,key,field);});
+    if(source.contains("behavior")) {
+        const auto behavior=lightFlickerBehaviorFromId(source.at("behavior").get<std::string>());
+        if(!behavior)throw std::runtime_error("Unknown light flicker behavior.");
+        result.behavior=*behavior;
+    }
+    if(source.contains("playback")) {
+        const auto playback=source.at("playback").get<std::string>();
+        if(playback=="Loop")result.playback=LightFlickerPlayback::Loop;
+        else if(playback=="Once")result.playback=LightFlickerPlayback::Once;
+        else throw std::runtime_error("Unknown light flicker playback.");
+    }
+    const auto decode=[&](const Json& object){return [&object](const char* key,auto& field){readLightField(object,key,field);};};
+    const auto object=[&](const char* key)->const Json& {
+        const auto& value=source.at(key);
+        if(!value.is_object())throw std::runtime_error("Light flicker channel must be an object.");
+        return value;
+    };
+    if(source.contains("intensity"))visitFlickerChannel(result.intensity,decode(object("intensity")));
+    if(source.contains("radius"))visitFlickerChannel(result.radius,decode(object("radius")));
+    if(source.contains("color"))visitFlickerColor(result.color,decode(object("color")));
+    if(!validLightFlicker(result))throw std::runtime_error("Light flickering properties are outside their supported ranges.");
+    return result;
+}
 template<class Light> Json lightJson(const Light& light) {
     Json result{{"color",light.color}, {"intensity",light.intensity}, {"enabled",light.enabled},{"indirectEnergy",light.indirectEnergy}};
+    if(light.colorMode!=LightColorMode::Color)result["colorMode"]="Temperature";
+    if(light.temperatureKelvin!=6500.f || light.colorMode==LightColorMode::Temperature)result["temperatureKelvin"]=light.temperatureKelvin;
+    if(light.flicker!=LightFlickerSettings{})result["flicker"]=flickerJson(light.flicker);
     if constexpr(requires { light.radius; })result["radius"]=light.radius;
     if constexpr(requires { light.nearFalloffRadius; }) {
         result["nearFalloffRadius"]=light.nearFalloffRadius;result["specularStrength"]=light.specularStrength;
@@ -198,6 +280,15 @@ template<class Light> Light readLight(const Json& json) {
     result.intensity = json.at("intensity").get<float>();
     result.enabled = json.at("enabled").get<bool>();
     result.indirectEnergy=readIndirectEnergy(json);
+    if(json.contains("colorMode")) {
+        const auto mode=json.at("colorMode").get<std::string>();
+        if(mode=="Color")result.colorMode=LightColorMode::Color;
+        else if(mode=="Temperature")result.colorMode=LightColorMode::Temperature;
+        else throw std::runtime_error("Unknown light color mode.");
+    }
+    readLightField(json,"temperatureKelvin",result.temperatureKelvin);
+    if(!validLightTemperature(result.temperatureKelvin))throw std::runtime_error("Light temperature must be between 1000 and 15000 Kelvin.");
+    if(json.contains("flicker"))result.flicker=readFlicker(json.at("flicker"));
     if constexpr(requires { result.radius; })result.radius=json.value("radius",20.f);
     if constexpr(requires { result.nearFalloffRadius; }) {
         result.nearFalloffRadius=json.value("nearFalloffRadius",0.f);result.specularStrength=json.value("specularStrength",1.f);
@@ -1545,7 +1636,7 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
         }
         for(const auto& input:generated) {
             auto record=input;record.id=remap.at(input.id);record.parent=input.parent?remap.at(input.parent):imported.id;
-            // Quader has no representation for Crimson's lighting roles or GI energy. Keep
+            // Quader has no representation for Crimson's lighting roles, flicker or GI energy. Keep
             // those authored values on matching source identities/kinds while
             // source transforms, energy, geometry and shadow flags still sync.
             if(const auto previous=scene_.find(record.id)) {
@@ -1563,11 +1654,17 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
                 if(record.point && previous->point) {
                     record.point->roles=previous->point->roles;
                     record.point->indirectEnergy=previous->point->indirectEnergy;
+                    record.point->temperatureKelvin=previous->point->temperatureKelvin;
+                    record.point->flicker=previous->point->flicker;
+                    record.point->colorMode=LightColorMode::Color; // Synchronized source RGB owns the active color.
                 }
                 if(record.directional && previous->directional) {
                     record.directional->roles=previous->directional->roles;
                     record.directional->indirectEnergy=previous->directional->indirectEnergy;
                     record.directional->shadowAngularDiameter=previous->directional->shadowAngularDiameter;
+                    record.directional->temperatureKelvin=previous->directional->temperatureKelvin;
+                    record.directional->flicker=previous->directional->flicker;
+                    record.directional->colorMode=LightColorMode::Color;
                 }
                 if(record.collider && previous->collider) {
                     const auto source=record.collider->source;

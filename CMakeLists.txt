@@ -99,7 +99,7 @@ target_include_directories(crimson-scene PUBLIC src)
 target_link_libraries(crimson-scene PUBLIC crimson-math crimson-camera crimson-storage crimson-gameplay EnTT::EnTT nlohmann_json::nlohmann_json)
 target_compile_definitions(crimson-scene PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-scene PRIVATE /W4 /permissive- /utf-8)
-target_sources(crimson-scene PRIVATE src/assets/RagdollAsset.cpp)
+target_sources(crimson-scene PRIVATE src/assets/RagdollAsset.cpp src/scene/LightAuthoring.cpp src/runtime/SceneLights.cpp)
 
 add_library(crimson-materials src/assets/MaterialGraph.cpp src/assets/GrungeGenerator.cpp src/assets/MaterialAsset.cpp src/editor/MaterialDocument.cpp src/editor/MaterialGraphActions.cpp src/assets/DecalAsset.cpp src/editor/DecalDocument.cpp)
 target_include_directories(crimson-materials PUBLIC src)
@@ -254,7 +254,7 @@ add_executable(crimson-renderer WIN32
     src/tools/Tools.h src/tools/Tools.cpp
     src/tools/ScenePanels.cpp src/tools/SceneDiagnostics.cpp
     src/tools/QuaderInspector.cpp
-    src/tools/GameView.cpp src/tools/LightingControls.cpp
+    src/tools/GameView.cpp src/tools/LightingControls.cpp src/tools/LightInspectorControls.cpp
     src/tools/GameViewInteraction.cpp
     src/tools/CommandBar.cpp
     src/tools/InspectorTransform.cpp
@@ -831,6 +831,22 @@ if(BUILD_TESTING)
     target_compile_options(scene_tests PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(scene_tests PRIVATE crimson-scene crimson-materials)
     add_test(NAME scene_core COMMAND scene_tests)
+    add_executable(light_authoring_tests tests/light_authoring_tests.cpp)
+    target_link_libraries(light_authoring_tests PRIVATE crimson-scene)
+    target_compile_options(light_authoring_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME light_authoring_core COMMAND light_authoring_tests)
+    add_executable(light_scene_tests tests/light_scene_tests.cpp)
+    target_link_libraries(light_scene_tests PRIVATE crimson-scene)
+    target_compile_options(light_scene_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME light_scene_core COMMAND light_scene_tests)
+    add_executable(light_inspector_tests tests/light_inspector_tests.cpp src/tools/LightInspectorControls.cpp)
+    target_link_libraries(light_inspector_tests PRIVATE crimson-scene imgui::imgui)
+    target_compile_options(light_inspector_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME light_inspector_core COMMAND light_inspector_tests)
+    add_executable(scene_lights_tests tests/scene_lights_tests.cpp)
+    target_link_libraries(scene_lights_tests PRIVATE crimson-scene)
+    target_compile_options(scene_lights_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME scene_lights_core COMMAND scene_lights_tests)
     add_executable(render_scene_tests tests/render_scene_tests.cpp)
     target_include_directories(render_scene_tests PRIVATE src)
     target_link_libraries(render_scene_tests PRIVATE Crimson::Support)
