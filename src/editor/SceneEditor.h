@@ -105,6 +105,7 @@ private:
     enum class CommandTarget { Scene,Particle,Material,Profile,CollisionLayers,Effect,Animation,Ragdoll,Decal,Game };
     CommandTarget commandTarget_{CommandTarget::Scene};
     bool viewportBusy() const { return viewport_.interacting() || cameraGestureActive_; }
+    bool viewportCommandsBlocked() const { return viewport_.otherInteractionActive() || cameraGestureActive_; }
     void cancelOpen();
     void pumpOpen(SceneDocument&,Renderer&);
     void request(Pending, const std::string&, SceneDocument&, Camera&, Renderer&);

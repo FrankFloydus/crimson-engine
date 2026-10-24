@@ -1,5 +1,6 @@
 #pragma once
 #include "SceneEditor.h"
+#include "ExternalSceneObservation.h"
 #include "CameraPilot.h"
 #include "EditorResources.h"
 #include "assets/AssetLibrary.h"
@@ -107,7 +108,8 @@ private:
     std::unique_ptr<AssetPreviews> previews_;
     ResourceHandle<PreparedEnvironment> environment_;
     ResourceHandle<SceneSnapshot> externalScene_;
-    std::uint64_t environmentRevision_{},notifiedSceneFingerprint_{},savedPreviewFingerprint_{},documentEpoch_{1};
+    ExternalSceneObservation externalSceneObservation_;
+    std::uint64_t environmentRevision_{},savedPreviewFingerprint_{},documentEpoch_{1};
     std::vector<std::filesystem::path> changedFiles_;
     std::vector<std::string> visiblePreviewIds_;
     ViewportRegion viewportRegion_;

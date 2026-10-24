@@ -4,6 +4,7 @@
 #include "assets/MaterialAsset.h"
 #include "resources/StreamingModel.h"
 #include "scene/SceneExtraction.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include <algorithm>
 #include <bit>
 #include <sstream>
@@ -33,6 +34,7 @@ std::size_t bytes(const ModelData& model){std::size_t total=sizeof(ModelData);st
     if(model.resampled)for(const auto& d:model.resampled->draws)if(d.weights)for(const auto& page:d.weights->pages)if(page)total+=sizeof(MeshPaintPage);return total;
 }
 std::shared_ptr<ModelData> build(const std::shared_ptr<const ModelAsset>& source,EntityId entity,std::uint32_t level,std::uint64_t revision,std::optional<SceneMeshPaint> paint,bool resample,std::stop_token stop){
+    CRIMSON_PROFILE_ZONE("Vertex paint subdivision worker");
     cancelled(stop);if(!rigidSource(*source))throw std::runtime_error("Vertex painting supports rigid static meshes.");
     auto result=std::make_shared<ModelData>();static_cast<ModelAsset&>(*result)=*source;result->source=source;result->revision=revision;result->stream.reset();result->primitives.clear();result->paintedDraws.clear();result->signature=revision;mix(result->signature,level);
     std::vector<std::shared_ptr<const ModelPrimitive>> originals(source->primitives.size());std::vector<std::shared_ptr<const MeshPaintGeometry>> geometries(source->primitives.size());
@@ -41,7 +43,7 @@ std::shared_ptr<ModelData> build(const std::shared_ptr<const ModelAsset>& source
         if(!original){const auto& primitive=source->primitives[draw.primitive];if(!primitive.vertices.empty())original={source,&primitive};else {if(!source->stream||draw.primitive>=source->stream->primitives.size()||source->stream->primitives[draw.primitive].levels.empty())throw std::runtime_error("Original mesh geometry is unavailable.");
             try{const auto lod=streaming::loadModelLod(source->stream->primitives[draw.primitive].levels[0],draw.primitive,0,false,stop);original={lod,&lod->geometry};}
             catch(const std::exception& error){cancelled(stop);throw std::runtime_error(std::string("Original paint geometry cache: ")+error.what());}}}
-        auto& geometry=geometries[draw.primitive];if(!geometry)geometry=buildMeshPaintGeometry(*original,level,stop);
+        auto& geometry=geometries[draw.primitive];if(!geometry){CRIMSON_PROFILE_ZONE("Vertex paint corner quad refinement");geometry=buildMeshPaintGeometry(*original,level,stop);}
         vertexTotal+=geometry->vertices.size();triangleTotal+=geometry->indices.size()/3;if(vertexTotal>MaximumMeshPaintVertices||triangleTotal>MaximumMeshPaintTriangles)throw std::runtime_error("Subdivision exceeds this entity's 262144 vertex / 524288 triangle budget.");
         const auto primitive=static_cast<std::uint32_t>(result->primitives.size());result->primitives.push_back(meshPaintRenderPrimitive(*original,*geometry));result->draws[drawIndex].primitive=primitive;result->paintedDraws.push_back({draw.primitive,geometry,makeMeshPaintPayload(static_cast<std::uint32_t>(geometry->vertices.size()))});mix(result->signature,geometry->signature);
     }
@@ -53,7 +55,7 @@ std::shared_ptr<ModelData> build(const std::shared_ptr<const ModelAsset>& source
     if(resample){result->resampled=paint.value_or(SceneMeshPaint{});auto& replacement=*result->resampled;replacement.subdivisionLevel=level;replacement.recipeVersion=MeshPaintRecipeVersion;
         for(auto& stored:replacement.draws){cancelled(stop);if(stored.draw>=result->paintedDraws.size()||result->paintedDraws[stored.draw].sourcePrimitive!=stored.primitive)throw std::runtime_error("Reset incompatible paint before changing subdivision.");const auto& current=result->paintedDraws[stored.draw];
             if(stored.sourceSignature!=current.geometry->sourceSignature||!stored.weights)throw std::runtime_error("Reset incompatible paint before changing subdivision.");
-            if(stored.level!=level){const auto before=buildMeshPaintGeometry(*originals[stored.primitive],stored.level,stop);stored.weights=resampleMeshPaintPayload(*before,*stored.weights,*current.geometry,stop);stored.level=level;}
+            if(stored.level!=level){CRIMSON_PROFILE_ZONE("Vertex paint resample worker");const auto before=buildMeshPaintGeometry(*originals[stored.primitive],stored.level,stop);stored.weights=resampleMeshPaintPayload(*before,*stored.weights,*current.geometry,stop);stored.level=level;}
             else if(stored.weights->vertexCount!=current.geometry->vertices.size())throw std::runtime_error("Stored paint vertex count no longer matches its source.");}
     }
     return result;
@@ -61,6 +63,7 @@ std::shared_ptr<ModelData> build(const std::shared_ptr<const ModelAsset>& source
 }
 MeshPaintResources::MeshPaintResources(AssetLibrary& assets,ResourceManager& resources):assets_(assets),resources_(resources){}
 ResourceHandle<ModelAsset> MeshPaintResources::request(const EntityRecord& record,std::uint32_t level,ResourcePriority priority,bool resample,std::string& diagnostic){
+    CRIMSON_PROFILE_ZONE("Vertex paint subdivision request");
     if(!record.model){diagnostic="Select a rigid mesh.";return {};}
     if(level>MaximumMeshPaintLevel){diagnostic="Subdivision Level must be from 0 to 5.";return {};}
     const auto source=assets_.findModel(record.model->id,record.primitive);if(!source){diagnostic=assets_.modelDiagnostic(record.model->id);if(diagnostic.empty())diagnostic="Preparing original mesh geometry.";return {};}
@@ -77,7 +80,7 @@ ResourceHandle<ModelAsset> MeshPaintResources::request(const EntityRecord& recor
     }
     if(diagnostic.empty()&&entry.resource.state()!=ResourceState::Ready)diagnostic="Preparing subdivision geometry.";return entry.resource;
 }
-PreparedMeshPaintModel MeshPaintResources::prepare(const EntityRecord& record,ResourcePriority priority){PreparedMeshPaintModel out;std::string diagnostic;const auto handle=request(record,record.meshPaint?record.meshPaint->subdivisionLevel:0,priority,false,diagnostic);out.diagnostic=diagnostic;out.failed=handle&&handle.state()==ResourceState::Failed;
+PreparedMeshPaintModel MeshPaintResources::prepare(const EntityRecord& record,ResourcePriority priority){CRIMSON_PROFILE_ZONE("Vertex paint prepared geometry and weights");PreparedMeshPaintModel out;std::string diagnostic;const auto handle=request(record,record.meshPaint?record.meshPaint->subdivisionLevel:0,priority,false,diagnostic);out.diagnostic=diagnostic;out.failed=handle&&handle.state()==ResourceState::Failed;
     const auto snapshot=handle.snapshot();if(!snapshot||handle.state()!=ResourceState::Ready){statuses_[record.id]=out.diagnostic;return out;}
     const auto data=std::static_pointer_cast<const ModelData>(snapshot.shared());out.asset=data;out.revision=data->revision;out.signature=data->signature;out.ready=true;
     for(std::uint32_t i=0;i<data->paintedDraws.size();++i){const auto& d=data->paintedDraws[i];MeshPaintPreparedDraw result;result.draw=i;result.sourcePrimitive=d.sourcePrimitive;result.primitive=data->draws[i].primitive;result.geometry=d.geometry;
@@ -88,7 +91,7 @@ PreparedMeshPaintModel MeshPaintResources::prepare(const EntityRecord& record,Re
     statuses_[record.id]=out.diagnostic;return out;
 }
 PreparedMeshPaintModel MeshPaintResources::prepare(const ExtractedModel& model,ResourcePriority priority){EntityRecord record;record.id=model.id;record.model=AssetRef<ModelAsset>{model.assetId};record.primitive=model.primitive;record.modelMaterials=model.materialOverrides;record.modelAnimation=model.animation;record.modelRagdoll=model.ragdoll;record.meshPaint=model.meshPaint;return prepare(record,priority);}
-VertexPaintTargets MeshPaintResources::targets(const SceneDocument& document,EntityId entity){VertexPaintTargets out;const auto record=document.scene().find(entity);const auto world=document.scene().worldTransform(entity);if(!record||!world||!document.scene().isVisible(entity)){out.diagnostic="Select a visible rigid mesh.";return out;}
+VertexPaintTargets MeshPaintResources::targets(const SceneDocument& document,EntityId entity){CRIMSON_PROFILE_ZONE("Vertex paint selected draw preparation");VertexPaintTargets out;const auto record=document.scene().find(entity);const auto world=document.scene().worldTransform(entity);if(!record||!world||!document.scene().isVisible(entity)){out.diagnostic="Select a visible rigid mesh.";return out;}
     const auto prepared=prepare(*record,ResourcePriority::Selected);out.diagnostic=prepared.diagnostic;if(!prepared.ready||!out.diagnostic.empty())return out;
     try{const auto materials=assets_.resolvedModelMaterials(*prepared.asset,record->modelMaterials);for(const auto& draw:prepared.draws){const auto& p=prepared.asset->primitives[draw.primitive];if(p.material>=materials.size()||!materials[p.material].graph)continue;const auto& output=materialOutputNode(*materials[p.material].graph).output;
             if(output.shading!=MaterialShading::BlendPbr||output.blend!=MaterialBlend::Opaque||output.tessellation.enabled)continue;
@@ -100,6 +103,7 @@ VertexPaintTargets MeshPaintResources::targets(const SceneDocument& document,Ent
     }catch(const std::exception& error){out.draws.clear();out.diagnostic=error.what();}return out;
 }
 VertexPaintSurfaceSnapshot MeshPaintResources::surfaces(const SceneDocument& document,const SurfaceBoundsQuery& surfaceBounds) {
+    CRIMSON_PROFILE_ZONE("Vertex paint surface snapshot preparation");
     std::vector<VertexPaintSurfaceMesh> surfaces;std::uint64_t signature=1469598103934665603ull;
     std::uint64_t readiness=1469598103934665603ull;
     const auto valueHash=[&](const auto& value){const auto* bytes=reinterpret_cast<const unsigned char*>(&value);for(std::size_t i=0;i<sizeof(value);++i){signature^=bytes[i];signature*=1099511628211ull;}};
@@ -132,13 +136,14 @@ VertexPaintSurfaceSnapshot MeshPaintResources::surfaces(const SceneDocument& doc
             ResourceRequestOptions options;options.priority=ResourcePriority::Selected;options.retainLoader=false;options.cancelWhenUnused=true;options.assetDependencies={occurrence.assetId};
             if(model->stream)for(const auto& p:model->stream->primitives)if(!p.levels.empty())options.dependencies.push_back(p.levels[0].file);
             entry.resource=resources_.requestDerived<ModelAsset>("vertex-paint-surface:"+key,[model](std::stop_token stop) {
+                CRIMSON_PROFILE_ZONE("Vertex paint surface BVH worker");
                 auto data=std::make_shared<SurfaceData>();data->source=model;data->meshes.resize(model->primitives.size());std::size_t bytes=sizeof(SurfaceData)+data->meshes.capacity()*sizeof(data->meshes.front());
                 for(std::uint32_t primitive=0;primitive<model->primitives.size();++primitive) {
                     cancelled(stop);const auto* original=&model->primitives[primitive];std::shared_ptr<const ModelGeometryLevel> lod;
                     if(original->vertices.empty()&&model->stream&&primitive<model->stream->primitives.size()&&!model->stream->primitives[primitive].levels.empty()) {
                         lod=streaming::loadModelLod(model->stream->primitives[primitive].levels[0],primitive,0,false,stop);original=&lod->geometry;
                     }
-                    data->meshes[primitive]=build_shadow_ray_mesh(*original,stop);if(data->meshes[primitive])bytes+=data->meshes[primitive]->bytes();
+                    {CRIMSON_PROFILE_ZONE("Vertex paint original LOD BVH build");data->meshes[primitive]=build_shadow_ray_mesh(*original,stop);}if(data->meshes[primitive])bytes+=data->meshes[primitive]->bytes();
                 }
                 return ResourceLoadResult<ModelAsset>{data,bytes,0,{}};
             },std::move(options));

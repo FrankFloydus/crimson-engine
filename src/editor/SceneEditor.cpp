@@ -321,6 +321,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
                               uint32_t bgfxFrame, bool quitRequested, ParticleEditor& particles, MaterialEditor& materials,NavigationAgentProfileEditor& profiles,CollisionLayersEditor& collisionLayers,GameplayEffectEditor& effects,AnimationEditor& animations,DecalEditor& decals,
                               const GameplayInspectorContext& gameplay, profiling::CaptureController* captures,RagdollEditor* ragdolls,
                               const LightPreviewContext& lights) {
+    viewport_.prepareVertexPaintUi(document,renderer,bgfxFrame);
     documentReplaced_=false;
     editingAssets_=&assets;
     if(document.transient()&&viewport_.vertexPaintEnabled())viewport_.setVertexPaintEnabled(false,document,renderer);
@@ -383,6 +384,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     const bool profileFocus=commandTarget_==CommandTarget::Profile;
     const bool materialFocus=commandTarget_==CommandTarget::Material;
     const auto saveTarget=[&](bool saveAs) {
+        viewport_.finishVertexPaintCommand(document,renderer);
         if(commandTarget_==CommandTarget::Decal) {if(saveAs?decals.canSaveAs():decals.canSave())decals.save(assets,saveAs);}
         else if(ragdolls&&commandTarget_==CommandTarget::Ragdoll) {if(saveAs?ragdolls->canSaveAs():ragdolls->canSave())ragdolls->save(assets,saveAs);}
         else if(commandTarget_==CommandTarget::Animation) {if(saveAs?animations.canSaveAs():animations.canSave())animations.save(assets,saveAs);}
@@ -396,6 +398,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
         else save(document,assets,saveAs);
     };
     const auto undoTarget=[&] {
+        viewport_.finishVertexPaintCommand(document,renderer);
         if(commandTarget_==CommandTarget::Decal)decals.undo();
         else if(ragdolls&&commandTarget_==CommandTarget::Ragdoll)ragdolls->undo();
         else if(commandTarget_==CommandTarget::Animation)animations.undo();
@@ -407,6 +410,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
         else document.undo();
     };
     const auto redoTarget=[&] {
+        viewport_.finishVertexPaintCommand(document,renderer);
         if(commandTarget_==CommandTarget::Decal)decals.redo();
         else if(ragdolls&&commandTarget_==CommandTarget::Ragdoll)ragdolls->redo();
         else if(commandTarget_==CommandTarget::Animation)animations.redo();
@@ -420,8 +424,8 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("New scene")) request(Pending::New,{},document,settings.camera,renderer);
-            if (ImGui::MenuItem("Save","Ctrl+S",false,!viewportBusy() && (ragdollFocus || decalFocus || animationFocus || effectFocus || collisionLayersFocus || profileFocus || materialFocus || particleFocus || !document.transient()) && (!materialFocus || materials.canSave()) && (!profileFocus || profiles.canSave()) && (!effectFocus || effects.canSave()) && (!decalFocus || decals.canSave()) && (!animationFocus || animations.canSave()) && (!ragdollFocus || ragdolls->canSave()))) { saveTarget(false); }
-            if (ImGui::MenuItem("Save as...","Ctrl+Shift+S",false,!viewportBusy() && (ragdollFocus || decalFocus || animationFocus || effectFocus || collisionLayersFocus || profileFocus || materialFocus || particleFocus || !document.transient()) && (!materialFocus || materials.canSaveAs()) && (!profileFocus || profiles.canSaveAs()) && (!effectFocus || effects.canSaveAs()) && !collisionLayersFocus && (!decalFocus || decals.canSaveAs()) && (!animationFocus || animations.canSaveAs()) && (!ragdollFocus || ragdolls->canSaveAs()))) { saveTarget(true); }
+            if (ImGui::MenuItem("Save","Ctrl+S",false,!viewportCommandsBlocked() && (ragdollFocus || decalFocus || animationFocus || effectFocus || collisionLayersFocus || profileFocus || materialFocus || particleFocus || !document.transient()) && (!materialFocus || materials.canSave()) && (!profileFocus || profiles.canSave()) && (!effectFocus || effects.canSave()) && (!decalFocus || decals.canSave()) && (!animationFocus || animations.canSave()) && (!ragdollFocus || ragdolls->canSave()))) { saveTarget(false); }
+            if (ImGui::MenuItem("Save as...","Ctrl+Shift+S",false,!viewportCommandsBlocked() && (ragdollFocus || decalFocus || animationFocus || effectFocus || collisionLayersFocus || profileFocus || materialFocus || particleFocus || !document.transient()) && (!materialFocus || materials.canSaveAs()) && (!profileFocus || profiles.canSaveAs()) && (!effectFocus || effects.canSaveAs()) && !collisionLayersFocus && (!decalFocus || decals.canSaveAs()) && (!animationFocus || animations.canSaveAs()) && (!ragdollFocus || ragdolls->canSaveAs()))) { saveTarget(true); }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Edit")) {
@@ -438,10 +442,10 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
             else finishScenePanelEdit(document);
             const auto undo=ragdollFocus ? std::string("Undo ragdoll edit") : decalFocus ? std::string("Undo decal edit") : animationFocus ? std::string("Undo animation edit") : effectFocus ? std::string("Undo effect edit") : collisionLayersFocus ? std::string("Undo collision layer edit") : profileFocus ? std::string("Undo profile edit") : materialFocus ? std::string("Undo material edit") : particleFocus ? std::string("Undo particle edit") : "Undo " + document.history().undoLabel();
             const auto redo=ragdollFocus ? std::string("Redo ragdoll edit") : decalFocus ? std::string("Redo decal edit") : animationFocus ? std::string("Redo animation edit") : effectFocus ? std::string("Redo effect edit") : collisionLayersFocus ? std::string("Redo collision layer edit") : profileFocus ? std::string("Redo profile edit") : materialFocus ? std::string("Redo material edit") : particleFocus ? std::string("Redo particle edit") : "Redo " + document.history().redoLabel();
-            if (ImGui::MenuItem(undo.c_str(),"Ctrl+Z",false,!viewportBusy() && (ragdollFocus ? ragdolls->canUndo() : decalFocus ? decals.canUndo() : animationFocus ? animations.canUndo() : effectFocus ? effects.canUndo() : collisionLayersFocus ? collisionLayers.canUndo() : profileFocus ? profiles.canUndo() : materialFocus ? materials.canUndo() : particleFocus ? particles.canUndo() : document.history().canUndo() && !document.transactionActive()))) { undoTarget(); }
-            if (ImGui::MenuItem(redo.c_str(),"Ctrl+Y",false,!viewportBusy() && (ragdollFocus ? ragdolls->canRedo() : decalFocus ? decals.canRedo() : animationFocus ? animations.canRedo() : effectFocus ? effects.canRedo() : collisionLayersFocus ? collisionLayers.canRedo() : profileFocus ? profiles.canRedo() : materialFocus ? materials.canRedo() : particleFocus ? particles.canRedo() : document.history().canRedo() && !document.transactionActive()))) { redoTarget(); }
-            if (ImGui::MenuItem("Duplicate selection","Ctrl+D",false,!ragdollFocus && !decalFocus && !animationFocus && !effectFocus && !collisionLayersFocus && !profileFocus && !particleFocus && !materialFocus && !document.selection().ids.empty() && !document.transactionActive())) document.duplicateSelection();
-            if (ImGui::MenuItem("Delete selection","Delete",false,!ragdollFocus && !decalFocus && !animationFocus && !effectFocus && !collisionLayersFocus && !profileFocus && !particleFocus && !materialFocus && !document.selection().ids.empty() && !document.transactionActive())) document.eraseSelection();
+            if (ImGui::MenuItem(undo.c_str(),"Ctrl+Z",false,!viewportCommandsBlocked() && (ragdollFocus ? ragdolls->canUndo() : decalFocus ? decals.canUndo() : animationFocus ? animations.canUndo() : effectFocus ? effects.canUndo() : collisionLayersFocus ? collisionLayers.canUndo() : profileFocus ? profiles.canUndo() : materialFocus ? materials.canUndo() : particleFocus ? particles.canUndo() : (document.history().canUndo() || viewport_.vertexPaintActive()) && (!document.transactionActive() || viewport_.vertexPaintActive())))) { undoTarget(); }
+            if (ImGui::MenuItem(redo.c_str(),"Ctrl+Y",false,!viewportCommandsBlocked() && (ragdollFocus ? ragdolls->canRedo() : decalFocus ? decals.canRedo() : animationFocus ? animations.canRedo() : effectFocus ? effects.canRedo() : collisionLayersFocus ? collisionLayers.canRedo() : profileFocus ? profiles.canRedo() : materialFocus ? materials.canRedo() : particleFocus ? particles.canRedo() : document.history().canRedo() && (!document.transactionActive() || viewport_.vertexPaintActive())))) { redoTarget(); }
+            if (ImGui::MenuItem("Duplicate selection","Ctrl+D",false,!ragdollFocus && !decalFocus && !animationFocus && !effectFocus && !collisionLayersFocus && !profileFocus && !particleFocus && !materialFocus && !document.selection().ids.empty() && (!document.transactionActive() || viewport_.vertexPaintActive()))) {viewport_.finishVertexPaintCommand(document,renderer);document.duplicateSelection();}
+            if (ImGui::MenuItem("Delete selection","Delete",false,!ragdollFocus && !decalFocus && !animationFocus && !effectFocus && !collisionLayersFocus && !profileFocus && !particleFocus && !materialFocus && !document.selection().ids.empty() && (!document.transactionActive() || viewport_.vertexPaintActive()))) {viewport_.finishVertexPaintCommand(document,renderer);document.eraseSelection();}
             ImGui::Separator();
             if(ImGui::MenuItem("Collision Layers..."))collisionLayers.requestOpen();
             if (ImGui::MenuItem("Preferences...")) preferences_.open();
@@ -470,7 +474,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
                 else if(particleFocus)particles.finishInteraction();
                 finishScenePanelEdit(document);
                 const bool cameraActionsAllowed=!document.transient() && !playTransitionBlocked() && !navigationActive &&
-                    !viewportBusy() && !document.transactionActive() && !materials.transactionActive() &&
+                    !viewportCommandsBlocked() && (!document.transactionActive() || viewport_.vertexPaintActive()) && !materials.transactionActive() &&
                     !particles.transactionActive() && !profiles.transactionActive() && !collisionLayers.transactionActive() && !effects.transactionActive() && !animations.transactionActive() && (!ragdolls || !ragdolls->transactionActive()) && !decals.transactionActive() && !ImGui::GetTopMostPopupModal();
                 ImGui::BeginDisabled(!cameraActionsAllowed);
                 const auto records=document.scene().records();
@@ -517,8 +521,8 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
             ImGui::PopClipRect();
         }
         ImGui::SameLine(playPosition);
-        ImGui::BeginDisabled(viewport_.vertexPaintActive() || document.transactionActive() || opening_ || deletion_ || pending_!=Pending::None || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup));
-        if(ImGui::Button(playLabel))togglePlay=true;
+        ImGui::BeginDisabled((document.transactionActive() && !viewport_.vertexPaintActive()) || opening_ || deletion_ || pending_!=Pending::None || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup));
+        if(ImGui::Button(playLabel)){viewport_.finishVertexPaintCommand(document,renderer);togglePlay=true;}
         ImGui::EndDisabled();
         ImGui::EndMainMenuBar();
     }
@@ -552,8 +556,8 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     navigationPreviewGeneration_=document.documentGeneration();
     std::uint64_t playParticle{},placeDecal{},activateRagdoll{},resetRagdoll{};std::string openParticle,openMaterial,openProfile,openEffect,openAnimation,openDecal,openRagdoll;
     auto inspectorGameplay=gameplay;inspectorGameplay.openEffect=&openEffect;
-    if (panels_.outliner) drawSceneOutliner(document,assets,!viewportBusy() && !actionPending);
-    if (panels_.inspector) drawSceneInspector(document,assets,renderer,!viewportBusy() && !actionPending,&playParticle,&openParticle,quader_,&openMaterial,{&navigationPreviewProfile_,&openProfile,navigationBuildStatus_},&collisionLayers.names(),inspectorGameplay,&openAnimation,{&openDecal,&placeDecal,decalStatus_,decalFrames_},{&openRagdoll,ragdollActive_,&activateRagdoll,&resetRagdoll},lights);
+    if (panels_.outliner) drawSceneOutliner(document,assets,!viewportCommandsBlocked() && !actionPending,viewport_.vertexPaintActive());
+    if (panels_.inspector) drawSceneInspector(document,assets,renderer,!viewportCommandsBlocked() && !actionPending,&playParticle,&openParticle,quader_,&openMaterial,{&navigationPreviewProfile_,&openProfile,navigationBuildStatus_},&collisionLayers.names(),inspectorGameplay,&openAnimation,{&openDecal,&placeDecal,decalStatus_,decalFrames_},{&openRagdoll,ragdollActive_,&activateRagdoll,&resetRagdoll},lights,viewport_.vertexPaintActive());
     if(placeDecal)viewport_.beginDecalPlacement(placeDecal);
     const bool cameraNavigationAllowed=viewedCamera_==NoEntity || pilotingCamera_;
     auto frame=viewport_.draw(settings.camera,document,assets,renderer,navigationActive || actionPending || preferencesMouse,bgfxFrame,preferencesKeyboard,

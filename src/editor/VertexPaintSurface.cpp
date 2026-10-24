@@ -1,4 +1,5 @@
 #include "VertexPaintSurface.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -100,6 +101,7 @@ std::optional<VertexPaintSurfaceHit> trace(std::span<const VertexPaintSurfaceMes
 }
 }
 VertexPaintSurfaceSnapshot makeVertexPaintSurfaceSnapshot(std::vector<VertexPaintSurfaceMesh> surfaces,std::uint64_t signature) {
+    CRIMSON_PROFILE_ZONE("Vertex paint surface snapshot publication");
     auto shared=std::make_shared<const std::vector<VertexPaintSurfaceMesh>>(std::move(surfaces));
     return {signature,true,{},[shared](const Ray& ray){return trace(*shared,ray);},
         [shared](const Ray& ray,EntityId entity,std::uint32_t draw,std::uint32_t primitive){return trace(*shared,ray,std::array<std::uint64_t,3>{entity,draw,primitive});}};

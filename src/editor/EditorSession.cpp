@@ -213,6 +213,7 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
             if(play_.playing()) { deferredSceneReload_=true;continue; }
             ResourceRequestOptions options;options.dependencies={file};options.forceReload=true;
             const auto root=root_;
+            externalSceneObservation_.requested(document_);
             externalScene_=resources_.request<SceneSnapshot>(AssetRef<SceneSnapshot>{id},[root,id](std::stop_token token){
                 if(token.stop_requested())throw std::runtime_error("Scene reload canceled.");
                 auto snapshot=std::make_shared<SceneSnapshot>(readSceneSnapshot(root,id));
@@ -222,9 +223,8 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
     }
     changedFiles_.clear();
     if(!play_.playing() && externalScene_.state()==ResourceState::Ready) if(auto snapshot=externalScene_.snapshot()) {
-        if(snapshot->id==document_.assetId() && snapshot->fingerprint!=notifiedSceneFingerprint_ && document_.externalFileChanged()) {
-            notifiedSceneFingerprint_=snapshot->fingerprint;editor_.notifyExternalSceneChange(*snapshot);
-        }
+        if(externalSceneObservation_.changed(document_,*snapshot,snapshot.revision(),false))
+            editor_.notifyExternalSceneChange(*snapshot);
     }
     }
     {
@@ -389,7 +389,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         cameraScene_=document.assetId(); navigation.cancel(); renderer.cancelPicking();
         unresolvedScene_.clear(); startupStatus_.clear(); status_.clear();materialDropStatus_.clear();decalDropStatus_.clear();ragdollStatus_.clear();
         if(document.documentGeneration()!=documentEpoch_) { documentEpoch_=document.documentGeneration();pendingDrops_.clear();pendingDecalPlacement_.reset();decals_.clear(); }
-        externalScene_={};savedPreviewFingerprint_=0;
+        externalScene_={};externalSceneObservation_.reset();savedPreviewFingerprint_=0;
         if (frame.documentReplaced) {
             settings_.camera=Camera{};
             if (const auto found=cameras_.find(cameraScene_);found!=cameras_.end()) settings_.camera=found->second;

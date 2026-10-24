@@ -1578,18 +1578,29 @@ bool AssetLibrary::materialCompatible(const std::shared_ptr<const MaterialAsset>
     materialCompatibility_[material.get()]={material,compatible};return compatible;
 }
 AssetLibrary::GraphShaderCache& AssetLibrary::graphCache(const std::shared_ptr<const MaterialGraph>& graph) const {
-    MaterialGraphSourceSet sources;
-    std::vector<std::pair<std::string,std::uint64_t>> revisions;
+    const auto found=graphShaderCache_.find(graph.get());
+    if(found!=graphShaderCache_.end()&&!found->second.source.expired()) {
+        auto& cached=found->second;
+        // Graphs and committed material snapshots are immutable. Ordinary
+        // graphs have no dependencies to inspect; Blend hits only refresh the
+        // retained source demand and compare identity/revision. In particular,
+        // do not order either graph or copy/validate its nodes on this path.
+        bool current=true;
+        for(std::size_t i=0;i<cached.sourceRevisions.size();++i) {
+            const auto& [id,revision]=cached.sourceRevisions[i];
+            if(findMaterial(id)!=cached.sources[i]||materialRevision(id)!=revision) {current=false;break;}
+        }
+        if(current)return cached;
+    }
+    CRIMSON_PROFILE_ZONE("Material graph cache rebuild");
+    GraphShaderCache next;next.source=graph;
     for(const auto& id:materialGraphMaterialReferences(*graph,true)) {
         const auto source=findMaterial(id);
         if(!source)throw std::runtime_error("Blend source material is unavailable: "+id);
         if(!blendMaterialSourceCompatible(*source))throw std::runtime_error("Blend layers require solid Lit materials without tessellation: "+source->name);
-        sources.push_back(source);revisions.emplace_back(source->id,materialRevision(id));
+        next.sources.push_back(source);next.sourceRevisions.emplace_back(id,materialRevision(id));
     }
-    auto found=graphShaderCache_.find(graph.get());
-    if(found!=graphShaderCache_.end()&&!found->second.source.expired()&&found->second.sourceRevisions==revisions)return found->second;
     if(graphShaderCache_.size()>128)std::erase_if(graphShaderCache_,[](const auto& entry){return entry.second.source.expired();});
-    GraphShaderCache next;next.source=graph;next.sources=std::move(sources);next.sourceRevisions=std::move(revisions);
     if(!next.sources.empty()||materialOutputNode(*graph).output.shading==MaterialShading::BlendPbr) {
         MaterialAsset parent;parent.id=derivedAssetId(DefaultMaterialId,"runtime-graph");parent.graph=*graph;
         const auto resolved=resolveMaterialGraphSourcesData(parent,next.sources,material_graph_image_policy());

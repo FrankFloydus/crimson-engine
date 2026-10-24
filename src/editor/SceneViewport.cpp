@@ -11,7 +11,9 @@
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "scene/SceneExtraction.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <ImGuizmo.h>
 #include <algorithm>
 #include <cmath>
@@ -149,6 +151,32 @@ void SceneViewport::drawDecalPlacementPlane(const Mat4& frame,const Camera& came
     imageDrawList_->AddQuad(points[0],points[1],points[2],points[3],WireColor,1.5f);
     imageDrawList_->PopClipRect();
 }
+void SceneViewport::prepareVertexPaintUi(SceneDocument& document,Renderer& renderer,std::uint32_t bgfxFrame) {
+    if(!vertexPaint_.active())return;
+    CRIMSON_PROFILE_ZONE("Vertex paint pre UI release and commands");
+    const auto& io=ImGui::GetIO();
+    const bool command=(io.KeyCtrl&&(ImGui::IsKeyPressed(ImGuiKey_S,false)||ImGui::IsKeyPressed(ImGuiKey_Z,false)||
+        ImGui::IsKeyPressed(ImGuiKey_Y,false)||ImGui::IsKeyPressed(ImGuiKey_D,false)))||
+        ImGui::IsKeyPressed(ImGuiKey_Delete,false)||ImGui::IsKeyPressed(ImGuiKey_F2,false)||
+        ImGui::IsKeyPressed(ImGuiKey_Tab,false)||ImGui::IsKeyPressed(ImGuiKey_Enter,false)||
+        ImGui::IsKeyPressed(ImGuiKey_P,false)||
+        ImGui::IsKeyPressed(ImGuiKey_LeftAlt,false)||ImGui::IsKeyPressed(ImGuiKey_RightAlt,false);
+    const auto* window=ImGui::FindWindowByName("Viewport");
+    const bool unavailable=!window||window->Collapsed||imageRegion_.width<=0||imageRegion_.height<=0;
+    Vec2 pointer{};bool hovered=false;
+    if(!unavailable) {
+        pointer={(io.MousePos.x-imageRegion_.x)/imageRegion_.width*renderer.width(),
+            (io.MousePos.y-imageRegion_.y)/imageRegion_.height*renderer.height()};
+        hovered=io.MousePos.x>=imageRegion_.x&&io.MousePos.y>=imageRegion_.y&&
+            io.MousePos.x<imageRegion_.x+imageRegion_.width&&io.MousePos.y<imageRegion_.y+imageRegion_.height;
+    }
+    const bool cancel=unavailable||io.AppFocusLost||ImGui::IsKeyPressed(ImGuiKey_Escape,false)||ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup);
+    const bool held=ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    // A result already available on the release frame is ordinary published
+    // input. Unfinished GPU work is still canceled immediately by release.
+    const auto pick=!held&&!command&&!cancel?renderer.pollPick(bgfxFrame):std::optional<PickResult>{};
+    vertexPaint_.prepareUi(document,renderer,serial_,pointer,hovered,held,command,cancel,pick);
+}
 EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLibrary& assets,
                                 Renderer& renderer, bool navigationActive, uint32_t bgfxFrame, bool keyboardBlocked,
                                 bool showCollisions,bool showTransformGizmo,bool allowCameraNavigation,bool cameraGestureActive,bool preserveCameraLens) {
@@ -165,7 +193,11 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
     if (changedContext || ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         // A new click supersedes the prior asynchronous intent before its
         // readback can clear selection or let a newly appeared gizmo claim it.
-        renderer.cancelPicking(); ++serial_;
+        // Paint owns its own frozen-view surface request. A normal selection
+        // intent or paint's RGB publication must not cancel that request while
+        // leaving the tool waiting for a result that can no longer arrive.
+        if(!vertexPaint_.surfaceHeld())renderer.cancelPicking();
+        ++serial_;
         pickIntent_=false;
         materialDrop_.cancel();
         if(changedContext&&!decalPlacementJustArmed_)decalDrop_.cancel();else decalDrop_.clearPick();
@@ -174,7 +206,10 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
     previousSelection_ = document.selection().ids;
     previousView_ = cameraView;
     selectionGeneration_ = document.scene().generation();
-    const auto pendingPick = renderer.pollPick(bgfxFrame);
+    const auto pendingPick = [&] {
+        if(vertexPaint_.surfaceHeld()){CRIMSON_PROFILE_ZONE("Vertex paint GPU surface poll");return renderer.pollPick(bgfxFrame);}
+        return renderer.pollPick(bgfxFrame);
+    }();
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) waitForRelease_ = false;
     if(!ImGui::GetDragDropPayload()){materialDropCanceled_=false;decalDropCanceled_=false;}
     if (ImGui::Begin("Viewport",nullptr,ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {

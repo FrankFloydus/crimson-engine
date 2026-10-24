@@ -3,6 +3,7 @@
 #include "scene/EnvironmentSerialization.h"
 #include "scene/SceneExtraction.h"
 #include "editor/ViewportSelection.h"
+#include "editor/ExternalSceneObservation.h"
 #include "assets/AtomicFile.h"
 #include "assets/ContentStorage.h"
 #include "assets/MaterialGraphReferences.h"
@@ -1695,6 +1696,78 @@ void externalSceneChanges() {
     const auto current=document.scene().records(); require(!document.applyReloadSnapshot(invalid),"Malformed reload applied."); sameRecords(document.scene().records(),current);
     require(document.save({},false,true) && !document.externalFileChanged(),document.status());
 }
+void externalSceneObservations() {
+    TempProject project;SceneDocument document(project.root);
+    const auto entity=document.createEmpty("External observation baseline");
+    require(document.save("Observed scene"),document.status());
+    const auto baseline=readSceneSnapshot(project.root,document.assetId());
+    ExternalSceneObservation observation;observation.requested(document);
+    require(!observation.changed(document,baseline,1,false),"An own-save observation became an external change.");
+    // A prepared unchanged observation remains usable without any disk access.
+    const auto path=sceneAssetPath(project.root,document.assetId());
+    const auto hidden=path.parent_path()/(path.filename().string()+".observation-test");
+    std::filesystem::rename(path,hidden);
+    require(document.externalFileChanged(),"The no-I/O regression fixture did not remove its source file.");
+    require(!observation.changed(document,baseline,2,false),"An unchanged worker observation reopened the absent source file.");
+    auto external=baseline;external.fingerprint^=0x18a74u;external.records.front().name="External edit";
+    require(observation.changed(document,external,3,false),"A changed worker publication was lost.");
+    for(unsigned frame=0;frame<10000;++frame)
+        require(!observation.changed(document,external,3,false),"A completed external observation was notified more than once.");
+    require(!observation.changed(document,baseline,4,false),"An own-save publication was not consumed quietly.");
+    require(observation.changed(document,external,5,false),"Repeated external content after a new observation was suppressed.");
+    require(!observation.changed(document,baseline,6,true),"Play consumed an external-file observation.");
+    require(observation.changed(document,external,6,false),"A Play-deferred observation was lost after Stop.");
+    auto unrelated=external;unrelated.id=derivedAssetId(document.assetId(),"other-scene");
+    require(!observation.changed(document,unrelated,7,false)&&observation.changed(document,external,7,false),
+        "An unrelated scene consumed the current scene's observation.");
+    std::filesystem::rename(hidden,path);
+    document.select({entity});require(document.reloadFromDisk(),document.status());
+    require(!observation.changed(document,external,7,false),"A previous document generation published a stale observation.");
+    observation.requested(document);
+    require(observation.changed(document,external,7,false),"A new request after reload reused stale observation state.");
+    require(!observation.changed(document,external,7,false),"A reload observation repeated after consumption.");
+    observation.reset();observation.requested(document);require(observation.changed(document,external,7,false),"Reset did not clear completed observation ownership.");
+    observation.requested(document);
+    require(document.edit("Own save while worker prepares",[&](auto& records,auto&){records.front().name="New own-save baseline";})&&document.save(),document.status());
+    require(!observation.changed(document,baseline,8,false),"An old worker observation replaced a newer own-save baseline.");
+    observation.requested(document);
+    const auto afterSave=readSceneSnapshot(project.root,document.assetId());
+    require(!observation.changed(document,afterSave,9,false),"A fresh own-save observation became a conflict.");
+    // Explicit Save still performs its synchronous exact conflict check.
+    auto changedFile=baseline;changedFile.records.front().name="Actual external file edit";
+    saveSceneSnapshot(project.root,document.assetId(),changedFile);
+    require(document.externalFileChanged()&&!document.save(),"Cached polling weakened explicit Save conflict detection.");
+}
+__declspec(noinline) bool pollExternalObservation(ExternalSceneObservation& observation,const SceneDocument& document,
+                                                 const SceneSnapshot& snapshot,std::uint64_t revision) {
+    return observation.changed(document,snapshot,revision,false);
+}
+void benchmarkExternalSceneObservation() {
+    TempProject project;SceneDocument document(project.root);
+    document.createEmpty("External polling benchmark");require(document.save("Polling benchmark"),document.status());
+    const auto path=sceneAssetPath(project.root,document.assetId());
+    // Valid trailing JSON whitespace gives the bytewise disk check a comparable
+    // 1.37 MB input without needing any project models or changing authored data.
+    auto contents=readText(path);contents.append(1366920-std::min(contents.size(),std::size_t{1366920}),' ');
+    writeText(path,contents);require(document.reloadFromDisk(),document.status());
+    const auto snapshot=readSceneSnapshot(project.root,document.assetId());
+    ExternalSceneObservation observation;observation.requested(document);
+    const auto measure=[](unsigned count,auto&& action) {
+        std::vector<double> samples;samples.reserve(count);std::size_t changes{};
+        for(unsigned i=0;i<count;++i) {
+            const auto begin=std::chrono::steady_clock::now();changes+=action(i);
+            samples.push_back(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count());
+        }
+        require(changes==0,"Unchanged benchmark scene was reported as changed.");
+        const auto mean=std::accumulate(samples.begin(),samples.end(),0.0)/count;
+        std::sort(samples.begin(),samples.end());
+        return Json{{"iterations",count},{"mean_ms",mean},{"p50_ms",samples[count/2]},{"p95_ms",samples[count*95/100]}};
+    };
+    const auto disk=measure(50,[&](unsigned){return document.externalFileChanged();});
+    const auto observed=measure(10000,[&](unsigned){return pollExternalObservation(observation,document,snapshot,1);});
+    std::cout<<Json{{"scope","CPU-only unchanged external scene polling; disposable 1.37 MB scene; no application frame/FPS claim"},
+        {"bytes",contents.size()},{"previous_disk_check",disk},{"worker_observation_check",observed}}.dump(2)<<'\n';
+}
 void preparedSceneOpening() {
     TempProject project; SceneDocument source(project.root);
     const auto sourceId=source.createEmpty("Prepared entity"); Camera preview; preview.position={3,4,5}; source.setPreviewCamera(preview);
@@ -1887,6 +1960,9 @@ void inspectorZeroScaleHistory() {
 
 int main(int argc,char** argv) {
     try {
+        if(argc==2&&std::string_view(argv[1])=="--benchmark-external-scene") {
+            benchmarkExternalSceneObservation();return 0;
+        }
         if(argc==5&&std::string_view(argv[1])=="--benchmark-scene") {
             using Clock=std::chrono::steady_clock;
             const auto root=std::filesystem::weakly_canonical(argv[2]);
@@ -1926,7 +2002,7 @@ int main(int argc,char** argv) {
             std::ofstream output(argv[4]);require(bool(output),"Cannot write CPU scene benchmark report.");output<<report.dump(2);
             std::cout<<report.dump(2)<<'\n';return 0;
         }
-        require(argc==1,"Usage: scene_tests [--benchmark-scene DISPOSABLE_ROOT SCENE_ID REPORT.json]");
+        require(argc==1,"Usage: scene_tests [--benchmark-scene DISPOSABLE_ROOT SCENE_ID REPORT.json | --benchmark-external-scene]");
         registryAndHierarchy();cachedHierarchicalVisibility();physicalSceneStorage();
         reparentPreservesAffine();
         transactionsAndSelection();
@@ -1938,7 +2014,7 @@ int main(int argc,char** argv) {
         limitsAndHistoryBound();
         groupingAndBatchPlacement();
         environmentsAndMigration();environmentGlowHistoryAndMigration();glowValidationAndLevelContribution();glowSingleEffectMigration();glowBlendModeStorageAndHistory();environmentModesPersistenceAndValidation();environmentSunHistoryAndDuplication();environmentAmbientLightStorageAndHistory();lightIndirectEnergyStorageAndHistory();environmentToneMappingParametersStorageAndHistory();environmentSsgiStorageAndHistory();
-        environmentPostProcessingStorageAndHistory();environmentSpecularAaStorageAndHistory();environmentSsrStorageAndHistory();particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
+        environmentPostProcessingStorageAndHistory();environmentSpecularAaStorageAndHistory();environmentSsrStorageAndHistory();particleReferencesAndPersistence();externalSceneChanges();externalSceneObservations();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
         std::cout << "Scene core checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

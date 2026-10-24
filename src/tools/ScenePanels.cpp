@@ -1457,12 +1457,12 @@ bool finishScenePanelEdit(SceneDocument& document) {
     state.renameId=NoEntity; state.renameFocus=false;
     return true;
 }
-void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEdits) {
+void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEdits,bool paintStrokeActive) {
     auto& state=stateFor(document);
     const bool canceled=cancelPanelEdit(document,state,Panel::Outliner,allowEdits);
     if((state.lastSelection!=document.selection().ids || state.lastPrimary!=document.selection().primary) && !state.pendingClick)
         state.anchor=document.selection().primary;
-    const bool blocked=!allowEdits || canceled || (document.transactionActive() && owner(state.active)!=Panel::Inspector);
+    const bool blocked=scenePanelEditBlocked(allowEdits,canceled,document.transactionActive(),owner(state.active)==Panel::Inspector,paintStrokeActive);
     if(!ImGui::Begin("Outliner")) {
         if(state.active==Edit::InlineName){document.cancel();state.active=Edit::None;state.renameId=NoEntity;}
         ImGui::End();return;
@@ -1581,7 +1581,7 @@ void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEd
 
 void setMeshPaintSubdivisionQuery(SceneDocument& document,MeshPaintSubdivisionQuery query) {stateFor(document).subdivisionQuery=std::move(query);}
 void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits,
-                        std::uint64_t* playParticle,std::string* openParticle,QuaderBridge* quader,std::string* openMaterial,const NavigationInspectorContext& navigation,const std::array<std::string,32>* collisionLayerNames,const GameplayInspectorContext& gameplay,std::string* openAnimation,const DecalInspectorContext& decals,const RagdollInspectorContext& ragdolls,const LightPreviewContext& lights) {
+                        std::uint64_t* playParticle,std::string* openParticle,QuaderBridge* quader,std::string* openMaterial,const NavigationInspectorContext& navigation,const std::array<std::string,32>* collisionLayerNames,const GameplayInspectorContext& gameplay,std::string* openAnimation,const DecalInspectorContext& decals,const RagdollInspectorContext& ragdolls,const LightPreviewContext& lights,bool paintStrokeActive) {
     auto& state=stateFor(document);
     const auto& collisionNames=collisionLayerNames?*collisionLayerNames:defaultCollisionLayerNames();
     const bool canceled=cancelPanelEdit(document,state,Panel::Inspector,allowEdits);
@@ -1590,7 +1590,7 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
         if(owner(state.active)==Panel::Inspector){document.cancel();state.active=Edit::None;state.nameId=NoEntity;}
         ImGui::End();return;
     }
-    const bool blocked=!allowEdits || canceled || (document.transactionActive() && owner(state.active)!=Panel::Inspector);
+    const bool blocked=scenePanelEditBlocked(allowEdits,canceled,document.transactionActive(),owner(state.active)==Panel::Inspector,paintStrokeActive);
     ImGui::BeginDisabled(blocked);
     std::function<void()> action;
     const auto drawSections=[&](const EntityRecord& record,bool ownedCamera=false) {

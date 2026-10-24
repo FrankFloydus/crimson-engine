@@ -17,7 +17,12 @@ public:
     bool enabled() const {return enabled_;}
     bool active() const {return gesture_.active();}
     bool surfaceHeld() const {return active()||holdSurface_;}
+    // Resolve release/commands before editor panels query document ownership.
+    void prepareUi(SceneDocument&,Renderer&,std::uint64_t& serial,Vec2 pointer,
+        bool hovered,bool held,bool commandRequested,bool cancelRequested,const std::optional<PickResult>& pick={});
+    void finishForCommand(SceneDocument&,Renderer&);
     void drawControls(SceneDocument&,AssetLibrary&,Renderer&);
+    void drawBrushSettings();
     std::span<const std::string> previewMaterials() const {return previewMaterials_;}
     void update(SceneDocument&,Renderer&,const std::optional<PickResult>&,std::uint64_t& serial,
         const Mat4& viewProjection,std::uint32_t width,std::uint32_t height,Vec2 pointer,
@@ -52,6 +57,9 @@ private:
     std::string paletteMaterial_;
     std::vector<std::string> previewMaterials_;
     std::string diagnostic_;
+    struct ProfileFrame;
+    bool profiling_{};
+    std::uint64_t cpuRays_{},gpuVisibilityChecks_{},appliedDabs_{},changedVertices_{};
     void clear();
     void enqueue(Vec2,bool final=false);
     const PickSurfaceSample* surface(Vec2);

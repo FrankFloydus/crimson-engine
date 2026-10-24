@@ -3,6 +3,7 @@
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "assets/AssetLibrary.h"
 #include "assets/MaterialAsset.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include <imgui.h>
 #include <algorithm>
 #include <array>
@@ -11,6 +12,7 @@ namespace crimson {
 void VertexPaintTool::drawControls(SceneDocument& document,AssetLibrary& assets,Renderer& renderer) {
     previewMaterials_.clear();
     if(!enabled_)return;
+    CRIMSON_PROFILE_ZONE("Vertex paint controls and palette");
     std::shared_ptr<const MaterialAsset> palette,hoveredPalette;
     const auto collectPalette=[&](EntityId entity) {
         const auto record=document.scene().find(entity);if(!record||!record->model)return;
@@ -29,7 +31,6 @@ void VertexPaintTool::drawControls(SceneDocument& document,AssetLibrary& assets,
     if(hoveredPalette)palette=std::move(hoveredPalette);
     bool open=true;ImGui::SetNextWindowSize({330,380},ImGuiCond_FirstUseEver);
     if(ImGui::Begin("Vertex Paint Tool",&open)) {
-        ImGui::BeginDisabled(active());
         if(ImGui::BeginCombo("Mode","Material")){ImGui::Selectable("Material",true);ImGui::EndCombo();}
         if(palette)ImGui::TextUnformatted(palette->name.c_str());
         constexpr std::array pins{MaterialPin::Base,MaterialPin::Red,MaterialPin::Green,MaterialPin::Blue};
@@ -60,11 +61,7 @@ void VertexPaintTool::drawControls(SceneDocument& document,AssetLibrary& assets,
             if(hovered)ImGui::SetTooltip("Paint toward %s",label.c_str());
             ImGui::SetCursorScreenPos(next);ImGui::PopID();
         }
-        ImGui::DragFloat("Radius (m)",&brush_.radius,.01f,.01f,1000.f,"%.2f",ImGuiSliderFlags_AlwaysClamp);
-        ImGui::SliderFloat("Strength",&brush_.strength,0,1,"%.2f");
-        if(ImGui::IsItemHovered())ImGui::SetTooltip("Moves the current material blend toward the selected material.");
-        ImGui::SliderFloat("Hardness",&brush_.hardness,0,1,"%.2f");
-        ImGui::EndDisabled();
+        drawBrushSettings();
         if(!diagnostic_.empty())ImGui::TextWrapped("%s",diagnostic_.c_str());
     }
     ImGui::End();if(!open)setEnabled(false,document,renderer);

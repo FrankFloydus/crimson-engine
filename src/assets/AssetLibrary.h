@@ -369,6 +369,8 @@ private:
     struct GraphShaderCache {
         std::weak_ptr<const MaterialGraph> source;
         MaterialGraphSourceSet sources;
+        // Active authored reference IDs, not their current replacement IDs.
+        // A changed fallback must invalidate the retained source snapshot too.
         std::vector<std::pair<std::string,std::uint64_t>> sourceRevisions;
         std::shared_ptr<const MaterialGraph> resolved;
         std::uint64_t dependencySignature{};

@@ -595,13 +595,6 @@ struct AssetPreviews::Impl {
             entry.materials=materialVersions;entry.animations=animationVersions;entry.decals=decalVersions;
         }
         }
-        if(decalScene&&!decalExtraction.decals.empty()) {
-            CRIMSON_PROFILE_ZONE("Thumbnail decal preparation");
-            if(!entry.decalResources)entry.decalResources=std::make_unique<DecalResources>(assets,resources);
-            entry.decalResources->collect();
-            preparedDecals=entry.decalResources->prepare(*decalScene,decalExtraction,ResourcePriority::Preview);
-            if(!preparedDecals.ready||!preparedDecals.refined){entry.error=preparedDecals.status;return;}
-        }
         if (entry.kind==AssetKind::Model && !bounds.valid) {
             entry.error="Model bounds are unavailable.";entry.retry.failed(PreviewRetryState::Clock::now());return;
         }
@@ -651,6 +644,16 @@ struct AssetPreviews::Impl {
         entry.clean=true;entry.validated=validation;
         if (warmCache(id,entry,signature)) { if (entry.cacheState.published==signature) entry.saveRequested=false; return; }
         if (renderer.thumbnailBusy() || entry.rendering==signature) return;
+        // Exact source/PNG validation needs no receiver geometry. Only an
+        // actual render request prepares spatial charts; unchanged retries
+        // retain that work while continuing chart/material readiness polling.
+        if(decalScene&&!decalExtraction.decals.empty()) {
+            CRIMSON_PROFILE_ZONE("Thumbnail decal preparation");
+            if(!entry.decalResources)entry.decalResources=std::make_unique<DecalResources>(assets,resources);
+            entry.decalResources->collect();
+            preparedDecals=entry.decalResources->prepare(*decalScene,decalExtraction,ResourcePriority::Preview);
+            if(!preparedDecals.ready||!preparedDecals.refined){entry.error=preparedDecals.status;return;}
+        }
         auto pins=std::make_shared<PreviewPins>(); pins->scene=sceneSnapshot; pins->material=materialAsset; pins->environment=bake;
         pins->decals=std::move(preparedDecals.decals);
         for(const auto& definition:entry.decals) {

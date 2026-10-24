@@ -1,4 +1,5 @@
 #include "tools/VertexPaintTool.h"
+#include "tools/ScenePanels.h"
 #include "crimson-renderer/Renderer.h"
 #include <imgui_internal.h>
 #include <algorithm>
@@ -54,6 +55,40 @@ void firstClickAndImmediateRelease() {
     require(fixture.document.undo()&&sameEntity(*fixture.document.scene().find(fixture.entity),baseline),"Immediate undo failed to restore the untouched mesh.");
     fixture.tick({400,300},true,true);fixture.tick({400,300},false,false);require(!fixture.tool.active()&&fixture.painted()>0,"A new stroke could not begin immediately after undo.");
 }
+void uiOwnershipAndEnabledControls() {
+    Fixture fixture;const auto baseline=*fixture.document.scene().find(fixture.entity);const auto history=fixture.document.history().size();
+    fixture.tick({400,300},true,true);
+    require(fixture.tool.active()&&fixture.document.transactionActive(),"The UI test did not begin a published stroke.");
+    fixture.tool.prepareUi(fixture.document,fixture.renderer,fixture.serial,{420,300},true,true,false,false);
+    require(fixture.tool.active(),"Drawing UI prematurely ended a held stroke.");
+    ImGui::Begin("Vertex Paint Tool");fixture.tool.drawBrushSettings();
+    require(!(ImGui::GetCurrentContext()->LastItemData.ItemFlags&ImGuiItemFlags_Disabled),"Brush settings were disabled during a held stroke.");ImGui::End();
+    // Use the same policy submitted by both real scene panels, and check actual
+    // ImGui item flags rather than only the tool's active bit.
+    for(const auto* name:{"Outliner","Inspector"}) {
+        ImGui::Begin(name);
+        ImGui::BeginDisabled(scenePanelEditBlocked(true,false,fixture.document.transactionActive(),false,fixture.tool.active()));
+        ImGui::Button("Scene control");
+        require(!(ImGui::GetCurrentContext()->LastItemData.ItemFlags&ImGuiItemFlags_Disabled),"A scene panel grayed its controls during painting.");
+        ImGui::EndDisabled();ImGui::End();
+    }
+    const auto beforeRelease=fixture.painted();
+    fixture.tool.prepareUi(fixture.document,fixture.renderer,fixture.serial,{455,300},true,false,false,false);
+    require(!fixture.tool.active()&&!fixture.document.transactionActive(),"The pre-UI mouse release kept editor commands owned.");
+    require(fixture.painted()>beforeRelease,"The pre-UI release dropped the final pointer segment.");
+    require(fixture.document.history().size()==history+1,"The pre-UI release split a stroke into multiple history entries.");
+    require(!scenePanelEditBlocked(true,false,fixture.document.transactionActive(),false,fixture.tool.active()),"Released painting left a disabled scene panel.");
+    require(scenePanelEditBlocked(true,false,true,false,false)&&scenePanelEditBlocked(false,false,true,false,true),"The painting exception weakened unrelated transaction/modal ownership.");
+    require(fixture.document.undo()&&sameEntity(*fixture.document.scene().find(fixture.entity),baseline),"Undo after the pre-UI release did not restore exact paint.");
+    fixture.tick({400,300},true,true);
+    fixture.tool.prepareUi(fixture.document,fixture.renderer,fixture.serial,{410,300},true,true,true,false);
+    require(!fixture.tool.active()&&!fixture.document.transactionActive(),"A conflicting command could not finish the paint stroke.");
+    require(fixture.document.undo()&&sameEntity(*fixture.document.scene().find(fixture.entity),baseline),"A command did not see the stroke as one complete undo entry.");
+    fixture.tick({415,300},true,true);require(!fixture.tool.active(),"A command-finished stroke restarted before mouse release.");
+    fixture.tick({415,300},false,false);fixture.tick({400,300},true,true);
+    fixture.tool.prepareUi(fixture.document,fixture.renderer,fixture.serial,{410,300},true,true,false,true);
+    require(!fixture.tool.active()&&!fixture.document.transactionActive()&&sameEntity(*fixture.document.scene().find(fixture.entity),baseline),"Pre-UI Escape/focus cancellation retained disabled UI or paint changes.");
+}
 void dragAndCancellation() {
     Fixture fixture;fixture.tick({365,300},true,true);const auto first=fixture.painted(),revision=fixture.document.scene().revision();fixture.tick({445,300},false,true);require(fixture.painted()>first,"A held stroke did not follow the world-space path.");
     require(fixture.document.scene().revision()<=revision+1,"Batched pointer movement repeatedly published the whole scene in one input frame.");
@@ -87,4 +122,4 @@ void longMovementCost() {
     std::cout<<"Long world-distance CPU drag + release: "<<elapsed<<" ms; scene publications "<<fixture.document.scene().revision()-revision<<".\n";
 }
 }
-int main(){try{firstClickAndImmediateRelease();dragAndCancellation();drawIdentityOcclusion();actualCursorRadius();longMovementCost();std::cout<<"Vertex paint production first click, world cursor, occlusion, drag, release and cancellation passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{firstClickAndImmediateRelease();uiOwnershipAndEnabledControls();dragAndCancellation();drawIdentityOcclusion();actualCursorRadius();longMovementCost();std::cout<<"Vertex paint production first click, enabled UI, command boundaries, world cursor, occlusion, drag, release and cancellation passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

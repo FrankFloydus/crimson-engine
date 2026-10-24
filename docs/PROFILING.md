@@ -100,6 +100,12 @@ The maintained [server binding patch](../scripts/profiling/server-bindings-corre
 
 ## GPU semantics and overhead
 
+Vertex painting has separate CPU zones for `Vertex paint tool update`, surface and target queries, source validation, candidate projection, seam preparation, hover visibility preflight, ordered dab batches, brush application, scene publication, history commit/cancel and the pre-UI release boundary. Subdivision, resampling and surface BVH construction have worker zones. `Vertex paint prepared geometry and weights` also covers painted-model preparation used by rendering independently of tool activation. Start with these parent stages, then inspect their children; their inclusive totals overlap.
+
+Connected recordings include `Vertex paint active`, pending GPU requests, queued/applied dabs, projected candidates, CPU rays, GPU visibility checks and changed-vertex counters. These counters describe each tool update, including a possible release update before panels are drawn. GPU request/accept CPU scopes measure host preparation and result handling, not GPU execution or the full asynchronous latency. Existing native GPU scopes retain that distinction. Ordinary frames without a connected recording do not collect the per-vertex diagnostic counts.
+
+`Material graph cache rebuild` measures validation and source expansion only when an immutable graph or its active material dependencies change. `Decal spatial preparation` measures receiver discovery and seed projection on a spatial-cache miss; unchanged chart/material readiness retries should no longer repeat that scope. `External scene preparation` consumes worker fingerprints rather than rereading saved scene bytes each frame.
+
 The maintained bgfx overlay uses official D3D11/D3D12 Tracy contexts. GPU zones enclose native view/pass execution and compute dispatches. CPU `bgfx::submit` timing is never labeled as GPU execution. The separate asynchronous bgfx elapsed plot retains its source frame ID and suppresses duplicate samples.
 
 Both query rings contain 8,192 timestamps. At most 1,024 zones are admitted per frame, with available-capacity checks and drop counters instead of ring-pressure waits. DX12 collection requires proof that the command list resolving those queries completed. DX11 polls do not flush. Context calibration can synchronize once during device initialization; ordinary tracing adds no Flush or blocking query wait. Disconnected tracing skips new GPU scopes. Profiling overhead is measurable; compare equivalent workloads with collector state recorded.

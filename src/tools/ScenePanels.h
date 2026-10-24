@@ -39,12 +39,17 @@ struct RagdollInspectorContext {
 // Explicit menu actions may finish an owned panel edit before querying history.
 // Viewport gestures have different ownership and are never committed here.
 bool finishScenePanelEdit(SceneDocument& document);
-void drawSceneOutliner(SceneDocument& document, AssetLibrary& assets, bool allowEdits = true);
+// A paint stroke uses the mouse in the viewport. Its transaction must not gray
+// panels; SceneEditor ends it before release or a keyboard command reaches them.
+inline bool scenePanelEditBlocked(bool allowEdits,bool canceled,bool transactionActive,bool inspectorOwnsEdit,bool paintStrokeActive) {
+    return !allowEdits||canceled||(transactionActive&&!inspectorOwnsEdit&&!paintStrokeActive);
+}
+void drawSceneOutliner(SceneDocument& document, AssetLibrary& assets, bool allowEdits = true,bool paintStrokeActive=false);
 void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits = true,
                         std::uint64_t* playParticle = nullptr,std::string* openParticle = nullptr,QuaderBridge* quader=nullptr,
                         std::string* openMaterial=nullptr,const NavigationInspectorContext& navigation={},
                         const std::array<std::string,32>* collisionLayerNames=nullptr,
                         const GameplayInspectorContext& gameplay={},std::string* openAnimation=nullptr,
                         const DecalInspectorContext& decals={},const RagdollInspectorContext& ragdolls={},
-                        const LightPreviewContext& lights={});
+                        const LightPreviewContext& lights={},bool paintStrokeActive=false);
 } // namespace crimson

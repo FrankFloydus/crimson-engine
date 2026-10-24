@@ -23,7 +23,10 @@ public:
                      bool showCollisions=true, bool showTransformGizmo=true, bool allowCameraNavigation=true,
                      bool cameraGestureActive=false, bool preserveCameraLens=false);
     void cancel(SceneDocument&, Renderer&);
-    bool interacting() const { return transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || materialDrop_.active() || decalDrop_.active() || vertexPaint_.active(); }
+    bool otherInteractionActive() const { return transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || materialDrop_.active() || decalDrop_.active(); }
+    bool interacting() const { return otherInteractionActive() || vertexPaint_.active(); }
+    void prepareVertexPaintUi(SceneDocument&,Renderer&,std::uint32_t bgfxFrame);
+    void finishVertexPaintCommand(SceneDocument& document,Renderer& renderer){vertexPaint_.finishForCommand(document,renderer);}
     void setVertexPaintTargetQuery(VertexPaintTargetQuery query){vertexPaint_.setTargetQuery(std::move(query));}
     void setVertexPaintSurfaceQuery(VertexPaintSurfaceQuery query){vertexPaint_.setSurfaceQuery(std::move(query));}
     std::span<const std::string> vertexPaintPreviewMaterials() const{return vertexPaint_.previewMaterials();}

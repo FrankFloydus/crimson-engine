@@ -1,4 +1,5 @@
 #include "VertexPaintGesture.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -32,6 +33,7 @@ std::array<Vec3,VertexPaintCircleSegments+1> vertexPaintBrushCircle(Vec3 center,
     points.back()=points.front();return points;
 }
 VertexPaintSeams buildVertexPaintSeams(std::span<const VertexPaintTarget> targets) {
+    CRIMSON_PROFILE_ZONE("Vertex paint source seam preparation");
     VertexPaintSeams result(targets.size());
     using EdgeKey=std::tuple<EntityId,std::int32_t,std::uint32_t,std::array<float,3>,std::array<float,3>>;
     struct EdgeUse {std::uint32_t target{},first{},second{};int direction{};};
@@ -71,6 +73,7 @@ VertexPaintSeams buildVertexPaintSeams(std::span<const VertexPaintTarget> target
 void VertexPaintBrushCache::clear() {width_=height_=columns_=0;candidates_.clear();bins_.clear();visibility_.clear();}
 void VertexPaintBrushCache::resetVisibility() {std::fill(visibility_.begin(),visibility_.end(),std::int8_t{-1});}
 bool VertexPaintBrushCache::prepare(std::span<const VertexPaintTarget> targets,const Mat4& vp,std::uint32_t width,std::uint32_t height) {
+    CRIMSON_PROFILE_ZONE("Vertex paint candidate projection");
     clear();if(!width||!height||width>16384||height>16384||!math::finite(vp))return false;
     width_=width;height_=height;columns_=(width+BinSize-1)/BinSize;
     bins_.resize(std::size_t(columns_)*((height+BinSize-1)/BinSize));
@@ -90,6 +93,7 @@ bool VertexPaintBrushCache::prepare(std::span<const VertexPaintTarget> targets,c
     visibility_.assign(candidates_.size(),-1);return true;
 }
 std::optional<VertexPaintCandidate> VertexPaintBrushCache::prepareVisibility(const VertexPaintDab& dab,const VertexPaintBrush& brush,const Visibility& visible) {
+    CRIMSON_PROFILE_ZONE("Vertex paint candidate visibility preflight");
     if(!validBrush(brush)||!visible||!width_||!height_||!math::finite(dab.center)||!math::finite(dab.pixel)||!std::isfinite(dab.screenRadius)||dab.screenRadius<0)return {};
     const auto left=std::uint32_t(std::clamp(std::floor((dab.pixel[0]-dab.screenRadius)/BinSize),0.f,float(columns_-1)));
     const auto right=std::uint32_t(std::clamp(std::floor((dab.pixel[0]+dab.screenRadius)/BinSize),0.f,float(columns_-1)));
@@ -104,6 +108,7 @@ std::optional<VertexPaintCandidate> VertexPaintBrushCache::prepareVisibility(con
 }
 VertexPaintBatch VertexPaintBrushCache::apply(std::span<const VertexPaintDab> dabs,const VertexPaintBrush& brush,
     std::span<const std::shared_ptr<const MeshPaintPayload>> weights,const Visibility& visible) {
+    CRIMSON_PROFILE_ZONE("Vertex paint brush apply");
     VertexPaintBatch result;if(!validBrush(brush)||!visible||dabs.size()>8||!width_||!height_)return result;
     std::vector<std::vector<std::uint32_t>> affected(dabs.size());
     for(std::size_t index=0;index<dabs.size();++index) {
@@ -142,6 +147,7 @@ VertexPaintBatch VertexPaintBrushCache::apply(std::span<const VertexPaintDab> da
     return result;
 }
 bool VertexPaintGesture::begin(SceneDocument& document,std::vector<VertexPaintTarget> targets) {
+    CRIMSON_PROFILE_ZONE("Vertex paint stroke begin");
     if(active()||document.transactionActive()||document.transient()||targets.empty())return false;
     std::vector<Mat4> ownerWorlds;ownerWorlds.reserve(targets.size());
     for(auto& target:targets) {
@@ -164,6 +170,7 @@ bool VertexPaintGesture::valid(const SceneDocument& document) const {
     return true;
 }
 bool VertexPaintGesture::publish(SceneDocument& document,std::span<const VertexPaintDabChanges> changes) {
+    CRIMSON_PROFILE_ZONE("Vertex paint publish and scene update");
     if(!valid(document)){cancel(document);return false;}
     if(changes.empty())return true;
     auto next=weights();bool changed=false;
@@ -195,9 +202,11 @@ std::vector<std::shared_ptr<const MeshPaintPayload>> VertexPaintGesture::weights
     std::vector<std::shared_ptr<const MeshPaintPayload>> result;result.reserve(targets_.size());for(const auto& target:targets_)result.push_back(target.weights);return result;
 }
 bool VertexPaintGesture::finish(SceneDocument& document) {
+    CRIMSON_PROFILE_ZONE("Vertex paint history commit");
     if(!valid(document)){cancel(document);return false;}const bool okay=!transaction_||document.commit();reset();return okay;
 }
 void VertexPaintGesture::cancel(SceneDocument& document) {
+    CRIMSON_PROFILE_ZONE("Vertex paint history cancel");
     if(owner_==&document&&generation_==document.documentGeneration()&&transaction_&&document.transactionId()==transaction_)document.cancel();reset();
 }
 void VertexPaintGesture::reset(){owner_=nullptr;generation_=revision_=transaction_=0;selection_={};targets_.clear();ownerWorlds_.clear();}

@@ -4,6 +4,7 @@
 #include "assets/AssetLibrary.h"
 #include "assets/MaterialGraph.h"
 #include "resources/StreamingModel.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include <algorithm>
 #include <cstring>
 #include <set>
@@ -50,7 +51,7 @@ DecalSourceResult DecalResources::modelSurface(const ExtractedModel&m,ResourcePr
     // transforms are separate metadata and must also invalidate the source.
     for(const auto&draw:model->draws){identity.add(draw.primitive);identity.add(draw.transform);}result.fingerprint=identity.value;
     const auto mode=static_cast<decals::SourceNormals>(m.meshShading);
-    const std::string key=model->id+":"+std::to_string(result.fingerprint)+":"+std::to_string(static_cast<unsigned>(mode));
+    const std::string key=model->id+":"+std::to_string(result.fingerprint)+":"+std::to_string(static_cast<unsigned>(mode));result.sourceKey=key;
     auto&entry=sources_[key];entry.used=std::chrono::steady_clock::now();entry.fingerprint=result.fingerprint;
     const bool retry=entry.resource&&entry.resource.state()==ResourceState::Failed&&entry.revision!=result.revision;
     if(!entry.resource||retry){ResourceRequestOptions options;options.priority=priority;options.retainLoader=false;options.cancelWhenUnused=true;options.assetDependencies={m.assetId};options.forceReload=retry;
@@ -87,20 +88,66 @@ DecalPlacementResult DecalResources::resolvePlacement(const Scene&scene,uint64_t
     result.seed.draw=draw;result.seed.primitive=primitive;result.seed.triangle=hit.hit->seed.triangle;result.seed.barycentric=hit.hit->seed.barycentrics;result.seed.localPoint=hit.hit->localPoint;result.seed.localNormal=hit.hit->localNormal;
     result.frame=decals::surfacePlacementFrame(math::transformPoint(found->world,hit.hit->localPoint),math::transformDirection(*normalMatrix,hit.hit->localNormal));result.ready=true;return result;
 }
-void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const ExtractedScene&extracted,const ExtractedDecal&d,ResourcePriority priority){
+uint64_t DecalResources::spatialSceneSignature(const ExtractedScene& extracted){
+    // Observe immutable inputs/revisions once per scene preparation. This does
+    // not resolve material graphs, query receiver triangles or project seeds.
+    Hash key;key.add(assets_.catalogRevision());key.add(assets_.references().revision());
+    for(const auto& model:extracted.models){
+        key.add(model.id);key.add(model.visible);key.add(model.receiveDecals);
+        if(!model.visible||!model.receiveDecals)continue;
+        key.add(model.assetId);key.add(model.world);key.add(model.meshShading);key.add(model.animation.asset.id);
+        key.add(model.primitive.has_value());
+        if(model.primitive){const auto& p=*model.primitive;key.add(p.size);key.add(p.radius);key.add(p.height);key.add(p.sides);key.add(p.rings);}
+        key.add(model.meshPaint.has_value());
+        if(model.meshPaint){key.add(model.meshPaint->subdivisionLevel);key.add(model.meshPaint->recipeVersion);}
+        const auto asset=assets_.findModel(model.assetId,model.primitive);
+        key.add(assets_.modelRevision(model.assetId));key.add(assets_.modelLoading(model.assetId));key.add(assets_.modelDiagnostic(model.assetId));
+        key.add(bool(asset));
+        // Imported metadata is retained by the library; primitives are weakly
+        // cached and their geometry identity comes from explicit settings.
+        if(asset&&asset->format!="BUILTIN")key.add(reinterpret_cast<uintptr_t>(asset.get()));
+        const auto slots=std::max(model.materialOverrides.size(),asset?asset->materials.size():size_t{});
+        for(size_t slot=0;slot<slots;++slot){
+            const auto id=slot<model.materialOverrides.size()&&!model.materialOverrides[slot].empty()?model.materialOverrides[slot].id:
+                asset&&slot<asset->materialIds.size()?asset->materialIds[slot]:asset?importedMaterialId(asset->id,slot):std::string{};
+            key.add(id);key.add(assets_.materialRevision(id));
+        }
+    }
+    return key.value;
+}
+bool DecalResources::spatialSourcesCurrent(const SpatialEntry& spatial){
+    const auto now=std::chrono::steady_clock::now();
+    for(const auto& [key,surface]:spatial.sources){
+        const auto found=sources_.find(key);
+        if(found==sources_.end()||found->second.resource.state()!=ResourceState::Ready)return false;
+        const auto current=found->second.resource.snapshot();
+        if(current.revision()!=surface.revision()||current.shared()!=surface.shared())return false;
+        found->second.used=now;
+    }
+    return true;
+}
+void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const ExtractedScene&extracted,const ExtractedDecal&d,ResourcePriority priority,uint64_t sceneSignature){
     (void)scene;
     if(!d.visible||d.decal.opacity<=0){if(const auto existing=patches_.find(d.id);existing!=patches_.end())existing->second.current=false;return;}
     auto&entry=patches_[d.id];entry.current=false;entry.used=std::chrono::steady_clock::now();
     // A pending frame submits no packet, while retaining a compatible CPU
     // publication so texture preparation cannot trigger a chart rebuild.
     const auto pending=[&](std::string message,bool ready=false){entry.status=std::move(message);out.ready&=ready;out.refined=false;if(out.status.empty())out.status=entry.status;};
+    Hash inputs;inputs.add(sceneSignature);inputs.add(d.world);
+    inputs.add(d.decal.seed.receiver);inputs.add(d.decal.seed.fingerprint);inputs.add(d.decal.seed.draw);inputs.add(d.decal.seed.primitive);
+    inputs.add(d.decal.seed.localPoint);
+    const bool reuse=entry.spatial&&entry.spatial->inputs==inputs.value&&spatialSourcesCurrent(*entry.spatial);
+    if(!reuse){
+    CRIMSON_PROFILE_ZONE("Decal spatial preparation");
+    ++stats_.spatialPreparations;
+    entry.spatial.reset();
     const auto center=math::transformPoint(d.world,{}),x=math::transformDirection(d.world,{1,0,0}),y=math::transformDirection(d.world,{0,1,0});
     const double radius=.625*std::max(math::length(x+y),math::length(x-y))+.5*std::min(math::length(x),math::length(y));
     if(!std::isfinite(radius)||radius<=0){pending("Invalid footprint.");return;}
     const float projectionDistance=static_cast<float>(std::max(.01,.5*std::max(math::length(x),math::length(y))+.025));
     const Vec3 extent{radius,radius,radius},searchExtent{radius+projectionDistance,radius+projectionDistance,radius+projectionDistance};
     const Aabb region{center-searchExtent,center+searchExtent,true};
-    std::vector<Candidate>candidates;std::unordered_map<EntityId,uint64_t> revisions;Hash bindings;Hash signature;
+    std::vector<Candidate>candidates;SpatialEntry spatial;spatial.inputs=inputs.value;Hash bindings;Hash signature;
     signature.add(decals::DecalChartCacheVersion);signature.add(d.id);signature.add(d.world);
     std::optional<decals::ModelSurfaceHit> seed;const Candidate* seedCandidate=nullptr;double closest=INFINITY;std::string unsupported,preparing;
     for(const auto&m:extracted.models){
@@ -108,6 +155,9 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
         // An unrelated missing/unloaded visual must not suppress a valid local
         // receiver. Ready models enter the geometric signature when published.
         const auto model=assets_.findModel(m.assetId,m.primitive);if(!model){preparing=assets_.modelDiagnostic(m.assetId);if(preparing.empty())preparing="Preparing receiver models.";continue;}
+        // Pin immutable metadata/primitive variants with this bounded spatial
+        // entry. A weak primitive cache must not rebuild geometry on retries.
+        spatial.models.push_back(model);
         if(!overlaps(math::transformBounds(model->bounds,m.world),region))continue;
         if(!m.animation.asset.empty()){unsupported="Animated decal receivers are unsupported.";continue;}
         std::vector<bool>slots;try{slots=eligibleSlots(assets_,m,*model,&unsupported);}catch(const std::exception&e){unsupported=e.what();continue;}
@@ -115,8 +165,9 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
         const auto source=modelSurface(m,priority);if(!source.current){if(source.failed){unsupported=source.diagnostic;continue;}pending(source.diagnostic);return;}
         if(source.model)try{slots=eligibleSlots(assets_,m,*source.model,&unsupported);}catch(const std::exception& e){unsupported=e.what();continue;}
         signature.add(m.id);signature.add(m.world);signature.add(source.fingerprint);signature.add(m.meshShading);for(bool eligible:slots)signature.add(eligible);
-        revisions.emplace(m.id,source.revision);bindings.add(m.id);bindings.add(source.revision);
-        candidates.push_back({source.surface,m.world,m.id,source.revision,std::move(slots)});out.receivers.push_back(m.id);
+        spatial.revisions.emplace(m.id,source.revision);bindings.add(m.id);bindings.add(source.revision);
+        spatial.sources.emplace_back(source.sourceKey,sources_.at(source.sourceKey).resource.snapshot());
+        candidates.push_back({source.surface,m.world,m.id,source.revision,std::move(slots)});spatial.receivers.push_back(m.id);out.receivers.push_back(m.id);
     }
     // Authored translation chooses the receiving surface. The saved seed is a
     // provenance hint/tie breaker, never a permanent restriction to one object.
@@ -124,25 +175,26 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
         decals::SurfaceHitResult hit;
         if(candidate.entity==d.decal.seed.receiver&&candidate.source->fingerprint==d.decal.seed.fingerprint&&
            math::length(math::transformPoint(candidate.world,d.decal.seed.localPoint)-center)<1e-5) {
-            hit=decals::resolveModelSurfaceHit(*candidate.source,candidate.entity,candidate.world,d.decal.seed.draw,d.decal.seed.primitive,center);
+            ++stats_.seedQueries;hit=decals::resolveModelSurfaceHit(*candidate.source,candidate.entity,candidate.world,d.decal.seed.draw,d.decal.seed.primitive,center);
             if(hit.hit&&!eligibleDraw(*candidate.source,hit.hit->seed.receiver.draw,hit.hit->seed.receiver.primitive,candidate.slots))hit={};
         }
-        if(!hit.hit)hit=decals::projectModelSurfaceHit(*candidate.source,candidate.entity,candidate.world,center,projectionDistance,
-            [&](uint32_t material){return material<candidate.slots.size()&&candidate.slots[material];});
+        if(!hit.hit){++stats_.seedQueries;hit=decals::projectModelSurfaceHit(*candidate.source,candidate.entity,candidate.world,center,projectionDistance,
+            [&](uint32_t material){return material<candidate.slots.size()&&candidate.slots[material];});}
         if(!hit.hit)continue;
         const double distance=math::length(math::transformPoint(candidate.world,hit.hit->localPoint)-center);
         if(!seed||distance<closest-1e-5||(std::abs(distance-closest)<=1e-5&&candidate.entity==d.decal.seed.receiver)) {
             seed=hit.hit;seedCandidate=&candidate;closest=distance;
         }
     }
-    if(!seed||!seedCandidate){pending(!unsupported.empty()?unsupported:!preparing.empty()?preparing:"No receiving surface within the decal footprint.");return;}
+    if(!seed||!seedCandidate){spatial.diagnostic=!unsupported.empty()?unsupported:!preparing.empty()?preparing:"No receiving surface within the decal footprint.";entry.spatial=std::move(spatial);pending(entry.spatial->diagnostic);return;}
     const auto normalMatrix=math::normalMatrix(seedCandidate->world);
     const auto effectiveFrame=normalMatrix?decals::conformDecalFrame(d.world,math::transformPoint(seedCandidate->world,seed->localPoint),math::transformDirection(*normalMatrix,seed->localNormal)):std::nullopt;
     if(!effectiveFrame){pending("Invalid footprint.");return;}
-    entry.surfaceFrame=*effectiveFrame;
+    spatial.frame=*effectiveFrame;
     const auto surfaceCenter=math::transformPoint(*effectiveFrame,{});const Aabb patchRegion{surfaceCenter-extent,surfaceCenter+extent,true};
     signature.add(*effectiveFrame);signature.add(seed->seed.receiver.entity);signature.add(seed->seed.receiver.draw);signature.add(seed->seed.receiver.primitive);signature.add(seed->seed.triangle);signature.add(seed->seed.barycentrics);
     const auto key=signature.value;
+    spatial.signature=key;spatial.bindings=bindings.value;
     if(!entry.resource||entry.signature!=key){entry.signature=key;entry.publishedRevision=0;entry.render.reset();ResourceRequestOptions options;options.priority=priority;options.retainLoader=false;options.cancelWhenUnused=true;
         for(const auto&m:extracted.models)if(std::any_of(candidates.begin(),candidates.end(),[&](const auto&c){return c.entity==m.id;}))options.assetDependencies.push_back(m.assetId);
         decals::DecalBuildRequest request;request.seed=seed->seed;request.frame=*effectiveFrame;
@@ -160,17 +212,23 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
             size_t bytes=sizeof(*patch);for(const auto&chunk:patch->chunks)bytes+=sizeof(chunk)+chunk.vertices.size()*sizeof(decals::DecalPatchVertex)+chunk.indices.size()*sizeof(uint32_t);return ResourceLoadResult<decals::DecalPatch>{patch,bytes,key,{}};
         },std::move(options));
     }
+    entry.spatial=std::move(spatial);
+    }else ++stats_.spatialCacheHits;
+    const auto& spatial=*entry.spatial;const auto key=spatial.signature;
+    if(reuse)out.receivers.insert(out.receivers.end(),spatial.receivers.begin(),spatial.receivers.end());
+    if(!spatial.diagnostic.empty()){pending(spatial.diagnostic);return;}
+    entry.surfaceFrame=spatial.frame;
     const auto patch=entry.resource.snapshot();if(!patch){pending(entry.resource.state()==ResourceState::Failed?entry.resource.diagnostic():"Preparing decal surface.");return;}
     if(!patch->usable()){pending(patch->message);return;}
-    if(entry.publishedRevision!=patch.revision()||entry.publishedBindings!=bindings.value){Hash published;published.add(key);published.add(bindings.value);entry.render=renderPatch(*patch,published.value,revisions);entry.publishedRevision=patch.revision();entry.publishedBindings=bindings.value;}
+    if(entry.publishedRevision!=patch.revision()||entry.publishedBindings!=spatial.bindings){Hash published;published.add(key);published.add(spatial.bindings);entry.render=renderPatch(*patch,published.value,spatial.revisions);entry.publishedRevision=patch.revision();entry.publishedBindings=spatial.bindings;}
     entry.current=true;
     const auto material=assets_.preparedDecalMaterial(d.decal.asset.id,1024,priority);if(!material||!material->ready||!material->current||!material->render){pending(material&&!material->diagnostic.empty()?material->diagnostic:"Preparing decal material.");return;}
     entry.status=patch->message;out.decals.push_back({d.id,d.id,d.decal.priority,entry.render,material->render,d.decal.tint,d.decal.opacity,d.decal.edgeFeather});
-    out.decals.back().frame=*effectiveFrame;
+    out.decals.back().frame=spatial.frame;
     if(patch->status==decals::DecalPatchStatus::Incomplete&&!out.status.size())out.status=patch->message;
 }
-DecalPreparedScene DecalResources::prepare(const Scene&scene,const ExtractedScene&extracted,ResourcePriority priority){DecalPreparedScene result;for(auto&[id,entry]:patches_){(void)id;entry.current=false;}for(const auto&d:extracted.decals)append(result,scene,extracted,d,priority);std::sort(result.receivers.begin(),result.receivers.end());result.receivers.erase(std::unique(result.receivers.begin(),result.receivers.end()),result.receivers.end());return result;}
-DecalPreparedScene DecalResources::prepareTransient(const Scene&scene,const ExtractedScene&extracted,const SceneDecal&decal,const Mat4&frame,uint64_t id,ResourcePriority priority){DecalPreparedScene result;append(result,scene,extracted,{id,frame,decal,true},priority);return result;}
+DecalPreparedScene DecalResources::prepare(const Scene&scene,const ExtractedScene&extracted,ResourcePriority priority){DecalPreparedScene result;for(auto&[id,entry]:patches_){(void)id;entry.current=false;}const auto signature=extracted.decals.empty()?0:spatialSceneSignature(extracted);for(const auto&d:extracted.decals)append(result,scene,extracted,d,priority,signature);std::sort(result.receivers.begin(),result.receivers.end());result.receivers.erase(std::unique(result.receivers.begin(),result.receivers.end()),result.receivers.end());return result;}
+DecalPreparedScene DecalResources::prepareTransient(const Scene&scene,const ExtractedScene&extracted,const SceneDecal&decal,const Mat4&frame,uint64_t id,ResourcePriority priority){DecalPreparedScene result;append(result,scene,extracted,{id,frame,decal,true},priority,spatialSceneSignature(extracted));return result;}
 std::string DecalResources::status(EntityId id)const{const auto it=patches_.find(id);return it==patches_.end()?std::string{}:it->second.status;}
 std::shared_ptr<const DecalPatchData> DecalResources::patch(EntityId id)const{const auto it=patches_.find(id);return it==patches_.end()||!it->second.current?nullptr:it->second.render;}
 std::optional<Mat4> DecalResources::surfaceFrame(EntityId id)const{const auto it=patches_.find(id);return it==patches_.end()?std::nullopt:it->second.surfaceFrame;}
