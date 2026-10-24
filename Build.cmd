@@ -39,6 +39,7 @@ if errorlevel 1 (
 if /I "%~2"=="decal-proof" goto :decal_proof
 if /I "%~2"=="decal-host-proof" goto :decal_host_proof
 if /I "%~2"=="decal-compile-proof" goto :decal_compile_proof
+if /I "%~2"=="ragdoll-proof" goto :ragdoll_proof
 
 if not exist "build\%CC_CONFIGURATION%\build.ninja" (
     cmake --preset windows-%CC_CONFIGURATION%
@@ -90,6 +91,17 @@ exit /b 0
 echo ERROR: Renderer build failed. Review the diagnostic above.
 popd
 exit /b 1
+
+:ragdoll_proof
+cmake --preset windows-%CC_CONFIGURATION%
+if errorlevel 1 goto :failure
+cmake --build --preset windows-%CC_CONFIGURATION% --target ragdoll_asset_tests ragdoll_document_tests ragdoll_physics_tests ragdoll_runtime_tests ragdoll_scene_tests ragdoll_library_tests ragdoll_preview_plan_tests --parallel 8
+if errorlevel 1 goto :failure
+ctest --preset windows-%CC_CONFIGURATION% -R "^ragdoll_.*_core$" --output-on-failure
+if errorlevel 1 goto :failure
+echo Ragdoll CPU proofs passed. No renderer executable was linked or launched.
+popd
+exit /b 0
 
 :decal_compile_proof
 cmake --preset windows-%CC_CONFIGURATION%

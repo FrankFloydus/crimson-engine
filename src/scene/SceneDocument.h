@@ -138,6 +138,7 @@ public:
     std::vector<std::string> historicalParticleReferences() const;
     std::vector<std::string> historicalDecalReferences() const;
     std::vector<std::string> historicalAnimationReferences() const;
+    std::vector<std::string> historicalRagdollReferences() const;
     std::vector<std::string> historicalMaterialReferences() const;
     std::vector<std::string> historicalNavigationAgentProfileReferences() const;
     std::shared_ptr<const NavigationAgentProfile> navigationAgentProfile(const std::string& id) const;

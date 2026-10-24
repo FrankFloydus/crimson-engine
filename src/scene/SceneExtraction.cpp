@@ -97,6 +97,7 @@ ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery
             const auto category=actorOwner(id)?lighting_scope::Character:lighting_scope::World;
             scopes.directReceiverMask&=category;scopes.shadowCasterMask&=category;
             result.models.push_back({id,model->assetId.id,*world,model->materials,model->castShadows,model->receiveShadows,scopes,category,model->animation});
+            result.models.back().ragdoll=model->ragdoll;
             result.models.back().meshShading=model->meshShading;
             result.models.back().primitive=model->primitive;
             result.models.back().visible=visible;result.models.back().actorOwner=actorOwner(id);

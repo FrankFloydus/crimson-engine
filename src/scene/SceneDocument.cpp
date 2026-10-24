@@ -325,6 +325,15 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
                 throw std::runtime_error("Mesh shading must be an integer from 0 to 2.");
             record.meshShading=static_cast<MeshShading>(shading.get<unsigned>());
         }
+        if(entity.contains("modelRagdoll")) {
+            const auto& source=entity.at("modelRagdoll");
+            if(!source.is_object())throw std::runtime_error("Model ragdoll settings must be an object.");
+            if(!source.at("asset").is_string())throw std::runtime_error("Ragdoll reference must be an asset UUID.");
+            const auto reference=source.at("asset").get<std::string>();
+            if(!reference.empty()&&!isAssetUuid(reference))throw std::runtime_error("Ragdoll reference must be an asset UUID.");
+            record.modelRagdoll.asset=source.at("asset").get<AssetRef<RagdollAsset>>();
+            if(source.contains("startSimulated"))record.modelRagdoll.startSimulated=source.at("startSimulated").get<bool>();
+        }
         if(version>=10 && entity.contains("modelAnimation")) {
             const auto& source=entity.at("modelAnimation");
             if(!source.is_object())throw std::runtime_error("Model animation settings must be an object.");
@@ -713,6 +722,7 @@ void canonicalizeSceneAssetRefs(SceneSnapshot& snapshot) {
     snapshot.id=canonicalAssetId(snapshot.id);
     for(auto& record:snapshot.records) {
         if(record.model)record.model->id=canonicalAssetId(record.model->id);
+        record.modelRagdoll.asset.id=canonicalAssetId(record.modelRagdoll.asset.id);
         for(auto& material:record.modelMaterials)material.id=canonicalAssetId(material.id);
         if(record.particle)record.particle->id=canonicalAssetId(record.particle->id);
         if(record.decal){record.decal->asset.id=canonicalAssetId(record.decal->asset.id);record.decal->seed.modelId=canonicalAssetId(record.decal->seed.modelId);}
@@ -745,6 +755,7 @@ Json writeScene(const SceneSnapshot& snapshot) {
             entity["castShadows"]=record.castShadows;entity["receiveShadows"]=record.receiveShadows;
             entity["lightingScopes"]={{"directReceiverMask",record.lightingScopes.directReceiverMask},
                 {"shadowCasterMask",record.lightingScopes.shadowCasterMask}};
+            if(!record.modelRagdoll.asset.empty())entity["modelRagdoll"]={{"asset",record.modelRagdoll.asset},{"startSimulated",record.modelRagdoll.startSimulated}};
             const auto& animation=record.modelAnimation;
             entity["modelAnimation"]={{"asset",animation.asset},{"playing",animation.playing},
                 {"speed",animation.speed},{"startTime",animation.startTime}};
@@ -815,7 +826,8 @@ enum EntityField : uint64_t {
     OutlinerStyleField=1ull<<28,NavigationVolumeField=1ull<<29,EnemyField=1ull<<30,
     // Bit31 was authored Attributes; it is permanently reserved.
     TagsField=1ull<<32,EffectsField=1ull<<33,MeshShadingField=1ull<<34,PrimitiveMeshField=1ull<<35,DecalField=1ull<<36,ReceiveDecalsField=1ull<<37,
-    AllEntityFields=((1ull<<38)-1)&~(1ull<<31)
+    ModelRagdollField=1ull<<38,
+    AllEntityFields=((1ull<<39)-1)&~(1ull<<31)
 };
 enum PropertyField : uint32_t { ActiveEnvironment=1u<<0,ActiveCamera=1u<<1,PlayerCharacter=1u<<2 };
 template<class T> bool equalLight(const std::optional<T>& a,const std::optional<T>& b) {
@@ -834,6 +846,7 @@ uint64_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.quaderGenerated!=b.quaderGenerated)fields|=QuaderGeneratedField;
     if(a.lightingScopes!=b.lightingScopes)fields|=LightingScopesField;
     if(a.modelAnimation!=b.modelAnimation)fields|=ModelAnimationField;
+    if(a.modelRagdoll!=b.modelRagdoll)fields|=ModelRagdollField;
     if(a.meshShading!=b.meshShading)fields|=MeshShadingField;
     if(a.primitive!=b.primitive)fields|=PrimitiveMeshField;
     if(a.decal!=b.decal)fields|=DecalField;if(a.receiveDecals!=b.receiveDecals)fields|=ReceiveDecalsField;
@@ -862,6 +875,7 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint64_t fields)
     if(fields&QuaderGeneratedField)target.quaderGenerated=source.quaderGenerated;
     if(fields&LightingScopesField)target.lightingScopes=source.lightingScopes;
     if(fields&ModelAnimationField)target.modelAnimation=source.modelAnimation;
+    if(fields&ModelRagdollField)target.modelRagdoll=source.modelRagdoll;
     if(fields&MeshShadingField)target.meshShading=source.meshShading;
     if(fields&PrimitiveMeshField)target.primitive=source.primitive;
     if(fields&DecalField)target.decal=source.decal;if(fields&ReceiveDecalsField)target.receiveDecals=source.receiveDecals;
@@ -1328,6 +1342,13 @@ std::vector<std::string> SceneDocument::historicalAnimationReferences() const {
     for(const auto& command:history_.commands_)for(const auto& change:command.entities) {
         if(change.before)add(*change.before);if(change.after)add(*change.after);
     }
+    if(transaction_)for(const auto& change:transaction_->command.entities) {if(change.before)add(*change.before);if(change.after)add(*change.after);}
+    std::vector<std::string> result(references.begin(),references.end());std::sort(result.begin(),result.end());return result;
+}
+std::vector<std::string> SceneDocument::historicalRagdollReferences() const {
+    std::unordered_set<std::string> references;
+    const auto add=[&](const EntityRecord& record) {if(!record.modelRagdoll.asset.empty())references.insert(record.modelRagdoll.asset.id);};
+    for(const auto& command:history_.commands_)for(const auto& change:command.entities) {if(change.before)add(*change.before);if(change.after)add(*change.after);}
     if(transaction_)for(const auto& change:transaction_->command.entities) {if(change.before)add(*change.before);if(change.after)add(*change.after);}
     std::vector<std::string> result(references.begin(),references.end());std::sort(result.begin(),result.end());return result;
 }

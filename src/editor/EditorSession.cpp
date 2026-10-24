@@ -25,7 +25,7 @@
 namespace crimson {
 using Json=nlohmann::json;
 EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& assets, Renderer& renderer)
-    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),navigationProfileEditor_(root),collisionLayersEditor_(root),gameplayEffectEditor_(root),animationEditor_(root),decalEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),decals_(assets,resources_),navigationPreview_(resources_,root),collisionOverlays_(resources_),quader_(root) {
+    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),navigationProfileEditor_(root),collisionLayersEditor_(root),gameplayEffectEditor_(root),animationEditor_(root),ragdollEditor_(root),decalEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),decals_(assets,resources_),navigationPreview_(resources_,root),collisionOverlays_(resources_),quader_(root) {
     restoreSession(assets);
     documentEpoch_=document_.documentGeneration();
     previews_=std::make_unique<AssetPreviews>(root,assets,resources_,renderer,prepared_);
@@ -40,6 +40,8 @@ EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& as
     editor_.setDecalStatusQuery([this](EntityId id){return decals_.status(id);});
     editor_.setDecalPatchQuery([this](EntityId id){return decals_.patch(id);});
     editor_.setDecalFrameQuery([this](EntityId id){return decals_.surfaceFrame(id);});
+    editor_.setRagdollActiveQuery([this](EntityId id){return play_.ragdollActive(id);});
+    play_.setRagdollDefinitions([&assets](const std::string& id){return assets.findRagdoll(id);},[&assets](const std::string& id){return assets.findModel(id);},[&assets](const std::string& id){return assets.findAnimation(id);});
     editor_.setQuaderBridge(&quader_);
     const NavigationAgentProfileQuery agentProfiles=[this,&assets](const std::string& id) {
         try {
@@ -138,7 +140,7 @@ void EditorSession::filesChanged(std::span<const std::filesystem::path> paths) {
     materialEditor_.filesChanged(paths);
     navigationProfileEditor_.filesChanged(paths);
     gameplayEffectEditor_.filesChanged(paths);
-    animationEditor_.filesChanged(paths);decalEditor_.filesChanged(paths);
+    animationEditor_.filesChanged(paths);ragdollEditor_.filesChanged(paths);decalEditor_.filesChanged(paths);
     collisionLayersEditor_.filesChanged(paths);
     changedFiles_.insert(changedFiles_.end(),paths.begin(),paths.end());
     for(const auto& path:paths) {
@@ -243,13 +245,12 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
 }
 void EditorSession::cancelInteraction(Renderer& renderer) {
     cameraPilot_.cancelGesture(activeDocument(),settings_.camera);cameraGestureCancel_=false;
-    editor_.cancelInteraction(activeDocument(),renderer);particleEditor_.cancelInteraction();materialEditor_.cancelInteraction();navigationProfileEditor_.cancelInteraction();collisionLayersEditor_.cancelInteraction();gameplayEffectEditor_.cancelInteraction();animationEditor_.cancelInteraction();decalEditor_.cancelInteraction();gameInput_.cancel();pendingDecalPlacement_.reset();decals_.clear();focusGame_=false;skipSimulationTime_=true;
+    editor_.cancelInteraction(activeDocument(),renderer);particleEditor_.cancelInteraction();materialEditor_.cancelInteraction();navigationProfileEditor_.cancelInteraction();collisionLayersEditor_.cancelInteraction();gameplayEffectEditor_.cancelInteraction();animationEditor_.cancelInteraction();ragdollEditor_.cancelInteraction();decalEditor_.cancelInteraction();gameInput_.cancel();pendingDecalPlacement_.reset();decals_.clear();focusGame_=false;skipSimulationTime_=true;
     playShortcuts_.cancel();playActionPending_=PlayAction::None;
 }
 void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,bool stop) {
     attributeDebug_.reset();
     cameraPilot_.useEditorCamera(activeDocument(),settings_.camera);cameraGestureCancel_=false;
-    playAnimations_.clear();animationPlayTick_=0;
     waitingForCollision_=false;
     editor_.cancelInteraction(activeDocument(),renderer);navigation.cancel();gameInput_.cancel();
     pendingDrops_.clear();pendingDecalPlacement_.reset();decals_.clear();renderer.cancelPicking();skipSimulationTime_=true;playStatus_.clear();
@@ -341,7 +342,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
             }
         }
     }
-    const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_,navigationProfileEditor_,collisionLayersEditor_,gameplayEffectEditor_,animationEditor_,decalEditor_,gameplay,captures);
+    const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_,navigationProfileEditor_,collisionLayersEditor_,gameplayEffectEditor_,animationEditor_,decalEditor_,gameplay,captures,&ragdollEditor_);
     const auto sceneCamera=frame.viewportCamera.value_or(settings_.camera);
     if(frame.togglePlay)playActionPending_=play_.playing()?PlayAction::Stop:PlayAction::Start;
     if(frame.createParticle) particleEditor_.requestCreate(frame.particleFolder,assets);
@@ -362,15 +363,19 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(!frame.openAnimation.empty())animationEditor_.requestOpen(frame.openAnimation,assets);
     animationEditor_.setAntiAliasing(editor_.antiAliasing());
     animationEditor_.draw(assets,renderer,resources_,prepared_,simulationSeconds);
+    if(!frame.createRagdollModel.empty())try {if(const auto created=assets.createRagdoll(frame.createRagdollModel,{},frame.ragdollFolder)){ragdollEditor_.requestOpen(created->id,assets);ragdollStatus_.clear();}}catch(const std::exception& error){ragdollStatus_=error.what();}
+    if(!frame.openRagdoll.empty())ragdollEditor_.requestOpen(frame.openRagdoll,assets);
+    ragdollEditor_.setAntiAliasing(editor_.antiAliasing());
+    ragdollEditor_.draw(assets,renderer,resources_,prepared_,simulationSeconds);
     if(frame.createDecal)decalEditor_.requestCreate(frame.decalFolder,assets);
     if(!frame.openDecal.empty())decalEditor_.requestOpen(frame.openDecal,assets);
     decalEditor_.setAntiAliasing(editor_.antiAliasing());decalEditor_.draw(assets,renderer,resources_,prepared_,materialEditor_);
-    status_=startupStatus_+playStatus_;
+    status_=startupStatus_+playStatus_+ragdollStatus_;
     if (!play_.playing() && (frame.documentReplaced || document.assetId() != cameraScene_ || document.documentGeneration()!=documentEpoch_)) {
         cameraPilot_.sync(document,settings_.camera);
         if (!previousAsset.empty()) cameras_[previousAsset]=previousCamera;
         cameraScene_=document.assetId(); navigation.cancel(); renderer.cancelPicking();
-        unresolvedScene_.clear(); startupStatus_.clear(); status_.clear();materialDropStatus_.clear();decalDropStatus_.clear();
+        unresolvedScene_.clear(); startupStatus_.clear(); status_.clear();materialDropStatus_.clear();decalDropStatus_.clear();ragdollStatus_.clear();
         if(document.documentGeneration()!=documentEpoch_) { documentEpoch_=document.documentGeneration();pendingDrops_.clear();pendingDecalPlacement_.reset();decals_.clear(); }
         externalScene_={};savedPreviewFingerprint_=0;
         if (frame.documentReplaced) {
@@ -471,7 +476,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(captures)gameView_.drawCaptureStatus(captures->status());
     if(!gameOpen) { editor_.hideGame();renderer.releaseGameViewport();if(play_.playing())playActionPending_=PlayAction::Stop; }
     const auto playShortcut=playShortcuts_.consume({play_.playing(),quitRequested || editor_.playTransitionBlocked(),
-        navigation.active() || document.transactionActive() || particleEditor_.transactionActive() || materialEditor_.transactionActive() || navigationProfileEditor_.transactionActive() || collisionLayersEditor_.transactionActive() || gameplayEffectEditor_.transactionActive() || animationEditor_.transactionActive() || decalEditor_.transactionActive()});
+        navigation.active() || document.transactionActive() || particleEditor_.transactionActive() || materialEditor_.transactionActive() || navigationProfileEditor_.transactionActive() || collisionLayersEditor_.transactionActive() || gameplayEffectEditor_.transactionActive() || animationEditor_.transactionActive() || ragdollEditor_.transactionActive() || decalEditor_.transactionActive()});
     if(playShortcut!=PlayAction::None)playActionPending_=playShortcut;
     auto gameCamera=resolveGameCamera(document.scene());
     auto* gameWindow=game.viewport.windowId?SDL_GetWindowFromID(game.viewport.windowId):nullptr;
@@ -566,11 +571,15 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
             editor_.drawDecalPlacementPlane(previewFrame,sceneCamera,texture,color);
         }
     }
+    if(play_.playing())play_.prepareRagdollPresentation(extracted);
+    else editAnimations_.advance(extracted,document.documentGeneration(),simulationSeconds,[&assets](const auto& id){return assets.findAnimation(id);});
     if(play_.playing()) {
-        const auto ticks=play_.tickCount();
-        const auto elapsed=ticks>=animationPlayTick_?(ticks-animationPlayTick_)*PlaySession::FixedStep:0.;
-        playAnimations_.advance(extracted,document.documentGeneration(),elapsed,[&assets](const auto& id){return assets.findAnimation(id);});animationPlayTick_=ticks;
-    } else editAnimations_.advance(extracted,document.documentGeneration(),simulationSeconds,[&assets](const auto& id){return assets.findAnimation(id);});
+        if(frame.resetRagdollEntity){play_.resetRagdoll(frame.resetRagdollEntity);for(auto& model:extracted.models)if(model.id==frame.resetRagdollEntity)model.physicsPose.reset();}
+        if(frame.activateRagdollEntity)for(const auto& model:extracted.models)if(model.id==frame.activateRagdollEntity) {
+            const auto source=assets.findModel(model.assetId);if(source&&!play_.activateRagdoll(model.id,{},prepared_.pose(model,source)))status_=play_.status();break;
+        }
+        play_.prepareRagdollPresentation(extracted);
+    }
     settings_.environment=extracted.environment.environment;settings_.exposure=extracted.environment.exposure;
     settings_.proceduralSun=extracted.proceduralSun;
     settings_.environment.map=assets.references().resolveEnvironment(settings_.environment.map);

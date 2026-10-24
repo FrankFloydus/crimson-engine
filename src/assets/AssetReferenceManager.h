@@ -50,6 +50,7 @@ public:
     std::string resolveNavigationAgentProfile(const std::string& id) const;
     std::string resolveGameplayEffect(const std::string& id) const;
     std::string resolveAnimation(const std::string& id) const;
+    std::string resolveRagdoll(const std::string& id) const;
     std::string resolveParticleMaterial(const std::string& id) const;
     std::string resolveParticleTexture(const std::string& id) const;
     bool deleted(const std::string& id) const { return deleted_.contains(id)||deleted_.contains(canonicalAssetId(id)); }

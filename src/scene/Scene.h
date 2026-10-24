@@ -43,6 +43,11 @@ struct SceneModelAnimation {
     float speed{1},startTime{}; // Authored start; the live playback clock is transient.
     bool operator==(const SceneModelAnimation&) const = default;
 };
+struct SceneModelRagdoll {
+    AssetRef<struct RagdollAsset> asset;
+    bool startSimulated{};
+    bool operator==(const SceneModelRagdoll&) const = default;
+};
 struct ModelReference {
     AssetRef<ModelAsset> assetId;
     ModelMaterialOverrides materials;
@@ -51,6 +56,7 @@ struct ModelReference {
     SceneModelAnimation animation{};
     MeshShading meshShading{MeshShading::UseMeshNormals};
     std::optional<PrimitiveMeshSettings> primitive;
+    SceneModelRagdoll ragdoll;
 };
 // Authored identity only. Playback is transient and reconciled by document
 // generation plus persistent EntityId, never by an EnTT handle.
@@ -234,6 +240,7 @@ struct EntityRecord {
     std::optional<PrimitiveMeshSettings> primitive;
     std::optional<SceneDecal> decal;
     bool receiveDecals{true}; // Per entity, including future visual capabilities.
+    SceneModelRagdoll modelRagdoll;
 };
 bool hasSceneComponent(const EntityRecord&,SceneComponentKind);
 std::vector<SceneComponentKind> sceneComponents(const EntityRecord&);

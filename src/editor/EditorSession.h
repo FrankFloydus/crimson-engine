@@ -9,6 +9,7 @@
 #include "tools/CollisionLayersEditor.h"
 #include "tools/GameplayEffectEditor.h"
 #include "tools/AnimationEditor.h"
+#include "tools/RagdollEditor.h"
 #include "tools/DecalEditor.h"
 #include "NavigationPreview.h"
 #include "SceneParticles.h"
@@ -86,10 +87,10 @@ private:
     CollisionLayersEditor collisionLayersEditor_;
     GameplayEffectEditor gameplayEffectEditor_;
     AnimationEditor animationEditor_;
+    RagdollEditor ragdollEditor_;
     DecalEditor decalEditor_;
     SceneParticles particles_;
-    SceneAnimations editAnimations_,playAnimations_;
-    std::uint64_t animationPlayTick_{};
+    SceneAnimations editAnimations_;
     SceneSettings settings_;
     ResourceManager& resources_;
     EditorResources prepared_;
@@ -117,7 +118,7 @@ private:
     };
     std::optional<PendingDecalPlacement> pendingDecalPlacement_;
     std::unordered_map<std::string,Camera> cameras_;
-    std::string cameraScene_, preparedEnvironment_, status_, unresolvedScene_, startupStatus_, resourceStatus_,materialDropStatus_,decalDropStatus_;
+    std::string cameraScene_, preparedEnvironment_, status_, unresolvedScene_, startupStatus_, resourceStatus_,materialDropStatus_,decalDropStatus_,ragdollStatus_;
     bool recoveredLegacy_{false};
     bool simulationSuspended_{},skipSimulationTime_{true};
     PlayAction playActionPending_{PlayAction::None};

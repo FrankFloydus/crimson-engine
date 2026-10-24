@@ -9,6 +9,15 @@
 
 namespace crimson {
 class CharacterMotor;
+struct RagdollAsset;
+struct ModelAsset;
+struct ModelPose;
+struct RagdollBodyHit {
+    EntityId entity{};
+    std::size_t bodyIndex{};
+    Vec3 position{},normal{};
+    float distance{};
+};
 struct PhysicsRayHit { EntityId entity{}; Vec3 position{},normal{}; };
 struct PhysicsBox { EntityId entity{}; Mat4 world{}; Vec3 size{}; };
 struct PhysicsQueryFilter {
@@ -65,6 +74,23 @@ public:
     const std::string& status() const;
     std::size_t colliderCount() const;
     std::size_t characterCount() const;
+    // Runtime bodies and constraints stay in this world's collision/query owner.
+    // The model transform must have a positive uniform scale without shear.
+    bool createRagdoll(EntityId,std::shared_ptr<const RagdollAsset>,std::shared_ptr<const ModelAsset>,
+        const ModelPose&,const Mat4& modelWorld,const Vec3& velocity={},const Vec3& impulse={},
+        EntityId actorOwner=NoEntity,CollisionFilter collision={EnemyCollisionLayer,AllCollisionLayers});
+    void removeRagdoll(EntityId);
+    bool hasRagdoll(EntityId) const;
+    std::size_t ragdollCount() const;
+    bool ragdollActive(EntityId) const;
+    std::shared_ptr<const ModelPose> sampleRagdollPose(EntityId,float alpha=1) const;
+    // World rigid source-bone frames, parallel to the setup's body array.
+    std::vector<Mat4> ragdollBodyTransforms(EntityId,float alpha=1) const;
+    bool applyRagdollImpulse(EntityId,const Vec3&,std::optional<Vec3> worldPoint={},int bodyIndex=-1);
+    std::optional<RagdollBodyHit> pickRagdoll(const Ray&,float maxDistance) const;
+    bool beginRagdollDrag(EntityId,std::size_t bodyIndex,const Vec3& worldPoint);
+    bool updateRagdollDrag(const Vec3& worldTarget);
+    void endRagdollDrag();
     // Only accepted static collision geometry is published. Actor poses and
     // unrelated scene edits do not invalidate derived navigation geometry.
     std::vector<PhysicsBox> staticBoxes() const;

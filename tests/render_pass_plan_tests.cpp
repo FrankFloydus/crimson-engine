@@ -155,18 +155,18 @@ RenderResourceTable concrete(const RenderPassPlan& plan) {
 }
 
 void profiles() {
-    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail})
+    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail,RenderViewPurpose::RagdollPreview})
         for(bool glow:{false,true})for(bool grid:{false,true})for(bool collisions:{false,true})for(bool gi:{false,true})for(bool ao:{false,true})for(bool smaa:{false,true})for(bool refraction:{false,true})for(bool ssr:{false,true}) {
             const bool world=purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::Game;
             RenderPassPlanConfig config;config.view={purpose,871};config.prepareEnvironment=true;
             config.worldShadows=world || purpose==RenderViewPurpose::Thumbnail;
-            config.glow=glow && purpose!=RenderViewPurpose::Thumbnail;
-            config.grid=grid && (purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::ParticlePreview);
+            config.glow=glow && purpose!=RenderViewPurpose::Thumbnail && purpose!=RenderViewPurpose::RagdollPreview;
+            config.grid=grid && (purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::ParticlePreview || purpose==RenderViewPurpose::RagdollPreview);
             config.picking=purpose==RenderViewPurpose::Scene;config.thumbnailReadback=purpose==RenderViewPurpose::Thumbnail;
             config.collisionOverlays=collisions && world;config.ssgi=gi && world;config.ssao=ao && world;
             config.smaa=smaa;
-            config.refraction=refraction;config.refraction_levels=7;
-            config.ssr=ssr;config.ssr_levels=7;
+            config.refraction=refraction && purpose!=RenderViewPurpose::RagdollPreview;config.refraction_levels=7;
+            config.ssr=ssr && purpose!=RenderViewPurpose::RagdollPreview;config.ssr_levels=7;
             config.glowBaseWidth=config.glowBaseHeight=32;
             const auto plan=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(plan)),"A supported profile has an invalid structural plan.");
             const auto bindingsValidation=validateRenderPassPlan(plan,concrete(plan));
@@ -564,7 +564,7 @@ void ssrContracts() {
         const auto slots=renderViewPassSlots(purpose);
         const std::array<std::uint16_t,5> expectedTrace{116,372,338,162,300};
         const auto first=expectedTrace[static_cast<std::size_t>(purpose)];
-        check(RenderViewLayoutVersion==4&&slots.ssr_prepare==first&&slots.ssr_trace==first&&slots.ssr_reconstruct==first+1&&
+        check(RenderViewLayoutVersion==5&&slots.ssr_prepare==first&&slots.ssr_trace==first&&slots.ssr_reconstruct==first+1&&
             slots.ssr_opaque==first+2&&slots.refraction_capture==first+3&&slots.refraction_capture<slots.transparent,
             "SSR reconstruction escaped reserved view gaps or changed the numeric profile layout.");
         check(plan.has(Kind::DepthPrepass)&&!plan.has(Kind::RefractionDepth)&&plan.find(Kind::DepthPrepass)->physicalView<plan.find(Kind::Background)->physicalView,

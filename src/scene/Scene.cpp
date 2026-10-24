@@ -119,7 +119,7 @@ bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
         a.collider==b.collider && a.camera==b.camera && a.cameraFollow==b.cameraFollow && a.modelMaterials==b.modelMaterials &&
         a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows && a.lightingScopes==b.lightingScopes &&
         a.quader==b.quader && a.quaderGenerated==b.quaderGenerated &&
-        a.modelAnimation==b.modelAnimation && a.visible==b.visible && a.receiveDecals==b.receiveDecals &&
+        a.modelAnimation==b.modelAnimation && a.modelRagdoll==b.modelRagdoll && a.visible==b.visible && a.receiveDecals==b.receiveDecals &&
         a.outlinerStyle==b.outlinerStyle && a.meshShading==b.meshShading && a.primitive==b.primitive;
 }
 bool sameProperties(const SceneProperties& a, const SceneProperties& b) {
@@ -151,6 +151,7 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
         record.castShadows=model->castShadows;record.receiveShadows=model->receiveShadows;
         record.lightingScopes=model->lightingScopes;
         record.modelAnimation=model->animation;
+        record.modelRagdoll=model->ragdoll;
         record.meshShading=model->meshShading;
         record.primitive=model->primitive;
     }
@@ -279,6 +280,12 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             throw std::runtime_error("Model animation needs Speed from 0 to 100 and Start Time from 0 to 1000000000 seconds.");
         if(!record.model && animation!=SceneModelAnimation{})
             throw std::runtime_error("Model animation settings require a model entity.");
+        if(!record.model && record.modelRagdoll!=SceneModelRagdoll{})
+            throw std::runtime_error("Ragdoll settings require a model entity.");
+        if(!record.modelRagdoll.asset.empty()&&!isAssetUuid(record.modelRagdoll.asset.id))
+            throw std::runtime_error("Ragdoll must reference a managed asset UUID.");
+        if(record.modelRagdoll.startSimulated&&record.modelRagdoll.asset.empty())
+            throw std::runtime_error("Start Simulated requires a Ragdoll asset.");
         if(record.modelMaterials.size()>MaximumModelMaterialSlots)
             throw std::runtime_error("Model material slots exceed the supported limit.");
         if(!record.modelMaterials.empty() && !record.model)
@@ -535,7 +542,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         candidate.emplace<Visibility>(entity,record.visible,record.visible,false);
         candidate.emplace<VisualSettings>(entity,record.receiveDecals);
         candidate.emplace<OutlinerStyle>(entity,record.outlinerStyle);
-        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation,record.meshShading,record.primitive);
+        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation,record.meshShading,record.primitive,record.modelRagdoll);
         if (record.particle) candidate.emplace<ParticleReference>(entity,*record.particle);
         if (record.decal) candidate.emplace<SceneDecal>(entity,*record.decal);
         if (record.directional) candidate.emplace<SceneDirectionalLight>(entity,*record.directional);

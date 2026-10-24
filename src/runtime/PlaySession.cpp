@@ -74,11 +74,13 @@ bool PlaySession::start(const SceneDocument& authored) {
         firstPerson_.reset();pendingJump_=false;traceVisualization_.clear();traceCamera_=NoEntity;
         controlled_=inputOwner_=NoEntity;inputCancellation_=0;lastControlledPose_.reset();
         editRevision_=document_->scene().revision();reconcileAttributes();reconcileAgents();resetInterpolation();reconcileParticles(0);
+        runtimeAnimations_.clear();advanceRagdollRuntime(0,false);
         status_=physics_->status()+particles_.status();return true;
     } catch(const std::exception& error){stop();status_="Cannot enter Play: "+std::string(error.what());return false;}
 }
 void PlaySession::stop() {
     CRIMSON_PROFILE_ZONE("Play session teardown");
+    ragdollBindings_.clear();ragdollAutoStarted_.clear();runtimeAnimations_.clear();
     effects_.clear();
     attributes_.clear();
     triggerEvents_.clear();
@@ -457,6 +459,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         reconcileAttributes();
         prepareMeshColliders(document_->scene(),false);
         reconcileProfiles();
+        advanceRagdollRuntime(0,active);
         physics_->reconcile(document_->scene(),document_->transformEditRoots(),meshColliders_);
         reconcileNavigation();
         const auto controlled=document_->scene().properties().playerCharacter;
@@ -516,7 +519,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
             advanceEnemies(FixedStep);
             for(auto& [id,agent]:agents_) {
                 const auto entity=document_->scene().find(id);const auto world=document_->scene().worldTransform(id);
-                if(!entity||!entity->movement||!entity->movement->enabled||!world)continue;
+                if(!entity||!entity->movement||!entity->movement->enabled||!world||ragdollOwnsActor(id))continue;
                 if(effects_.readiness(id)!=EffectReadiness::Ready) {
                     CharacterMotor(*physics_,id).move({});
                     if(id==controlled)pendingJump_=false;
@@ -574,7 +577,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
             current_=characterPoses(document_->scene());lastControlledPose_=document_->scene().worldTransform(controlled);
             for(auto& [id,agent]:agents_)agent.lastPose=document_->scene().worldTransform(id);
             for(auto& [id,enemy]:enemies_)enemy.pose=document_->scene().worldTransform(id);
-            ++ticks_;reconcileParticles(FixedStep);
+            ++ticks_;reconcileParticles(FixedStep);advanceRagdollRuntime(FixedStep,false);
         }
         droppedTicks_+=available-executed;
         if(seconds>bounded)droppedTicks_+=static_cast<std::uint64_t>(std::min((seconds-bounded)/FixedStep,1e12));
@@ -586,6 +589,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         // resolved, including frames that execute no fixed simulation tick.
         if(fireTrace)firePlayerTrace(controlled);
         status_=physics_->status();
+        status_+=ragdollStatus();
         if(!attributes_.status().empty())status_+=attributes_.status();
         if(!effects_.status().empty())status_+=effects_.status();
         for(const auto& profile:supportedProfiles_) {

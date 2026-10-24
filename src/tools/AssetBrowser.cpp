@@ -29,6 +29,7 @@ constexpr const char* ParticlePayload="CC_PARTICLE_ASSET";
 constexpr const char* NavigationProfilePayload="CC_NAVIGATION_AGENT_PROFILE";
 constexpr const char* GameplayEffectPayload="CC_GAMEPLAY_EFFECT";
 constexpr const char* AnimationPayload="CC_ANIMATION_ASSET";
+constexpr const char* RagdollPayload="CC_RAGDOLL_ASSET";
 constexpr const char* FolderPayload="CC_ASSET_FOLDER";
 constexpr const char* ParentCard="##parent-folder";
 
@@ -76,6 +77,7 @@ const char* payloadType(const BrowserItem& item) {
     if(item.kind==AssetKind::NavigationAgentProfile)return NavigationProfilePayload;
     if(item.kind==AssetKind::GameplayEffect)return GameplayEffectPayload;
     if(item.kind==AssetKind::Animation)return AnimationPayload;
+    if(item.kind==AssetKind::Ragdoll)return RagdollPayload;
     return TexturePayload;
 }
 bool sameName(const std::string& a,const std::string& b) {
@@ -187,7 +189,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
         if(queryRow)ImGui::SameLine();
         ImGui::SetNextItemWidth(queryRow?categoryWidth:ImGui::GetContentRegionAvail().x);
         auto category=static_cast<int>(filter_);
-        if(ImGui::Combo("##Asset category",&category,"All\0Materials\0Models (GLB/glTF)\0Textures\0Scenes\0Particles\0Navigation Agent Profiles\0Gameplay Effects\0Animations\0Decals\0"))filter_=static_cast<BrowserAssetFilter>(category);
+        if(ImGui::Combo("##Asset category",&category,"All\0Materials\0Models (GLB/glTF)\0Textures\0Scenes\0Particles\0Navigation Agent Profiles\0Gameplay Effects\0Animations\0Decals\0Ragdolls\0"))filter_=static_cast<BrowserAssetFilter>(category);
         if (ImGui::SmallButton("Project")) navigate=std::string{};
         receiveMove({});
         if(displayedRevision_!=catalog.revision()||displayedFolder_!=folder_)breadcrumbs_=catalog.breadcrumbs(folder_);
@@ -271,6 +273,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                     else if(item.kind==AssetKind::NavigationAgentProfile)actions.openNavigationAgentProfile=item.id;
                     else if(item.kind==AssetKind::GameplayEffect)actions.openGameplayEffect=item.id;
                     else if(item.kind==AssetKind::Animation)actions.openAnimation=item.id;
+                    else if(item.kind==AssetKind::Ragdoll)actions.openRagdoll=item.id;
                 }
                 if (!parentCard && !editing && ImGui::BeginDragDropSource()) {
                     if (dragPrimary_!=item.id || dragIds_.empty()) {
@@ -343,6 +346,17 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                             }catch(const std::exception& error){message_=error.what();}
                         }
                     }
+                    if(!item.folder && item.kind==AssetKind::Model) {
+                        const auto source=assets.findModel(item.id);ImGui::BeginDisabled(!source||source->skins.empty());
+                        if(ImGui::MenuItem("Create Ragdoll")){actions.createRagdollModel=item.id;if(writableFolder)actions.ragdollFolder=folder_;}
+                        ImGui::EndDisabled();
+                    }
+                    if(!item.folder && item.kind==AssetKind::Ragdoll) {
+                        if(ImGui::MenuItem("Open Ragdoll"))actions.openRagdoll=item.id;
+                        if(ImGui::MenuItem("Duplicate"))try {if(const auto copy=assets.copyRagdoll(item.id)) {
+                            const std::array<std::string,1> ids{copy->id};if(writableFolder)assets.browserCatalog().move(ids,folder_);assets.select(copy->id);actions.openRagdoll=copy->id;
+                        }}catch(const std::exception& error){message_=error.what();}
+                    }
                     if(!item.folder && item.kind==AssetKind::Animation) {
                         if(ImGui::MenuItem("Open Animation"))actions.openAnimation=item.id;
                         if(ImGui::MenuItem("Duplicate")) {
@@ -412,6 +426,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                 else if (item.kind==AssetKind::Particle) particleIcon(*draw,well,wellEnd,textColor);
                 else if(item.kind==AssetKind::NavigationAgentProfile)sceneIcon(*draw,well,wellEnd,textColor);
                 else if(item.kind==AssetKind::GameplayEffect)sceneIcon(*draw,well,wellEnd,textColor);
+                else if(item.kind==AssetKind::Ragdoll)sceneIcon(*draw,well,wellEnd,textColor);
                 else if(item.kind==AssetKind::Animation) {
                     sceneIcon(*draw,well,wellEnd,textColor);
                     const ImVec2 center((well.x+wellEnd.x)*.5f,(well.y+wellEnd.y)*.5f);
@@ -421,7 +436,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                 const ImVec2 label(origin.x+padding,wellEnd.y+3);
                 const auto shortName=elide(item.name,thumbnail);
                 if (!editing) draw->AddText(label,textColor,shortName.c_str());
-                std::string details=item.folder ? "Folder" : item.kind==AssetKind::Scene ? "Scene" : item.kind==AssetKind::Animation ? "Animation" : item.kind==AssetKind::GameplayEffect ? "Gameplay Effect" : item.kind==AssetKind::NavigationAgentProfile ? "Agent Profile" : item.kind==AssetKind::Particle ? "Particle Effect" : item.kind==AssetKind::Decal ? "Decal" : item.kind==AssetKind::Material ? "Material" : item.kind==AssetKind::Model ? (model ? model->format : "Model") : "Image";
+                std::string details=item.folder ? "Folder" : item.kind==AssetKind::Scene ? "Scene" : item.kind==AssetKind::Ragdoll ? "Ragdoll" : item.kind==AssetKind::Animation ? "Animation" : item.kind==AssetKind::GameplayEffect ? "Gameplay Effect" : item.kind==AssetKind::NavigationAgentProfile ? "Agent Profile" : item.kind==AssetKind::Particle ? "Particle Effect" : item.kind==AssetKind::Decal ? "Decal" : item.kind==AssetKind::Material ? "Material" : item.kind==AssetKind::Model ? (model ? model->format : "Model") : "Image";
                 if (image) details=std::to_string(image->width)+" x "+std::to_string(image->height)+(image->hdr ? " HDR" : "");
                 draw->AddText({label.x,label.y+font+1},ImGui::GetColorU32(ImGuiCol_TextDisabled),elide(details,thumbnail).c_str());
                 if (!parentCard && selection.contains(item.id)) draw->AddRect(origin,end,ImGui::GetColorU32(ImGuiCol_HeaderActive),3,0,1.0f);

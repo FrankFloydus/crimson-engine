@@ -139,7 +139,9 @@ void queryMasksKindsAndIgnoredEntities() {
 }
 void staticMembershipEditsPreserveAcceptedGeometry() {
     constexpr std::uint32_t marker=1u<<30;auto ground=floor();ground.collider->collision.layers|=marker;
-    auto mesh=floor();mesh.id=6;mesh.local=math::translation({5,0,0});mesh.collider->shape=ColliderShape::Trimesh;
+    // Keep the mesh above the broad primitive floor so this membership check
+    // has a unique closest collider instead of relying on coplanar hit order.
+    auto mesh=floor();mesh.id=6;mesh.local=math::translation({5,.25f,0});mesh.collider->shape=ColliderShape::Trimesh;
     mesh.collider->mesh=makeCollisionMesh({{-1,0,-1},{1,0,-1},{1,0,1},{-1,0,1}},{0,2,1,0,3,2});mesh.collider->collision.layers|=marker;
     auto detector=trigger(4,{0,0,0},{2,2,2},marker);Scene scene;apply(scene,{ground,mesh,detector});PhysicsWorld physics;tick(scene,physics);
     PhysicsQueryFilter query;query.mask=marker;query.includeCharacters=false;

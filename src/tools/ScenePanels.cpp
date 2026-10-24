@@ -117,6 +117,7 @@ struct PanelsState {
     std::unordered_map<EntityId,PrimitiveMeshInspectorState> primitives;
     std::unordered_map<EntityId,GameplayTagPickerState> tags;
     std::string materialDiagnostic;
+    std::string ragdollDiagnostic;
     SceneOutlinerColorPopupState outlinerColor;
     std::unordered_map<EntityId,CameraAuthoringControlsState> cameraControls;
     std::vector<CameraTemplate> cameraTemplates;
@@ -566,6 +567,51 @@ void modelAnimationControls(SceneDocument& document,PanelsState& state,const Ent
     }
     if(state.active>=Edit::ModelAnimationClip&&state.active<=Edit::ModelAnimationStart&&
         (!activeDrawn||!ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
+}
+void modelRagdollControls(SceneDocument& document,PanelsState& state,const EntityRecord& record,AssetLibrary& assets,const RagdollInspectorContext& context) {
+    const auto model=assets.findModel(record.model->id,record.primitive);
+    if((!model||model->skins.empty())&&record.modelRagdoll.asset.empty())return;
+    if(!ImGui::TreeNode("Ragdoll"))return;
+    auto value=record.modelRagdoll;
+    const auto assign=[&](const SceneModelRagdoll& next){
+        if(state.active!=Edit::None)finishEdit(document,state,state.active);
+        document.edit("Change ragdoll setup",changeEntity(record.id,[next](auto& entity){entity.modelRagdoll=next;}));
+    };
+    const auto selected=assets.findRagdoll(value.asset.id);
+    const auto label=selected?assets.displayName(selected->id):value.asset.empty()?std::string("None"):std::string("Missing Ragdoll");
+    const auto compatible=[&](const RagdollAsset& candidate){if(!model)return false;try{validateRagdollSource(candidate,*model);return true;}catch(...){return false;}};
+    const float height=ImGui::GetFrameHeight(),gap=ImGui::GetStyle().ItemInnerSpacing.x,openWidth=ImGui::CalcTextSize("Open").x+ImGui::GetStyle().FramePadding.x*2;
+    ImGui::BeginGroup();
+    if(ImGui::Button(label.c_str(),{std::max(height,ImGui::GetContentRegionAvail().x-openWidth-height-2*gap),height}))ImGui::OpenPopup("Select Ragdoll");
+    if(ImGui::BeginPopup("Select Ragdoll")) {
+        static ImGuiTextFilter filter;filter.Draw("Search");
+        if(ImGui::Selectable("None",value.asset.empty())){value={};assign(value);ImGui::CloseCurrentPopup();}
+        ImGui::BeginChild("Ragdoll choices",{360,ImGui::GetFontSize()*12});
+        for(const auto& entry:assets.catalog())if(entry.kind==AssetKind::Ragdoll&&filter.PassFilter(entry.name.c_str()))if(const auto candidate=assets.findRagdoll(entry.id);candidate&&compatible(*candidate)) {
+            ImGui::PushID(entry.id.c_str());if(ImGui::Selectable(entry.name.c_str(),entry.id==value.asset.id)){value.asset.id=entry.id;assign(value);ImGui::CloseCurrentPopup();}ImGui::PopID();
+        }
+        ImGui::EndChild();ImGui::EndPopup();
+    }
+    ImGui::SameLine(0,gap);ImGui::BeginDisabled(value.asset.empty());if(ImGui::Button("x",{height,height})){value={};assign(value);}ImGui::EndDisabled();
+    ImGui::SameLine(0,gap);ImGui::BeginDisabled(!selected||!context.openAsset);if(ImGui::Button("Open",{openWidth,height})&&context.openAsset)*context.openAsset=selected->id;ImGui::EndDisabled();ImGui::EndGroup();
+    if(ImGui::BeginDragDropTarget()) {
+        if(const auto* payload=ImGui::AcceptDragDropPayload("CC_RAGDOLL_ASSET"))if(payload->Data&&payload->DataSize>1&&static_cast<const char*>(payload->Data)[payload->DataSize-1]=='\0') {
+            const std::string id(static_cast<const char*>(payload->Data),std::size_t(payload->DataSize-1));if(const auto candidate=assets.findRagdoll(id);candidate&&compatible(*candidate)){value.asset.id=id;assign(value);}
+        }
+        ImGui::EndDragDropTarget();
+    }
+    ImGui::BeginDisabled(!model||model->skins.empty()||!context.openAsset);
+    if(ImGui::Button("Create Ragdoll"))try {if(const auto created=assets.createRagdoll(record.model->id)){value.asset.id=created->id;value.startSimulated=false;assign(value);if(context.openAsset)*context.openAsset=created->id;state.ragdollDiagnostic.clear();}}catch(const std::exception& error){state.ragdollDiagnostic=error.what();}
+    ImGui::EndDisabled();
+    ImGui::BeginDisabled(value.asset.empty());if(ImGui::Checkbox("Start Simulated",&value.startSimulated))assign(value);ImGui::EndDisabled();
+    if(document.transient()&&!value.asset.empty()) {
+        const bool active=context.active&&context.active(record.id);
+        if(active&&context.resetEntity){if(ImGui::Button("Reset Ragdoll"))*context.resetEntity=record.id;}
+        else if(context.activateEntity){if(ImGui::Button("Activate Ragdoll"))*context.activateEntity=record.id;}
+    }
+    if(selected&&model&&!compatible(*selected))ImGui::TextWrapped("Ragdoll skeleton binding no longer matches this model.");
+    if(!state.ragdollDiagnostic.empty())ImGui::TextWrapped("%s",state.ragdollDiagnostic.c_str());
+    ImGui::TreePop();
 }
 void modelInformation(SceneDocument& document,PanelsState& state,const EntityRecord& record,AssetLibrary& assets,
     const Renderer& renderer,std::string* openMaterial) {
@@ -1485,7 +1531,7 @@ void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEd
 }
 
 void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits,
-                        std::uint64_t* playParticle,std::string* openParticle,QuaderBridge* quader,std::string* openMaterial,const NavigationInspectorContext& navigation,const std::array<std::string,32>* collisionLayerNames,const GameplayInspectorContext& gameplay,std::string* openAnimation,const DecalInspectorContext& decals) {
+                        std::uint64_t* playParticle,std::string* openParticle,QuaderBridge* quader,std::string* openMaterial,const NavigationInspectorContext& navigation,const std::array<std::string,32>* collisionLayerNames,const GameplayInspectorContext& gameplay,std::string* openAnimation,const DecalInspectorContext& decals,const RagdollInspectorContext& ragdolls) {
     auto& state=stateFor(document);
     const auto& collisionNames=collisionLayerNames?*collisionLayerNames:defaultCollisionLayerNames();
     const bool canceled=cancelPanelEdit(document,state,Panel::Inspector,allowEdits);
@@ -1604,6 +1650,7 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                 if((state.active==Edit::ModelDirectReceivers || state.active==Edit::ModelCasterScope) &&
                    (!activeScopeDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
                 modelAnimationControls(document,state,record,assets,openAnimation);
+                modelRagdollControls(document,state,record,assets,ragdolls);
                 modelInformation(document,state,record,assets,renderer,openMaterial);
             } else if(section==SceneComponentKind::Model && record.model && state.active>=Edit::ModelCastShadows && state.active<=Edit::ModelAnimationStart) {
                 releasePrimitiveMeshInspector(state.primitives[record.id]);finishEdit(document,state,state.active);

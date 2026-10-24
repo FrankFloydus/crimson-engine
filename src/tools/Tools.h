@@ -60,6 +60,8 @@ struct EditorFrame {
     bool createGameplayEffect{false};
     std::string openGameplayEffect,gameplayEffectFolder;
     std::string openAnimation;
+    std::string openRagdoll,createRagdollModel,ragdollFolder;
+    std::uint64_t activateRagdollEntity{},resetRagdollEntity{};
     bool createDecal{};
     std::string openDecal,decalFolder;
     AssetRef<DecalAsset> decalDragId;
@@ -84,6 +86,7 @@ struct BrowserActions {
     bool createGameplayEffect{false};
     std::string openGameplayEffect,gameplayEffectFolder;
     std::string openAnimation;
+    std::string openRagdoll,createRagdollModel,ragdollFolder;
     bool createDecal{};
     std::string openDecal,decalFolder;
 };

@@ -7,6 +7,7 @@
 #include <span>
 
 namespace crimson {
+struct ModelPose;
 
 struct ExtractedModel {
     EntityId id{};
@@ -23,6 +24,8 @@ struct ExtractedModel {
     MeshShading meshShading{MeshShading::UseMeshNormals};
     std::optional<PrimitiveMeshSettings> primitive;
     bool receiveDecals{true};
+    SceneModelRagdoll ragdoll;
+    std::shared_ptr<const ModelPose> physicsPose; // Transient, immutable per-Play presentation.
 };
 struct ExtractedDecal {EntityId id{};Mat4 world{};SceneDecal decal;bool visible{true};};
 struct ExtractedParticle {

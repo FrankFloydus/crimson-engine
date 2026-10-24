@@ -6,6 +6,9 @@
 #include "EntityAttributes.h"
 #include "EntityEffects.h"
 #include "TraceVisualization.h"
+#include "assets/RagdollAsset.h"
+#include "assets/ModelAnimation.h"
+#include "SceneAnimations.h"
 #include "navigation/NavigationWorld.h"
 #include <functional>
 #include <chrono>
@@ -82,7 +85,35 @@ public:
                             PhysicsTraceMode = PhysicsTraceMode::Closest,
                             std::optional<TraceVisualizationSettings> visualization = {});
     const TraceVisualization& traceVisualization() const {return traceVisualization_;}
+    using RagdollQuery=std::function<std::shared_ptr<const RagdollAsset>(const std::string&)>;
+    using ModelQuery=std::function<std::shared_ptr<const ModelAsset>(const std::string&)>;
+    using AnimationQuery=std::function<std::shared_ptr<const AnimationAsset>(const std::string&)>;
+    void setRagdollDefinitions(RagdollQuery definitions,ModelQuery models,AnimationQuery animations={});
+    bool activateRagdoll(EntityId model,Vec3 impulse={},std::shared_ptr<const ModelPose> initialPose={});
+    bool resetRagdoll(EntityId model);
+    bool ragdollActive(EntityId model) const;
+    bool applyRagdollImpulse(EntityId model,Vec3 impulse,std::optional<Vec3> point={});
+    // Projects the fixed-tick Play animation clock and interpolated physics pose.
+    // Scene/Game/shadow/picking consumers share the same immutable pose.
+    void prepareRagdollPresentation(ExtractedScene&);
 private:
+    RagdollQuery ragdollDefinitions_;
+    ModelQuery ragdollModels_;
+    AnimationQuery ragdollAnimations_;
+    SceneAnimations runtimeAnimations_;
+    struct RagdollBinding {std::shared_ptr<const RagdollAsset> definition;std::shared_ptr<const ModelAsset> model;Mat4 world{};EntityId owner{};SceneModelRagdoll settings;std::string modelId;CollisionFilter collision;};
+    std::unordered_map<EntityId,RagdollBinding> ragdollBindings_;
+    struct RagdollAttempt {std::shared_ptr<const RagdollAsset> definition;std::shared_ptr<const ModelAsset> model;Mat4 world{};SceneModelAnimation animation;EntityId owner{};std::string diagnostic;SceneModelRagdoll settings;std::string modelId;std::shared_ptr<const AnimationAsset> animationDefinition;std::shared_ptr<const ModelAsset> animationSource;CollisionFilter collision;};
+    std::unordered_map<EntityId,RagdollAttempt> ragdollAutoStarted_;
+    void reconcileRagdolls();
+    void stampRagdollAnimation(RagdollAttempt&) const;
+    void advanceRagdollRuntime(double seconds,bool autoStart);
+    std::shared_ptr<const ModelPose> initialRagdollPose(EntityId,const ModelAsset&);
+    EntityId ragdollActorOwner(EntityId) const;
+    CollisionFilter ragdollCollisionFilter(EntityId actor) const;
+    bool ragdollTransformLocked(EntityId) const;
+    std::string ragdollStatus() const;
+    bool ragdollOwnsActor(EntityId) const;
     std::filesystem::path projectRoot_;
     std::unique_ptr<SceneDocument> document_;
     std::unique_ptr<PhysicsWorld> physics_;

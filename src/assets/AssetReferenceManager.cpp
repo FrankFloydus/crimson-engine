@@ -5,6 +5,7 @@
 #include "ContentStorage.h"
 #include "NavigationAgentProfile.h"
 #include "GameplayEffectIds.h"
+#include "RagdollAsset.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
@@ -57,6 +58,10 @@ bool animationIdentity(const std::filesystem::path& root,const std::string& id) 
     if(!isAssetUuid(id)||builtin(id))return false;
     try{return resolveAssetPath(root,id).extension()==".crimson-animation";}catch(...){return true;}
 }
+bool ragdollIdentity(const std::filesystem::path& root,const std::string& id) {
+    if(!isAssetUuid(id)||builtin(id))return false;
+    try{return resolveAssetPath(root,id).extension()==".crimson-ragdoll";}catch(...){return true;}
+}
 bool decalIdentity(const std::filesystem::path& root,const std::string& id) {
     if(!isAssetUuid(id)||builtin(id))return false;
     try{return resolveAssetPath(root,id).extension()==".crimson-decal";}catch(...){return true;}
@@ -74,7 +79,8 @@ AssetReferenceManager::AssetReferenceManager(std::filesystem::path root):root_(s
             if(builtin(replacement)&&!knownBuiltin(replacement))throw std::runtime_error("Replacement references an unknown built-in resource.");
             if(!replacement.empty()&&!builtin(replacement)&&!deleted_.contains(replacement))checkedManagedAssetPath(root_,replacement);replacements_.emplace(it.key(),replacement);}
         for(const auto& [id,target]:replacements_){(void)target;const auto source=managedIdentityPath(root_,id);
-            if(source&&source->extension()==".crimson-animation")resolveAnimation(id);
+            if(source&&source->extension()==".crimson-ragdoll")resolveRagdoll(id);
+        else if(source&&source->extension()==".crimson-animation")resolveAnimation(id);
             else if(source&&source->extension()==".crimson-effect")resolveGameplayEffect(id);
             else if(source&&source->extension()==".crimson-particle")resolveParticle(id);
             else if(source&&source->extension()==".crimson-decal")resolveDecal(id);
@@ -127,6 +133,9 @@ std::string AssetReferenceManager::resolveGameplayEffect(const std::string& id)c
 }
 std::string AssetReferenceManager::resolveAnimation(const std::string& id)const {
     const auto result=resolve(id);if(!result.empty()&&!animationIdentity(root_,result))throw std::runtime_error("Animation replacement has an incompatible asset kind.");return result;
+}
+std::string AssetReferenceManager::resolveRagdoll(const std::string& id)const {
+    const auto result=resolve(id);if(!result.empty()&&!ragdollIdentity(root_,result))throw std::runtime_error("Ragdoll replacement has an incompatible asset kind.");return result;
 }
 std::string AssetReferenceManager::resolveParticleMaterial(const std::string& id)const{
     const auto result=resolve(id);if(result.empty()||(result==DefaultMaterialId&&deleted_.contains(id)))return DefaultParticleMaterialId;
@@ -190,16 +199,23 @@ void AssetReferenceManager::replace(std::span<const AssetEntry> assets,const std
         if(a.kind==AssetKind::NavigationAgentProfile&&!target.empty()&&!navigationProfileIdentity(root_,target))throw std::runtime_error("Navigation Agent Profile replacement has an incompatible asset kind.");
         if(a.kind==AssetKind::GameplayEffect&&!target.empty()&&!gameplayEffectIdentity(root_,target))throw std::runtime_error("Gameplay Effect replacement has an incompatible asset kind.");
         if(a.kind==AssetKind::Animation&&!target.empty()&&!animationIdentity(root_,target))throw std::runtime_error("Animation replacement has an incompatible asset kind.");
+        if(a.kind==AssetKind::Ragdoll&&!target.empty()&&!ragdollIdentity(root_,target))throw std::runtime_error("Ragdoll replacement has an incompatible asset kind.");
+        if(a.kind==AssetKind::Ragdoll&&!target.empty()) {
+            const auto original=loadRagdollAsset(root_,a.id),replacement=loadRagdollAsset(root_,target);
+            if(original.sourceModel!=replacement.sourceModel||original.bindingSignature!=replacement.bindingSignature||original.skin!=replacement.skin)
+                throw std::runtime_error("Ragdoll replacement must use the same source model, skeleton binding and skin.");
+        }
         if(builtin(target)&&(!knownBuiltin(target)||(a.kind==AssetKind::Texture&&target!=GrayTextureId&&target!=NeutralNormalTextureId)||
             (a.kind==AssetKind::Environment&&target!=StudioEnvironmentId)||(a.kind==AssetKind::Material&&target!=DefaultMaterialId&&target!=DefaultParticleMaterialId)||
-            (a.kind==AssetKind::NavigationAgentProfile&&target!=DefaultNavigationAgentProfileId)||(a.kind==AssetKind::GameplayEffect&&target!=PlayerStartingEffectId&&target!=EnemyStartingEffectId)||a.kind==AssetKind::Model||a.kind==AssetKind::Scene||a.kind==AssetKind::Particle||a.kind==AssetKind::Animation||a.kind==AssetKind::Decal))
+            (a.kind==AssetKind::NavigationAgentProfile&&target!=DefaultNavigationAgentProfileId)||(a.kind==AssetKind::GameplayEffect&&target!=PlayerStartingEffectId&&target!=EnemyStartingEffectId)||a.kind==AssetKind::Model||a.kind==AssetKind::Scene||a.kind==AssetKind::Particle||a.kind==AssetKind::Animation||a.kind==AssetKind::Decal||a.kind==AssetKind::Ragdoll))
             throw std::runtime_error("Built-in replacement has an incompatible asset kind.");
         if(target.empty()){switch(a.kind){case AssetKind::Texture:target=GrayTextureId;break;case AssetKind::Environment:target=StudioEnvironmentId;break;case AssetKind::Material:target=DefaultMaterialId;break;case AssetKind::NavigationAgentProfile:target=DefaultNavigationAgentProfileId;break;default:break;}}
         deleted.insert(a.id);redirects[a.id]=std::move(target);
     }
     auto previousDeleted=std::move(deleted_);auto previousRedirects=std::move(replacements_);deleted_=std::move(deleted);replacements_=std::move(redirects);
     try{for(const auto& [id,target]:replacements_){(void)target;const auto source=managedIdentityPath(root_,id);
-        if(source&&source->extension()==".crimson-animation")resolveAnimation(id);
+        if(source&&source->extension()==".crimson-ragdoll")resolveRagdoll(id);
+        else if(source&&source->extension()==".crimson-animation")resolveAnimation(id);
         else if(source&&source->extension()==".crimson-effect")resolveGameplayEffect(id);
         else if(source&&source->extension()==".crimson-particle")resolveParticle(id);
             else if(source&&source->extension()==".crimson-decal")resolveDecal(id);

@@ -23,6 +23,12 @@ struct DecalInspectorContext {
     std::function<std::string(std::uint64_t)> status;
     std::function<std::optional<Mat4>(std::uint64_t)> surfaceFrame;
 };
+struct RagdollInspectorContext {
+    std::string* openAsset{};
+    std::function<bool(std::uint64_t)> active;
+    std::uint64_t* activateEntity{};
+    std::uint64_t* resetEntity{};
+};
 
 // Explicit menu actions may finish an owned panel edit before querying history.
 // Viewport gestures have different ownership and are never committed here.
@@ -33,5 +39,5 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                         std::string* openMaterial=nullptr,const NavigationInspectorContext& navigation={},
                         const std::array<std::string,32>* collisionLayerNames=nullptr,
                         const GameplayInspectorContext& gameplay={},std::string* openAnimation=nullptr,
-                        const DecalInspectorContext& decals={});
+                        const DecalInspectorContext& decals={},const RagdollInspectorContext& ragdolls={});
 } // namespace crimson

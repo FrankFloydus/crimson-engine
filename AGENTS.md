@@ -22,7 +22,7 @@ Native Windows x64 first-person action game engine and editor: C++20, MSVC, CMak
 
 ## Current implementation contracts
 
-These checkpoints describe the implementation as of 2026-10-23. Preserve them when changing the relevant system; consult the linked architecture sections for full details instead of reconstructing decisions from old checkpoints or experiments.
+These checkpoints describe the implementation as of 2026-10-24. Preserve them when changing the relevant system; consult the linked architecture sections for full details instead of reconstructing decisions from old checkpoints or experiments.
 
 ### First-person player, camera and stairs
 
@@ -31,6 +31,13 @@ These checkpoints describe the implementation as of 2026-10-23. Preserve them wh
 - The Player's real child/follow camera remains editable in the Inspector and through camera authoring. Preserve its authored offset, lens and affine basis; runtime look, tilt and stair compensation affect only the interpolated presentation camera, never saved transforms, follow settings or history. The First Person template uses a 1.65 m eye offset, 75° vertical FOV, 0.05 m near and 2048 m far planes.
 - Stair smoothing uses the complete supported vertical terrain correction, including capsule rounding and settling outside Jolt's stair helpers. Exclude continuous travel on the actual support plane, upward jumps, unsupported falls and landing ticks. Keep native Jolt `ExtendedUpdate` traversal; do not alter physical movement to disguise camera jitter. Presentation samples the critically damped return analytically between fixed ticks and cancels terrain displacement at the same interpolation fraction. Retain full accumulated compensation and the world-collision camera-clearance guard; a fixed 0.5 m offset cap reintroduces jolts on closely spaced stairs.
 - **Movement → Stair Smoothing (s)** authors `stairSmoothingTime` in [0,1], default 0.10 s. Lower is faster, higher is softer, and zero clears pending compensation immediately even without a physics tick. Positive live edits preserve current look and compensation. Camera/player identity, authored pose/profile edits, transform locks, suspension and Play teardown reset transient state. Preserve 60 Hz fixed simulation, responsive render-frame mouse look and explicit Scene/Game input ownership.
+
+### Reusable Jolt ragdolls
+
+- `assets/RagdollAsset` owns `.crimson-ragdoll` v1 and exact source-model/skin/reference-pose signatures. Up to 256 physical bodies bind distinct skin joints; parents are the nearest selected ancestors in parent-first order. Geometry/mass and child-reference joint anchors/rotations/degree limits are authored data. Generic capsule generation is a starting fit, independent of humanoid names. Empty unfinished rigs are valid. Source changes require explicit undoable per-body remapping, never silent bone reassignment; unrigged meshes remain unsupported.
+- `editor/RagdollDocument` and `tools/RagdollEditor` own independent shared File/Edit/history/save/conflict flows. Preview camera, clip/time, drop height, floor and Simulate/Pause/Reset remain transient. The isolated world uses fixed 60 Hz simulation. Left-drag ray-picks a physical body and updates a native constraint target; release/focus loss/Escape/pause/reset/source change releases it. Preserve body/joint wires, selected limits, standard navigation and document/input ownership. Canonical RagdollPreview owns targets/environment and unused views 416-429, with ordinary skins, tone mapping, application antialiasing and grid; it omits Glow/SSR/scene-color refraction capture and leaves existing numeric IDs/native terminal copies intact.
+- Optional schema-24 `SceneModelRagdoll {asset,startSimulated}` belongs to each model occurrence; absent is empty/off and loading writes nothing. Model Inspector and browser actions create/open/assign reusable assets with reference/history/deletion support. `PlaySession` activates/resets/impulses per-model ragdolls from the current animation pose and actor velocity, yielding owned actor movement/navigation. One active full ragdoll per Actor/Controller owner is supported. Source/assignment/placement/owner changes and transform locks invalidate stale bodies; Stop clears transient state. Scene/Game share the interpolated immutable skin pose and conservative bounds through existing deformation, shadow and picking consumers.
+- `PhysicsWorld` owns Jolt ragdolls, shapes, swing/twist joints, impulses, body mappings and drag constraints, and steps native dynamics once per fixed tick. Character inner collision proxies support dynamic contacts while explicit virtual-character peer/no-pushing behavior remains intact. Model-world scale must be positive uniform without shear/reflection; bone reference frames must be nonsingular/right-handed. Passive full-rig ragdolls are implemented; active pose motors, partial animation/physics blending, balance/get-up recovery, general dynamic Collider authoring and animated triangle-mesh collision remain separate slices.
 
 ### Renderer backends and shader publication
 
@@ -97,6 +104,7 @@ Run from this project root in PowerShell. `Build.cmd` initializes MSVC x64; use 
 | -------------------------------------------------------------- | ------------------------------------------------------------- |
 | Incremental Release build                                      | `.\Build.cmd Release`                                         |
 | Build and run focused CTest checks                             | `.\Build.cmd Release test`                                    |
+| Isolated ragdoll asset/document/physics proof (no application link) | `.\Build.cmd Release ragdoll-proof`                           |
 | Isolated decal solver/source/cache proof (no application link) | `.\Build.cmd Release decal-proof`                             |
 | Decal host translation-unit checks (no application link)       | `.\Build.cmd Release decal-compile-proof`                     |
 | Focused decal CPU integration checks (no application link)     | `.\Build.cmd Release decal-host-proof`                        |
@@ -130,6 +138,7 @@ Select existing focused checks for the changed contract after the integration bu
 | Bundle resource dependencies, browser paths and deletion policy | `asset_resource_core`, `asset_browser_core`, `asset_browser_path_core`, `asset_library_deletion_core`, `import_identity_core` |
 | Entity selection, parenting and scene transactions | `scene_core`, `scene_gameplay_core`, `scene_component_ui_core`, `scene_extraction_core`; focused `player_parenting_render_core`/DX11 counterpart when rendering is affected |
 | First-person input, motor, camera or stair presentation | `fps_controller_core`, `physics_core`, `play_runtime_core`, `game_input_core`, `game_view_input_core`, `camera_authoring_core`, `camera_pilot_core`; add `scene_gameplay_core` and `scene_component_ui_core` for authored controls |
+| Ragdoll authoring, bodies, runtime or preview | `ragdoll_asset_core`, `ragdoll_document_core`, `ragdoll_physics_core`, `ragdoll_runtime_core`, `ragdoll_scene_core`, `ragdoll_library_core`, `ragdoll_preview_plan_core`; retain `physics_core` and `fps_controller_core` for character contacts |
 | Backend selection, shaders, GI/AO/fog/tone mapping | `app_options_core`, `editor_preferences_core`, `shader_preflight_core`, `render_pass_plan_core`, `ssgi_core`, `environment_presentation_core`, `tone_mapping_core`; relevant `ssgi_render_core`, `ssao_render_core`, `fog_background_render_core`/DX11 counterparts when GPU behavior changes |
 
 ## Source layout

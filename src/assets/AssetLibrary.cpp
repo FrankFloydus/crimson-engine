@@ -323,7 +323,7 @@ void discoverContentFiles(const std::filesystem::path& root) {
         }
         if(!entry.is_regular_file()||indexed.contains(utf8(std::filesystem::weakly_canonical(entry.path()))))continue;
         const auto extension=entry.path().extension();
-        if(extension==".crimson-material"||extension==".crimson-particle"||extension==".crimson-decal"||extension==".crimson-agent-profile"||extension==".crimson-effect"||extension==".crimson-animation"||extension==".crimson-scene") {
+        if(extension==".crimson-material"||extension==".crimson-particle"||extension==".crimson-decal"||extension==".crimson-agent-profile"||extension==".crimson-effect"||extension==".crimson-animation"||extension==".crimson-ragdoll"||extension==".crimson-scene") {
             std::ifstream input(entry.path());const auto data=nlohmann::json::parse(input);
             auto id=data.value("id",std::string{});
             if(id.empty())id="assets/scenes/"+utf8(entry.path().filename());
@@ -424,6 +424,7 @@ AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources
     refreshNavigationAgentProfiles();
     refreshGameplayEffects();
     refreshAnimations();
+    refreshRagdolls();
     storageRevision_=contentStorageRevision(projectRoot_);
     for(const auto& entry:storedAssetPaths(projectRoot_))storageLocations_.emplace(entry.id,entry.file);
 }
@@ -616,6 +617,57 @@ std::shared_ptr<const AnimationAsset> AssetLibrary::copyAnimation(const std::str
     const auto original=findAnimation(id);if(!original)throw std::runtime_error("Animation is unavailable.");
     auto definition=std::make_shared<const AnimationAsset>(crimson::copyAnimationAsset(projectRoot_,*original,name));
     publishAnimation(definition);noteAssetWrite(definition->id);refreshAnimations();select(definition->id);return definition;
+}
+void AssetLibrary::refreshRagdolls() {
+    std::erase_if(catalog_,[](const auto& entry){return entry.kind==AssetKind::Ragdoll;});
+    std::unordered_set<std::string> present;
+    for(const auto& file:storedAssetPaths(projectRoot_))if(file.file.extension()==".crimson-ragdoll"&&!references_.deleted(file.id)) {
+        present.insert(file.id);auto& entry=ragdolls_[file.id];
+        if(file.id!=ragdollDocumentId_||!entry.definition)try {
+            auto definition=std::make_shared<const RagdollAsset>(loadRagdollAsset(projectRoot_,file.id));
+            if(!entry.definition||*entry.definition!=*definition){entry.definition=std::move(definition);entry.revision=nextRagdollRevision_++;}
+            entry.diagnostic.clear();
+        }catch(const std::exception& error){entry.diagnostic=error.what();}
+        catalog_.push_back({file.id,entry.definition?entry.definition->name:utf8(file.file.stem()),AssetKind::Ragdoll});
+    }
+    std::erase_if(ragdolls_,[&](const auto& entry){return !present.contains(entry.first)&&entry.first!=ragdollDocumentId_;});
+    ++catalogRevision_;
+}
+std::shared_ptr<const RagdollAsset> AssetLibrary::findRagdoll(const std::string& id) const {
+    try {const auto found=ragdolls_.find(references_.resolveRagdoll(id));return found==ragdolls_.end()||!found->second.diagnostic.empty()?nullptr:found->second.definition;}
+    catch(...){return {};}
+}
+std::uint64_t AssetLibrary::ragdollRevision(const std::string& id) const {
+    try {const auto found=ragdolls_.find(references_.resolveRagdoll(id));return found==ragdolls_.end()?0:found->second.revision;}
+    catch(...){return 0;}
+}
+std::string AssetLibrary::ragdollDiagnostic(const std::string& id) const {
+    try {const auto found=ragdolls_.find(references_.resolveRagdoll(id));return found==ragdolls_.end()?"Ragdoll unavailable: "+id:found->second.diagnostic;}
+    catch(const std::exception& error){return error.what();}
+}
+void AssetLibrary::publishRagdoll(std::shared_ptr<const RagdollAsset> ragdoll) {
+    if(!ragdoll)return;validateRagdollAsset(*ragdoll);
+    if(isEngineAssetId(ragdoll->id)||references_.deleted(ragdoll->id))throw std::runtime_error("Protected or deleted Ragdoll cannot be published.");
+    auto& entry=ragdolls_[ragdoll->id];
+    if(entry.definition&&*entry.definition==*ragdoll&&entry.diagnostic.empty())return;
+    if(!entry.definition||*entry.definition!=*ragdoll){entry.definition=std::move(ragdoll);entry.revision=nextRagdollRevision_++;}
+    entry.diagnostic.clear();
+    const auto catalog=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& value){return value.id==entry.definition->id;});
+    if(catalog==catalog_.end())catalog_.push_back({entry.definition->id,entry.definition->name,AssetKind::Ragdoll});else catalog->name=entry.definition->name;
+    ++catalogRevision_;
+}
+std::shared_ptr<const RagdollAsset> AssetLibrary::copyRagdoll(const std::string& id,const std::string& name) {
+    const auto original=findRagdoll(id);if(!original)throw std::runtime_error("Ragdoll is unavailable.");
+    auto definition=std::make_shared<const RagdollAsset>(crimson::copyRagdollAsset(projectRoot_,*original,name));
+    publishRagdoll(definition);noteAssetWrite(definition->id);refreshRagdolls();select(definition->id);return definition;
+}
+std::shared_ptr<const RagdollAsset> AssetLibrary::createRagdoll(const std::string& modelId,const std::string& name,const std::string& folder) {
+    if(!folder.empty()&&!browserCatalog().writableFolder(folder))throw std::runtime_error("Choose a writable Content folder for the Ragdoll.");
+    const auto model=findModel(modelId);if(!model)throw std::runtime_error("Ragdoll source model is unavailable or is still loading.");
+    auto definition=std::make_shared<const RagdollAsset>(makeRagdollAsset(*model,0,name));
+    const auto destination=folder.empty()?std::filesystem::path{}:browserCatalog().folderPath(folder)/fromUtf8(definition->id+".crimson-ragdoll");
+    saveRagdollAsset(projectRoot_,*definition,destination);publishRagdoll(definition);noteAssetWrite(definition->id);refreshRagdolls();
+    select(definition->id);return definition;
 }
 std::shared_ptr<const ParticleEffectAsset> AssetLibrary::findParticle(const std::string& id) const {
     const auto resolved=references_.resolveParticle(id);
@@ -1015,6 +1067,7 @@ void AssetLibrary::onFileChanged(const std::filesystem::path& changed) {
     if(changed.extension()==".crimson-agent-profile")refreshNavigationAgentProfiles();
     if(changed.extension()==".crimson-effect")refreshGameplayEffects();
     if(changed.extension()==".crimson-animation")refreshAnimations();
+    if(changed.extension()==".crimson-ragdoll")refreshRagdolls();
 }
 std::uint64_t AssetLibrary::materialShaderRevision()const {return graphPrograms_?graphPrograms_->revision():0;}
 std::vector<std::filesystem::path> AssetLibrary::materialShaderDependencies() const {return graphPrograms_?graphPrograms_->sourceDependencies():std::vector<std::filesystem::path>{};}
@@ -2212,6 +2265,16 @@ size_t replaceDeletedAnimations(SceneSnapshot& snapshot,const AssetReferenceMana
     }
     Scene::validate(snapshot.records,snapshot.properties);return changed;
 }
+size_t replaceDeletedRagdolls(SceneSnapshot& snapshot,const AssetReferenceManager& previous,const AssetReferenceManager& next,
+    const std::unordered_set<std::string>& deletedRagdolls) {
+    size_t changed{};
+    for(auto& record:snapshot.records)if(record.model&&!record.modelRagdoll.asset.empty()&&
+        deletedRagdolls.contains(previous.resolveRagdoll(record.modelRagdoll.asset.id))) {
+        const auto replacement=next.resolveRagdoll(record.modelRagdoll.asset.id);
+        if(record.modelRagdoll.asset.id!=replacement){record.modelRagdoll.asset.id=replacement;if(replacement.empty())record.modelRagdoll.startSimulated=false;++changed;}
+    }
+    Scene::validate(snapshot.records,snapshot.properties);return changed;
+}
 }
 void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     std::vector<AssetUsage> usages;
@@ -2237,6 +2300,12 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     }
     for(const auto& id:animationDocumentReferences_)if(!id.empty())usages.push_back({id,animationDocumentId_,"Open animation","Animation source model",true,false});
     for(const auto& id:animationDocumentHistory_)if(!id.empty())usages.push_back({id,animationDocumentId_,"Open animation","Animation source model undo / redo history",true,true});
+    for(const auto& entry:catalog_)if(entry.kind==AssetKind::Ragdoll) {
+        const auto ragdoll=loadRagdollAsset(projectRoot_,entry.id);
+        usages.push_back({ragdoll.sourceModel.id,ragdoll.id,ragdoll.name,"Ragdoll source model"});
+    }
+    for(const auto& id:ragdollDocumentReferences_)if(!id.empty())usages.push_back({id,ragdollDocumentId_,"Open ragdoll","Ragdoll source model",true,false});
+    for(const auto& id:ragdollDocumentHistory_)if(!id.empty())usages.push_back({id,ragdollDocumentId_,"Open ragdoll","Ragdoll source model undo / redo history",true,true});
     for(const auto& id:particleDocumentReferences_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,particleDocumentId_,"Open particle effect","Particle material",true,false});
     for(const auto& id:particleDocumentHistory_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,particleDocumentId_,"Open particle effect","Particle material undo / redo history",true,true});
     for(const auto& id:materialDocumentReferences_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,materialDocumentId_,"Open material","Material texture",true,false});
@@ -2266,6 +2335,7 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     const auto addScene=[&](const std::vector<EntityRecord>& records,const std::string& id,const std::string& name,bool isActive){
         for(const auto& record:records){if(record.model)usages.push_back({record.model->id,id,name,record.name,isActive,false});
             if(record.model&&!record.modelAnimation.asset.empty())usages.push_back({record.modelAnimation.asset.id,id,name,record.name+" / Animation",isActive,false});
+            if(record.model&&!record.modelRagdoll.asset.empty())usages.push_back({record.modelRagdoll.asset.id,id,name,record.name+" / Ragdoll",isActive,false});
             if(record.effects)for(const auto& effect:record.effects->starting)usages.push_back({effect.id,id,name,record.name+" / Starting Effect",isActive,false});
             if(record.controller)usages.push_back({record.controller->profile.id,id,name,record.name+" / Navigation Agent Profile",isActive,false});
             if(record.navigationVolume)for(const auto& profile:record.navigationVolume->profiles)usages.push_back({profile.id,id,name,record.name+" / Supported Agent Profile",isActive,false});
@@ -2285,6 +2355,7 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     if(active)for(const auto& id:active->historicalNavigationAgentProfileReferences())usages.push_back({id,active->assetId(),active->displayName(),"Navigation profile undo / redo history",true,true});
     if(active)for(const auto& id:active->historicalGameplayEffectReferences())usages.push_back({id,active->assetId(),active->displayName(),"Starting effects undo / redo history",true,true});
     if(active)for(const auto& id:active->historicalAnimationReferences())usages.push_back({id,active->assetId(),active->displayName(),"Animation undo / redo history",true,true});
+    if(active)for(const auto& id:active->historicalRagdollReferences())usages.push_back({id,active->assetId(),active->displayName(),"Ragdoll undo / redo history",true,true});
     if(active)for(const auto& id:active->historicalDecalReferences())usages.push_back({id,active->assetId(),active->displayName(),"Decal undo / redo history",true,true});
     for(const auto& file:{"material.json","environment.json","preview.json","editor-session.json"}){
         const auto source=resolveAssetPath(projectRoot_,"assets/"+std::string(file));if(!std::filesystem::exists(source))continue;
@@ -2368,16 +2439,22 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
     try{(void)currentReferencePolicy(projectRoot_,references_);auto& browser=browserCatalog();std::unordered_set<std::string> expanded;
         for(const auto& id:ids){if(!browser.contains(id))throw std::runtime_error("A selected asset no longer exists.");expanded.insert(id);
             if(browser.isFolder(id))for(const auto& child:browser.descendants(id))expanded.insert(child);}
-        std::unordered_set<std::string> models,particles,materials,profiles,effects,animations,decals;
+        std::unordered_set<std::string> models,particles,materials,profiles,effects,animations,decals,ragdolls;
         for(const auto& id:expanded){if(browser.isFolder(id)){plan.folderIds.push_back(id);continue;}
             const auto entry=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& a){return a.id==id;});if(entry==catalog_.end())throw std::runtime_error("Asset deletion target is unavailable.");
-            plan.assetIds.push_back(id);if(entry->kind==AssetKind::Model)models.insert(id);if(entry->kind==AssetKind::Particle)particles.insert(id);if(entry->kind==AssetKind::Material)materials.insert(id);if(entry->kind==AssetKind::NavigationAgentProfile)profiles.insert(id);if(entry->kind==AssetKind::GameplayEffect)effects.insert(id);if(entry->kind==AssetKind::Animation)animations.insert(id);if(entry->kind==AssetKind::Decal)decals.insert(id);}
+            plan.assetIds.push_back(id);if(entry->kind==AssetKind::Model)models.insert(id);if(entry->kind==AssetKind::Particle)particles.insert(id);if(entry->kind==AssetKind::Material)materials.insert(id);if(entry->kind==AssetKind::NavigationAgentProfile)profiles.insert(id);if(entry->kind==AssetKind::GameplayEffect)effects.insert(id);if(entry->kind==AssetKind::Animation)animations.insert(id);if(entry->kind==AssetKind::Decal)decals.insert(id);if(entry->kind==AssetKind::Ragdoll)ragdolls.insert(id);}
         for(const auto& entry:catalog_)if(entry.kind==AssetKind::Animation&&!expanded.contains(entry.id)) {
             const auto animation=loadAnimationAsset(projectRoot_,entry.id);
             if(models.contains(animation.sourceModel.id))throw std::runtime_error("Delete the model's Animation assets in the same batch to preserve their imported source tracks.");
         }
         for(const auto& id:animationDocumentReferences_)if(models.contains(id))throw std::runtime_error("Close the Animation document before deleting its source model.");
         for(const auto& id:animationDocumentHistory_)if(models.contains(id))throw std::runtime_error("Close the Animation document before deleting a source model retained by its history.");
+        for(const auto& entry:catalog_)if(entry.kind==AssetKind::Ragdoll&&!expanded.contains(entry.id)) {
+            const auto ragdoll=loadRagdollAsset(projectRoot_,entry.id);
+            if(models.contains(ragdoll.sourceModel.id))throw std::runtime_error("Delete the model's Ragdoll assets in the same batch to preserve their skeleton source binding.");
+        }
+        for(const auto& id:ragdollDocumentReferences_)if(models.contains(id))throw std::runtime_error("Close the Ragdoll document before deleting its source model.");
+        for(const auto& id:ragdollDocumentHistory_)if(models.contains(id))throw std::runtime_error("Close the Ragdoll document before deleting a source model retained by its history.");
         refreshReferenceIndex(active);
         std::unordered_set<std::string> usableOwners;
         for(const auto& entry:catalog_)if(std::filesystem::is_regular_file(resolveAssetPath(projectRoot_,entry.id)))usableOwners.insert(entry.id);
@@ -2388,7 +2465,7 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
         for(const auto& id:plan.assetIds){const auto users=references_.users(id);plan.usages.insert(plan.usages.end(),users.begin(),users.end());
             const auto authored=references_.authoredUsers(id,plan.assetIds);for(const auto& usage:authored)if(usableOwners.contains(usage.ownerId))plan.warningUsages.push_back(usage);}
         for(const auto& scene:scenes){size_t count=0;for(const auto& entity:scene.records)
-            if((entity.model&&models.contains(references_.resolve(entity.model->id)))||(entity.model&&!entity.modelAnimation.asset.empty()&&animations.contains(references_.resolveAnimation(entity.modelAnimation.asset.id)))||(entity.collider&&!entity.collider->source.empty()&&models.contains(references_.resolve(entity.collider->source.id)))||(entity.particle&&!entity.particle->empty()&&particles.contains(references_.resolveParticle(entity.particle->id)))||(entity.decal&&!entity.decal->asset.empty()&&decals.contains(references_.resolveDecal(entity.decal->asset.id)))||
+            if((entity.model&&models.contains(references_.resolve(entity.model->id)))||(entity.model&&!entity.modelAnimation.asset.empty()&&animations.contains(references_.resolveAnimation(entity.modelAnimation.asset.id)))||(entity.model&&!entity.modelRagdoll.asset.empty()&&ragdolls.contains(references_.resolveRagdoll(entity.modelRagdoll.asset.id)))||(entity.collider&&!entity.collider->source.empty()&&models.contains(references_.resolve(entity.collider->source.id)))||(entity.particle&&!entity.particle->empty()&&particles.contains(references_.resolveParticle(entity.particle->id)))||(entity.decal&&!entity.decal->asset.empty()&&decals.contains(references_.resolveDecal(entity.decal->asset.id)))||
                 (entity.effects&&std::any_of(entity.effects->starting.begin(),entity.effects->starting.end(),[&](const auto& effect){return effects.contains(references_.resolveGameplayEffect(effect.id));}))||
                 (entity.controller&&profiles.contains(references_.resolveNavigationAgentProfile(entity.controller->profile.id)))||
                 (entity.navigationVolume&&std::any_of(entity.navigationVolume->profiles.begin(),entity.navigationVolume->profiles.end(),[&](const auto& profile){return profiles.contains(references_.resolveNavigationAgentProfile(profile.id));}))||
@@ -2406,6 +2483,8 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
         if(active)for(const auto& id:active->historicalNavigationAgentProfileReferences())if(profiles.contains(references_.resolveNavigationAgentProfile(id)))plan.clearsActiveHistory=true;
         if(active)for(const auto& id:active->historicalGameplayEffectReferences())if(effects.contains(references_.resolveGameplayEffect(id)))plan.clearsActiveHistory=true;
         if(active)for(const auto& id:active->historicalAnimationReferences())if(animations.contains(references_.resolveAnimation(id)))plan.clearsActiveHistory=true;
+        if(active){for(const auto& entity:active->scene().records())if(entity.model&&!entity.modelRagdoll.asset.empty()&&ragdolls.contains(references_.resolveRagdoll(entity.modelRagdoll.asset.id)))plan.clearsActiveHistory=true;
+            for(const auto& id:active->historicalRagdollReferences())if(ragdolls.contains(references_.resolveRagdoll(id)))plan.clearsActiveHistory=true;}
         std::sort(plan.assetIds.begin(),plan.assetIds.end());std::sort(plan.folderIds.begin(),plan.folderIds.end());
         plan.revision=deletionRevision(projectRoot_,references_,catalogRevision_,active);
     }catch(const std::exception& e){plan.error=e.what();}return plan;
@@ -2421,6 +2500,7 @@ std::vector<AssetEntry> AssetLibrary::fallbackCandidates(const std::string& id)c
     for(const auto& entry:catalog_)if(entry.id!=id&&(entry.kind==source->kind||(source->kind==AssetKind::Environment&&entry.kind==AssetKind::Texture))){
         if(source->kind==AssetKind::Material){const auto material=findMaterial(entry.id);if(!material||(sprite&&!particleMaterialCompatible(*material))||(model&&!modelMaterialCompatible(*material))||(decal?!decalMaterialCompatible(*material):!modelMaterialCompatible(*material)))continue;}
         if(source->kind==AssetKind::Animation){const auto original=findAnimation(id),candidate=findAnimation(entry.id);if(!original||!candidate||original->bindingSignature!=candidate->bindingSignature)continue;}
+        if(source->kind==AssetKind::Ragdoll){const auto original=findRagdoll(id),candidate=findRagdoll(entry.id);if(!original||!candidate||original->sourceModel!=candidate->sourceModel||original->bindingSignature!=candidate->bindingSignature||original->skin!=candidate->skin)continue;}
         result.push_back(entry);}
     return result;
 }
@@ -2452,15 +2532,16 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         if(pendingDeletion_&&(pendingDeletion_->active!=active||(active&&pendingDeletion_->documentGeneration!=active->documentGeneration())||
             pendingDeletion_->plan.revision!=plan.revision||pendingDeletion_->plan.assetIds!=plan.assetIds||pendingDeletion_->replacements!=replacements))
             throw std::runtime_error("The document or deletion choices changed while validation was pending.");
-        std::vector<AssetEntry> deleted;std::unordered_set<std::string> deletedModels,deletedParticles,deletedMaterials,deletedProfiles,deletedEffects,deletedAnimations,deletedDecals,deletedIds(plan.assetIds.begin(),plan.assetIds.end());
+        std::vector<AssetEntry> deleted;std::unordered_set<std::string> deletedModels,deletedParticles,deletedMaterials,deletedProfiles,deletedEffects,deletedAnimations,deletedDecals,deletedRagdolls,deletedIds(plan.assetIds.begin(),plan.assetIds.end());
         if(!decalDocumentId_.empty()&&deletedIds.contains(decalDocumentId_))throw std::runtime_error("Close the decal document before deleting its asset.");
         if(!particleDocumentId_.empty()&&deletedIds.contains(particleDocumentId_))throw std::runtime_error("Close the particle document before deleting its asset.");
         if(!materialDocumentId_.empty()&&deletedIds.contains(materialDocumentId_))throw std::runtime_error("Close the material document before deleting its asset.");
         if(!navigationProfileDocumentId_.empty()&&deletedIds.contains(navigationProfileDocumentId_))throw std::runtime_error("Close the Navigation Agent Profile document before deleting its asset.");
         if(!gameplayEffectDocumentId_.empty()&&deletedIds.contains(gameplayEffectDocumentId_))throw std::runtime_error("Close the Gameplay Effect document before deleting its asset.");
         if(!animationDocumentId_.empty()&&deletedIds.contains(animationDocumentId_))throw std::runtime_error("Close the Animation document before deleting its asset.");
+        if(!ragdollDocumentId_.empty()&&deletedIds.contains(ragdollDocumentId_))throw std::runtime_error("Close the Ragdoll document before deleting its asset.");
         for(const auto& id:plan.assetIds){const auto entry=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& a){return a.id==id;});if(entry==catalog_.end())throw std::runtime_error("Deletion target disappeared.");
-            deleted.push_back(*entry);if(entry->kind==AssetKind::Model)deletedModels.insert(id);if(entry->kind==AssetKind::Particle)deletedParticles.insert(id);if(entry->kind==AssetKind::Material)deletedMaterials.insert(id);if(entry->kind==AssetKind::NavigationAgentProfile)deletedProfiles.insert(id);if(entry->kind==AssetKind::GameplayEffect)deletedEffects.insert(id);if(entry->kind==AssetKind::Animation)deletedAnimations.insert(id);if(entry->kind==AssetKind::Decal)deletedDecals.insert(id);
+            deleted.push_back(*entry);if(entry->kind==AssetKind::Model)deletedModels.insert(id);if(entry->kind==AssetKind::Particle)deletedParticles.insert(id);if(entry->kind==AssetKind::Material)deletedMaterials.insert(id);if(entry->kind==AssetKind::NavigationAgentProfile)deletedProfiles.insert(id);if(entry->kind==AssetKind::GameplayEffect)deletedEffects.insert(id);if(entry->kind==AssetKind::Animation)deletedAnimations.insert(id);if(entry->kind==AssetKind::Decal)deletedDecals.insert(id);if(entry->kind==AssetKind::Ragdoll)deletedRagdolls.insert(id);
             if(const auto chosen=replacements.find(id);chosen!=replacements.end()&&!chosen->second.empty()){
                 const auto options=fallbackCandidates(id);if(std::none_of(options.begin(),options.end(),[&](const auto& option){return option.id==chosen->second;}))throw std::runtime_error("Fallback has an incompatible asset type.");}}
         for(const auto& entry:catalog_)if(entry.kind==AssetKind::Animation&&!deletedIds.contains(entry.id)) {
@@ -2469,10 +2550,17 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         }
         for(const auto& id:animationDocumentReferences_)if(deletedModels.contains(id))throw std::runtime_error("The open Animation document still requires this source model.");
         for(const auto& id:animationDocumentHistory_)if(deletedModels.contains(id))throw std::runtime_error("Animation history still requires this source model.");
+        for(const auto& entry:catalog_)if(entry.kind==AssetKind::Ragdoll&&!deletedIds.contains(entry.id)) {
+            const auto definition=loadRagdollAsset(projectRoot_,entry.id);
+            if(deletedModels.contains(definition.sourceModel.id))throw std::runtime_error("A surviving Ragdoll still requires this immutable source model.");
+        }
+        for(const auto& id:ragdollDocumentReferences_)if(deletedModels.contains(id))throw std::runtime_error("The open Ragdoll document still requires this source model.");
+        for(const auto& id:ragdollDocumentHistory_)if(deletedModels.contains(id))throw std::runtime_error("Ragdoll history still requires this source model.");
         auto nextReferences=references_;nextReferences.replace(deleted,replacements);
         for(const auto& id:deletedProfiles)(void)loadNavigationAgentProfile(projectRoot_,nextReferences.resolveNavigationAgentProfile(id));
         for(const auto& id:deletedEffects){const auto target=nextReferences.resolveGameplayEffect(id);if(!target.empty())(void)loadGameplayEffectAsset(projectRoot_,target);}
         for(const auto& id:deletedAnimations){const auto target=nextReferences.resolveAnimation(id);if(!target.empty())(void)loadAnimationAsset(projectRoot_,target);}
+        for(const auto& id:deletedRagdolls){const auto target=nextReferences.resolveRagdoll(id);if(!target.empty())(void)loadRagdollAsset(projectRoot_,target);}
         std::vector<std::shared_ptr<const ModelAsset>> nextModels;
         std::vector<AssetEntry> surviving;for(const auto& entry:catalog_)if(entry.kind==AssetKind::Model&&!deletedModels.contains(entry.id))surviving.push_back(entry);
         for(const auto& id:retainedQuaderModels_)if(!references_.deleted(id)&&!deletedModels.contains(id))surviving.push_back({id,id,AssetKind::Model});
@@ -2564,8 +2652,9 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
             const auto profiles=replaceDeletedNavigationProfiles(scene,references_,nextReferences,deletedProfiles);
             const auto effects=replaceDeletedGameplayEffects(scene,references_,nextReferences,deletedEffects);
             const auto animations=replaceDeletedAnimations(scene,references_,nextReferences,deletedAnimations);
+            const auto ragdolls=replaceDeletedRagdolls(scene,references_,nextReferences,deletedRagdolls);
             const auto decals=replaceDeletedDecals(scene,references_,nextReferences,deletedDecals);
-            if(removed||replaced||materials||profiles||effects||animations||decals) {
+            if(removed||replaced||materials||profiles||effects||animations||decals||ragdolls) {
                 auto persistence=prepareScenePersistence(projectRoot_,scene.id,scene);
                 changes.insert(changes.end(),std::make_move_iterator(persistence.files.begin()),std::make_move_iterator(persistence.files.end()));
                 profileRegistrations.insert(profileRegistrations.end(),persistence.registrations.begin(),persistence.registrations.end());
@@ -2579,6 +2668,7 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
             activeChanged=replaceDeletedNavigationProfiles(activeCandidate,references_,nextReferences,deletedProfiles)!=0||activeChanged;
             activeChanged=replaceDeletedGameplayEffects(activeCandidate,references_,nextReferences,deletedEffects)!=0||activeChanged;
             activeChanged=replaceDeletedAnimations(activeCandidate,references_,nextReferences,deletedAnimations)!=0||activeChanged;
+            activeChanged=replaceDeletedRagdolls(activeCandidate,references_,nextReferences,deletedRagdolls)!=0||activeChanged;
             activeChanged=replaceDeletedDecals(activeCandidate,references_,nextReferences,deletedDecals)!=0||activeChanged;
             for(const auto& id:active->historicalDecalReferences())if(deletedDecals.contains(references_.resolveDecal(id)))clearHistory=true;
             for(const auto& id:active->historicalMaterialReferences())if(deletedMaterials.contains(references_.resolveMaterial(id)))clearHistory=true;
@@ -2587,6 +2677,7 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         if(active&&!activeDeleted)for(const auto& id:active->historicalNavigationAgentProfileReferences())if(deletedProfiles.contains(references_.resolveNavigationAgentProfile(id)))clearHistory=true;
         if(active&&!activeDeleted)for(const auto& id:active->historicalGameplayEffectReferences())if(deletedEffects.contains(references_.resolveGameplayEffect(id)))clearHistory=true;
         if(active&&!activeDeleted)for(const auto& id:active->historicalAnimationReferences())if(deletedAnimations.contains(references_.resolveAnimation(id)))clearHistory=true;
+        if(active&&!activeDeleted)for(const auto& id:active->historicalRagdollReferences())if(deletedRagdolls.contains(references_.resolveRagdoll(id)))clearHistory=true;
         std::vector<std::filesystem::path> removedDirectories,selectedDirectories;
         removedDirectories.insert(removedDirectories.end(),bundleRemoval.emptyDirectories.begin(),bundleRemoval.emptyDirectories.end());
         const auto contentRoot=std::filesystem::weakly_canonical(projectRoot_/"Content");
@@ -2660,6 +2751,7 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         std::erase_if(navigationProfiles_,[&](const auto& entry){return deletedIds.contains(entry.first);});
         std::erase_if(gameplayEffects_,[&](const auto& entry){return deletedIds.contains(entry.first);});
         std::erase_if(animations_,[&](const auto& entry){return deletedIds.contains(entry.first);});
+        std::erase_if(ragdolls_,[&](const auto& entry){return deletedIds.contains(entry.first);});
         if(!profileRegistrations.empty()){refreshNavigationAgentProfiles();refreshGameplayEffects();}
         std::erase_if(preparedParticleMaterials_,[&](const auto& entry){return deletedIds.contains(entry.first);});++catalogRevision_;browserRevision_=0;
         for(auto it=assets_.begin();it!=assets_.end();)if(deletedIds.contains(it->id)){retiredTextures_.push_back(std::move(*it));it=assets_.erase(it);}else ++it;

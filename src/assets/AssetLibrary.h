@@ -12,6 +12,7 @@
 #include "NavigationAgentProfile.h"
 #include "GameplayEffectAsset.h"
 #include "AnimationAsset.h"
+#include "RagdollAsset.h"
 #include "AssetReferenceManager.h"
 #include "resources/ResourceManager.h"
 #include "resources/Paths.h"
@@ -167,6 +168,18 @@ public:
         if(active!=animationDocumentReferences_||history!=animationDocumentHistory_)++catalogRevision_;
         animationDocumentReferences_=std::move(active);animationDocumentHistory_=std::move(history);
     }
+    std::shared_ptr<const RagdollAsset> findRagdoll(const std::string& id) const;
+    std::uint64_t ragdollRevision(const std::string& id) const;
+    std::string ragdollDiagnostic(const std::string& id) const;
+    void publishRagdoll(std::shared_ptr<const RagdollAsset>);
+    void refreshRagdolls();
+    std::shared_ptr<const RagdollAsset> createRagdoll(const std::string& modelId,const std::string& name={},const std::string& folder={});
+    std::shared_ptr<const RagdollAsset> copyRagdoll(const std::string& id,const std::string& name={});
+    void protectRagdollDocument(std::string id){ragdollDocumentId_=std::move(id);}
+    void setRagdollDocumentReferences(std::vector<std::string> active,std::vector<std::string> history) {
+        if(active!=ragdollDocumentReferences_||history!=ragdollDocumentHistory_)++catalogRevision_;
+        ragdollDocumentReferences_=std::move(active);ragdollDocumentHistory_=std::move(history);
+    }
     ResourceManager* resources() const { return resources_; }
     void setMaterialGraphPrograms(MaterialGraphPrograms* programs) { graphPrograms_=programs; }
     std::vector<std::filesystem::path> materialShaderDependencies() const;
@@ -263,6 +276,11 @@ private:
     std::uint64_t nextAnimationRevision_{1};
     std::string animationDocumentId_;
     std::vector<std::string> animationDocumentReferences_,animationDocumentHistory_;
+    struct RagdollVersion {std::shared_ptr<const RagdollAsset> definition;std::uint64_t revision{};std::string diagnostic;};
+    std::unordered_map<std::string,RagdollVersion> ragdolls_;
+    std::uint64_t nextRagdollRevision_{1};
+    std::string ragdollDocumentId_;
+    std::vector<std::string> ragdollDocumentReferences_,ragdollDocumentHistory_;
     struct MaterialVersion { std::shared_ptr<const MaterialAsset> definition;std::uint64_t revision{};std::string diagnostic; };
     std::unordered_map<std::string,MaterialVersion> authoredMaterials_;
     struct MaterialCompatibility {std::weak_ptr<const MaterialAsset> source;bool compatible{};};

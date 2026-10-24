@@ -60,6 +60,7 @@ bool matchesFilter(AssetKind kind,BrowserAssetFilter filter) {
     case BrowserAssetFilter::GameplayEffects:return kind==AssetKind::GameplayEffect;
     case BrowserAssetFilter::Animations:return kind==AssetKind::Animation;
     case BrowserAssetFilter::Decals:return kind==AssetKind::Decal;
+    case BrowserAssetFilter::Ragdolls:return kind==AssetKind::Ragdoll;
     }
     return false;
 }

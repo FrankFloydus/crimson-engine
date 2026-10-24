@@ -19,6 +19,7 @@ class NavigationAgentProfileEditor;
 class CollisionLayersEditor;
 class GameplayEffectEditor;
 class AnimationEditor;
+class RagdollEditor;
 class DecalEditor;
 struct PanelVisibility { bool outliner{true}, inspector{true}, assetBrowser{true}, game{false}; };
 struct OverlayVisibility { bool collisions{true}, grid{true}, transformGizmo{true},navigationMesh{true}; };
@@ -28,7 +29,7 @@ class SceneEditor {
 public:
     EditorFrame draw(SceneDocument&, SceneSettings&, AssetLibrary&, Renderer&, SDL_Window*,
                      bool navigationActive, uint32_t bgfxFrame, bool quitRequested, ParticleEditor&, MaterialEditor&,NavigationAgentProfileEditor&,CollisionLayersEditor&,GameplayEffectEditor&,AnimationEditor&,DecalEditor&,
-                     const GameplayInspectorContext& gameplay={}, profiling::CaptureController* captures=nullptr);
+                     const GameplayInspectorContext& gameplay={}, profiling::CaptureController* captures=nullptr,RagdollEditor* ragdolls=nullptr);
     void cancelInteraction(SceneDocument&, Renderer&);
     bool exitAccepted() const { return exitAccepted_; }
     const ViewportAppearance& appearance() const { return preferences_.values().appearance; }
@@ -58,6 +59,7 @@ public:
     void setDecalStatusQuery(std::function<std::string(EntityId)> query) { decalStatus_=std::move(query); }
     void setDecalPatchQuery(std::function<std::shared_ptr<const DecalPatchData>(EntityId)> query) { viewport_.setDecalPatchQuery(std::move(query)); }
     void setDecalFrameQuery(std::function<std::optional<Mat4>(EntityId)> query) { decalFrames_=query;viewport_.setDecalFrameQuery(std::move(query)); }
+    void setRagdollActiveQuery(std::function<bool(EntityId)> query){ragdollActive_=std::move(query);}
     void drawDecalPlacementPlane(const Mat4& frame,const Camera& camera,bgfx::TextureHandle texture,const Vec4& color) { viewport_.drawDecalPlacementPlane(frame,camera,texture,color); }
     void drawTraces(const Camera& camera,std::span<const TraceVisualRecord> traces) { viewport_.drawTraces(camera,traces); }
     const std::string& navigationPreviewProfile() const { return navigationPreviewProfile_; }
@@ -93,7 +95,8 @@ private:
     std::function<std::string(const std::string&)> navigationBuildStatus_;
     std::function<std::string(EntityId)> decalStatus_;
     std::function<std::optional<Mat4>(EntityId)> decalFrames_;
-    enum class CommandTarget { Scene,Particle,Material,Profile,CollisionLayers,Effect,Animation,Decal,Game };
+    std::function<bool(EntityId)> ragdollActive_;
+    enum class CommandTarget { Scene,Particle,Material,Profile,CollisionLayers,Effect,Animation,Ragdoll,Decal,Game };
     CommandTarget commandTarget_{CommandTarget::Scene};
     bool viewportBusy() const { return viewport_.interacting() || cameraGestureActive_; }
     void cancelOpen();

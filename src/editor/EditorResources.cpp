@@ -282,6 +282,7 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
     } catch (const std::exception& error) { entry.diagnostic=error.what(); entry.failed=true; return retain(entry.current); }
 }
 std::shared_ptr<const ModelPose> EditorResources::pose(const ExtractedModel& model,const std::shared_ptr<const ModelAsset>& asset) {
+    if(model.physicsPose&&asset)return model.physicsPose;
     if(!asset || (model.animation.asset.empty()&&asset->skins.empty()&&asset->animations.empty()&&std::none_of(asset->primitives.begin(),asset->primitives.end(),
         [](const auto& primitive){return !primitive.morphTargets.empty();})))return {};
     auto& entry=poses_[model.id];entry.wanted=true;

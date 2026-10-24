@@ -99,6 +99,7 @@ target_include_directories(crimson-scene PUBLIC src)
 target_link_libraries(crimson-scene PUBLIC crimson-math crimson-camera crimson-storage crimson-gameplay EnTT::EnTT nlohmann_json::nlohmann_json)
 target_compile_definitions(crimson-scene PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-scene PRIVATE /W4 /permissive- /utf-8)
+target_sources(crimson-scene PRIVATE src/assets/RagdollAsset.cpp)
 
 add_library(crimson-materials src/assets/MaterialGraph.cpp src/assets/GrungeGenerator.cpp src/assets/MaterialAsset.cpp src/editor/MaterialDocument.cpp src/editor/MaterialGraphActions.cpp src/assets/DecalAsset.cpp src/editor/DecalDocument.cpp)
 target_include_directories(crimson-materials PUBLIC src)
@@ -125,6 +126,7 @@ target_link_libraries(crimson-navigation PUBLIC crimson-physics crimson-resource
 target_compile_options(crimson-navigation PRIVATE /W4 /permissive- /utf-8)
 
 add_library(crimson-runtime src/runtime/PlaySession.cpp src/runtime/AgentSteering.cpp src/runtime/GameInput.cpp src/runtime/EnemyBehaviour.cpp src/runtime/EntityAttributes.cpp src/runtime/EntityEffects.cpp)
+target_sources(crimson-runtime PRIVATE src/runtime/PlaySessionRagdolls.cpp)
 target_include_directories(crimson-runtime PUBLIC src)
 target_link_libraries(crimson-runtime PUBLIC crimson-navigation crimson-particles crimson-camera SDL3::SDL3)
 target_compile_options(crimson-runtime PRIVATE /W4 /permissive- /utf-8)
@@ -234,7 +236,7 @@ add_executable(crimson-renderer WIN32
     src/editor/EditorPreferences.cpp src/editor/EditorResources.cpp src/editor/EditorRenderFrame.cpp src/editor/AssetPreviews.cpp src/editor/DecalPreview.cpp src/editor/AssetPreviewCache.cpp
     src/editor/ColliderGizmo.cpp src/editor/ColliderGizmoUi.cpp
     src/editor/NavigationVolumeGizmo.cpp src/editor/NavigationPreview.cpp src/editor/NavigationAgentProfileDocument.cpp
-    src/editor/CollisionLayersDocument.cpp src/editor/GameplayEffectDocument.cpp src/editor/AnimationDocument.cpp
+    src/editor/CollisionLayersDocument.cpp src/editor/GameplayEffectDocument.cpp src/editor/AnimationDocument.cpp src/editor/RagdollDocument.cpp
     src/editor/CommandConsole.cpp src/editor/AttributeDebug.cpp
     src/editor/MaterialPreview.cpp src/editor/MaterialPreviewNavigation.cpp
     src/editor/CollisionResources.cpp src/editor/QuaderSceneIntegration.cpp
@@ -268,7 +270,7 @@ add_executable(crimson-renderer WIN32
     src/tools/ColorGradientEditor.cpp
     src/tools/HdrColorEditor.cpp
     src/tools/MaterialEditor.cpp src/tools/MaterialGraphEditor.cpp src/tools/TextureAssetField.cpp src/tools/DecalEditor.cpp
-    src/tools/NavigationAgentProfileEditor.cpp src/tools/CollisionLayersEditor.cpp src/tools/GameplayEffectEditor.cpp src/tools/AnimationEditor.cpp
+    src/tools/NavigationAgentProfileEditor.cpp src/tools/CollisionLayersEditor.cpp src/tools/GameplayEffectEditor.cpp src/tools/AnimationEditor.cpp src/tools/RagdollEditor.cpp
     src/input/Navigation.h src/input/Navigation.cpp
     src/assets/AssetLibrary.h src/assets/AssetLibrary.cpp src/assets/AssetLibraryDecals.cpp
     src/assets/AssetReferenceManager.cpp src/assets/AsyncImports.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp
@@ -325,6 +327,30 @@ add_custom_command(TARGET crimson-renderer POST_BUILD
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(ragdoll_asset_tests tests/ragdoll_asset_tests.cpp)
+    target_link_libraries(ragdoll_asset_tests PRIVATE crimson-scene)
+    target_compile_options(ragdoll_asset_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME ragdoll_asset_core COMMAND ragdoll_asset_tests)
+    add_executable(ragdoll_document_tests tests/ragdoll_document_tests.cpp src/editor/RagdollDocument.cpp)
+    target_link_libraries(ragdoll_document_tests PRIVATE crimson-scene)
+    target_compile_options(ragdoll_document_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME ragdoll_document_core COMMAND ragdoll_document_tests)
+    add_executable(ragdoll_physics_tests tests/ragdoll_physics_tests.cpp)
+    target_link_libraries(ragdoll_physics_tests PRIVATE crimson-physics)
+    target_compile_options(ragdoll_physics_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME ragdoll_physics_core COMMAND ragdoll_physics_tests)
+    add_executable(ragdoll_preview_plan_tests third_party/crimson-renderer/tests/ragdoll_preview_plan_tests.cpp)
+    target_link_libraries(ragdoll_preview_plan_tests PRIVATE crimson-math)
+    target_compile_options(ragdoll_preview_plan_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME ragdoll_preview_plan_core COMMAND ragdoll_preview_plan_tests)
+    add_executable(ragdoll_runtime_tests tests/ragdoll_runtime_tests.cpp)
+    target_link_libraries(ragdoll_runtime_tests PRIVATE crimson-runtime)
+    target_compile_options(ragdoll_runtime_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME ragdoll_runtime_core COMMAND ragdoll_runtime_tests)
+    add_executable(ragdoll_scene_tests tests/ragdoll_scene_tests.cpp)
+    target_link_libraries(ragdoll_scene_tests PRIVATE crimson-scene)
+    target_compile_options(ragdoll_scene_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME ragdoll_scene_core COMMAND ragdoll_scene_tests)
     add_executable(decal_viewport_tests tests/decal_viewport_tests.cpp)
     target_link_libraries(decal_viewport_tests PRIVATE crimson-math)
     target_compile_options(decal_viewport_tests PRIVATE /W4 /permissive- /utf-8)
@@ -654,7 +680,7 @@ if(BUILD_TESTING)
     target_compile_options(game_metrics_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME game_metrics_core COMMAND game_metrics_tests)
     add_executable(builtin_geometry_tests tests/builtin_geometry_tests.cpp src/assets/AssetReferenceManager.cpp)
-    target_link_libraries(builtin_geometry_tests PRIVATE crimson-materials crimson-storage crimson-math nlohmann_json::nlohmann_json)
+    target_link_libraries(builtin_geometry_tests PRIVATE crimson-materials crimson-storage crimson-scene crimson-math nlohmann_json::nlohmann_json)
     target_compile_options(builtin_geometry_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME builtin_geometry_core COMMAND builtin_geometry_tests)
     add_executable(particle_tests tests/particle_tests.cpp)
@@ -822,7 +848,7 @@ if(BUILD_TESTING)
     target_compile_options(editor_render_frame_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME editor_render_frame_core COMMAND editor_render_frame_tests)
     add_executable(content_storage_tests tests/content_storage_tests.cpp src/assets/AssetReferenceManager.cpp)
-    target_link_libraries(content_storage_tests PRIVATE crimson-storage Crimson::Support)
+    target_link_libraries(content_storage_tests PRIVATE crimson-storage crimson-scene Crimson::Support)
     target_compile_options(content_storage_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME content_storage_core COMMAND content_storage_tests)
 
@@ -1037,6 +1063,15 @@ if(BUILD_TESTING)
     add_test(NAME asset_library_deletion_core COMMAND asset_library_deletion_tests)
     add_test(NAME decal_asset_library_core COMMAND asset_library_deletion_tests --decal-assets)
     add_test(NAME animation_library_core COMMAND asset_library_deletion_tests --animation-assets)
+    get_target_property(CC_RAGDOLL_LIBRARY_SOURCES asset_library_deletion_tests SOURCES)
+    list(REMOVE_ITEM CC_RAGDOLL_LIBRARY_SOURCES tests/asset_library_deletion_tests.cpp)
+    get_target_property(CC_RAGDOLL_LIBRARY_LINKS asset_library_deletion_tests LINK_LIBRARIES)
+    add_executable(ragdoll_library_tests tests/ragdoll_library_tests.cpp ${CC_RAGDOLL_LIBRARY_SOURCES})
+    target_include_directories(ragdoll_library_tests PRIVATE src tests)
+    target_compile_definitions(ragdoll_library_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(ragdoll_library_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(ragdoll_library_tests PRIVATE ${CC_RAGDOLL_LIBRARY_LINKS} Crimson::Renderer)
+    add_test(NAME ragdoll_library_core COMMAND ragdoll_library_tests)
     set_tests_properties(asset_library_deletion_core PROPERTIES TIMEOUT 90)
     add_test(NAME material_preview_resource_core COMMAND asset_library_deletion_tests --material-preview-resources "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
     set_tests_properties(material_preview_resource_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 120)
@@ -1289,7 +1324,7 @@ if(BUILD_TESTING)
     target_link_libraries(ssgi_scene_motion_capture PRIVATE crimson-quader crimson-material-gpu crimson-resources crimson-scene crimson-particles crimson-runtime crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode bgfx::bimg imgui::imgui lodepng mikktspace::mikktspace assimp::assimp meshoptimizer::meshoptimizer nlohmann_json::nlohmann_json d3d11)
 endif()
 
-foreach(CC_TARGET crimson-renderer gpu_streaming_tests float_texture_streaming_tests environment_tests clustered_lighting_gpu_tests material_graph_publication_tests asset_library_deletion_tests native_resource_tests asset_deletion_runtime_tests decal_host_acceptance_tests point_shadow_render_tests material_height_render_tests material_refraction_render_tests decal_generated_render_tests ssr_render_tests directional_shadow_quality_tests material_mapping_render_tests forward_plus_render_tests ssgi_render_tests glow_render_tests ssao_render_tests fog_background_render_tests smaa_render_tests mesh_instancing_render_tests player_parenting_render_tests forward_plus_room_benchmark renderer_backend_benchmark ssgi_scene_motion_capture)
+foreach(CC_TARGET crimson-renderer ragdoll_library_tests gpu_streaming_tests float_texture_streaming_tests environment_tests clustered_lighting_gpu_tests material_graph_publication_tests asset_library_deletion_tests native_resource_tests asset_deletion_runtime_tests decal_host_acceptance_tests point_shadow_render_tests material_height_render_tests material_refraction_render_tests decal_generated_render_tests ssr_render_tests directional_shadow_quality_tests material_mapping_render_tests forward_plus_render_tests ssgi_render_tests glow_render_tests ssao_render_tests fog_background_render_tests smaa_render_tests mesh_instancing_render_tests player_parenting_render_tests forward_plus_room_benchmark renderer_backend_benchmark ssgi_scene_motion_capture)
     if(TARGET ${CC_TARGET})
         target_link_libraries(${CC_TARGET} PRIVATE Crimson::Renderer Crimson::HostShaders d3d12 dxgi)
         target_include_directories(${CC_TARGET} BEFORE PRIVATE "${CRIMSON_FORWARD_GENERATED_DIR}")
