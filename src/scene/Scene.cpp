@@ -369,8 +369,9 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             const auto& trace=record.playerInput->traceTest;
             if(!std::isfinite(trace.duration)||trace.duration<0||trace.duration>3600||
                !std::isfinite(trace.length)||trace.length<=0||trace.length>100000||
-               !std::isfinite(trace.collisionQuadSize)||trace.collisionQuadSize<=0||trace.collisionQuadSize>1000)
-                throw std::runtime_error("Trace Test requires duration between 0 and 3600 seconds, positive length up to 100000 meters and positive collision quad size up to 1000 meters.");
+               !std::isfinite(trace.collisionQuadSize)||trace.collisionQuadSize<=0||trace.collisionQuadSize>1000||
+               !std::isfinite(trace.hitImpulse)||trace.hitImpulse<0||trace.hitImpulse>100000)
+                throw std::runtime_error("Trace Test requires duration between 0 and 3600 seconds, positive length up to 100000 meters, positive collision quad size up to 1000 meters and hit impulse between 0 and 100000 newton seconds.");
         }
         if(record.movement) {
             const auto& value=*record.movement;

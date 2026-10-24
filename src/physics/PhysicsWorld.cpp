@@ -145,20 +145,42 @@ Mat4 rigidFrame(const Mat4& matrix) {
     const auto axisY=math::normalized(projected),axisZ=math::cross(axisX,axisY);Mat4 result;
     for(int i=0;i<3;++i){result[i]=axisX[i];result[4+i]=axisY[i];result[8+i]=axisZ[i];result[12+i]=matrix[12+i];}return result;
 }
+float validateRagdollPose(const RagdollAsset& asset,const ModelAsset& model,const ModelPose& pose,const Mat4& modelWorld) {
+    validateRagdollSource(asset,model);validateModelAnimationData(model);
+    const auto fields=math::affineTransformFields(modelWorld);
+    if(!fields || fields->singular || fields->sheared || fields->scale[0]<=0 || fields->scale[1]<=0 || fields->scale[2]<=0 ||
+        std::abs(fields->scale[0]-fields->scale[1])>2e-5f*fields->scale[0] || std::abs(fields->scale[0]-fields->scale[2])>2e-5f*fields->scale[0])
+        throw std::runtime_error("Ragdoll requires a positive uniform model scale without shear or reflection.");
+    if(pose.worldTransforms.size()!=model.nodes.size() || pose.localTransforms.size()!=model.nodes.size() || pose.nodeWeights.size()!=model.nodes.size())throw std::runtime_error("Ragdoll initial pose does not match its source skeleton.");
+    for(const auto& local:pose.localTransforms)if(!math::isAffine(local))throw std::runtime_error("Ragdoll initial pose must contain finite affine transforms.");
+    for(const auto& world:pose.worldTransforms)if(!math::isAffine(world))throw std::runtime_error("Ragdoll world pose must contain finite affine transforms.");
+    for(const auto& weights:pose.nodeWeights)for(const auto value:weights)if(!std::isfinite(value))throw std::runtime_error("Ragdoll morph weights must be finite.");
+    return fields->scale[0];
+}
+JPH::ShapeSettings::ShapeResult ragdollBodyShape(const RagdollBody& body,float scale) {
+    JPH::ShapeSettings::ShapeResult shape;
+    if(body.shape==RagdollShape::Box)shape=JPH::BoxShapeSettings(native(body.size*(scale*.5f)),std::min(.05f,scale*std::min({body.size[0],body.size[1],body.size[2]})*.05f)).Create();
+    else if(body.shape==RagdollShape::Sphere || body.height<=2*body.radius+1e-6f)shape=JPH::SphereShapeSettings(body.radius*scale).Create();
+    else shape=JPH::CapsuleShapeSettings((body.height*.5f-body.radius)*scale,body.radius*scale).Create();
+    if(shape.HasError())return shape;
+    const JPH::Quat offsetRotation(body.rotation[0],body.rotation[1],body.rotation[2],body.rotation[3]);
+    return JPH::RotatedTranslatedShapeSettings(native(body.position*scale),offsetRotation,shape.Get()).Create();
+}
 // Retain at most one hit per body while allowing Jolt to prune farther triangles.
 // Direct virtual-character/trigger queries use the same collector with an
 // explicit entity because they do not have rigid-body handles.
 template<class Base> class TraceCollector final:public Base {
 public:
     using Result=typename Base::ResultType;
-    std::function<bool(EntityId,const JPH::TransformedShape*,const Result&)> accept;
+    std::function<bool(EntityId,const JPH::BodyID&,const JPH::TransformedShape*,const Result&)> accept;
     EntityId entity{};
+    JPH::BodyID body;
     PhysicsTraceMode mode{PhysicsTraceMode::Closest};
     float bodyLimit{};
-    void OnBody(const JPH::Body& body) override {entity=body.GetUserData();bodyLimit=Base::GetEarlyOutFraction();}
+    void OnBody(const JPH::Body& value) override {entity=value.GetUserData();body=value.GetID();bodyLimit=Base::GetEarlyOutFraction();}
     void OnBodyEnd() override {if(mode==PhysicsTraceMode::All)Base::ResetEarlyOutFraction(bodyLimit);}
     void AddHit(const Result& hit) override {
-        if(!accept(entity,Base::GetContext(),hit))return;
+        if(!accept(entity,body,Base::GetContext(),hit))return;
         if(mode==PhysicsTraceMode::Any)Base::ForceEarlyOut();
         else {
             // Jolt ranks initial shape overlaps by negative penetration depth.
@@ -443,17 +465,10 @@ bool PhysicsWorld::createRagdoll(EntityId id,std::shared_ptr<const RagdollAsset>
     auto& state=*impl_;
     try {
         if(!id || !asset || !model)throw std::runtime_error("Ragdoll requires an entity, setup and source model.");
-        validateRagdollSource(*asset,*model);
-        validateModelAnimationData(*model);
+        const float scale=validateRagdollPose(*asset,*model,pose,modelWorld);
         if(asset->bodies.empty())throw std::runtime_error("Ragdoll setup has no physical bodies.");
         if(!math::finite(velocity)||!math::finite(impulse))throw std::runtime_error("Ragdoll velocity and impulse must be finite.");
-        const auto fields=math::affineTransformFields(modelWorld);
-        if(!fields || fields->singular || fields->sheared || fields->scale[0]<=0 || fields->scale[1]<=0 || fields->scale[2]<=0 ||
-            std::abs(fields->scale[0]-fields->scale[1])>2e-5f*fields->scale[0] || std::abs(fields->scale[0]-fields->scale[2])>2e-5f*fields->scale[0])
-            throw std::runtime_error("Ragdoll requires a positive uniform model scale without shear or reflection.");
-        if(pose.worldTransforms.size()!=model->nodes.size() || pose.localTransforms.size()!=model->nodes.size() || pose.nodeWeights.size()!=model->nodes.size())throw std::runtime_error("Ragdoll initial pose does not match its source skeleton.");
-        for(const auto& local:pose.localTransforms)if(!math::isAffine(local))throw std::runtime_error("Ragdoll initial pose must contain finite affine transforms.");
-        const float scale=fields->scale[0];const auto reference=ragdollReferenceTransforms(*model);
+        const auto reference=ragdollReferenceTransforms(*model);
         Impl::RagdollState pending;pending.asset=std::move(asset);pending.model=std::move(model);pending.modelWorld=modelWorld;pending.inverseWorld=*math::inverse(modelWorld);
         pending.owner=actorOwner?actorOwner:id;pending.collision=characterFilter(collision);
         pending.basePose.nodes.resize(pending.model->nodes.size());pending.basePose.node_weights=pose.nodeWeights;
@@ -465,13 +480,7 @@ bool PhysicsWorld::createRagdoll(EntityId id,std::shared_ptr<const RagdollAsset>
             const auto initialFull=modelWorld*pose.worldTransforms[body.node],initial=rigidFrame(initialFull);
             const auto q=rotation(frame),initialQ=rotation(initial);
             settings->mSkeleton->AddJoint(std::to_string(body.node).c_str(),body.parent);
-            JPH::ShapeSettings::ShapeResult shape;
-            if(body.shape==RagdollShape::Box)shape=JPH::BoxShapeSettings(native(body.size*(scale*.5f)),std::min(.05f,scale*std::min({body.size[0],body.size[1],body.size[2]})*.05f)).Create();
-            else if(body.shape==RagdollShape::Sphere || body.height<=2*body.radius+1e-6f)shape=JPH::SphereShapeSettings(body.radius*scale).Create();
-            else shape=JPH::CapsuleShapeSettings((body.height*.5f-body.radius)*scale,body.radius*scale).Create();
-            if(shape.HasError())throw std::runtime_error(shape.GetError().c_str());
-            const JPH::Quat offsetRotation(body.rotation[0],body.rotation[1],body.rotation[2],body.rotation[3]);
-            shape=JPH::RotatedTranslatedShapeSettings(native(body.position*scale),offsetRotation,shape.Get()).Create();
+            const auto shape=ragdollBodyShape(body,scale);
             if(shape.HasError())throw std::runtime_error(shape.GetError().c_str());
             JPH::RagdollSettings::Part part;part.SetShape(shape.Get());part.mPosition=position(frame);part.mRotation=q;
             part.mMotionType=JPH::EMotionType::Dynamic;part.mAllowDynamicOrKinematic=true;part.mObjectLayer=DynamicLayer;part.mMotionQuality=JPH::EMotionQuality::LinearCast;
@@ -599,6 +608,34 @@ std::optional<RagdollBodyHit> PhysicsWorld::pickRagdoll(const Ray& ray,float max
     const auto& bodies=found->second.native->GetBodyIDs();const auto body=std::find(bodies.begin(),bodies.end(),hit.mBodyID);if(body==bodies.end())return {};
     const auto point=query.GetPointOnRay(hit.mFraction);const auto normal=hit.mFraction==0?native(direction*-1):lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2,point);
     return RagdollBodyHit{id,static_cast<std::size_t>(body-bodies.begin()),own(point),own(normal),hit.mFraction*maxDistance};
+}
+std::optional<RagdollBodyHit> PhysicsWorld::pickRagdollPose(EntityId id,const RagdollAsset& asset,const ModelAsset& model,
+    const ModelPose& pose,const Mat4& modelWorld,const Ray& ray,float maxDistance,bool* valid) const {
+    if(valid)*valid=false;
+    if(!id||!math::finite(ray.origin)||!math::finite(ray.direction)||!std::isfinite(maxDistance)||maxDistance<=0||math::length(ray.direction)<=1e-8)return {};
+    const auto direction=math::normalized(ray.direction),displacement=direction*maxDistance;
+    if(!math::finite(displacement)||!math::finite(ray.origin+displacement))return {};
+    try {
+        const float scale=validateRagdollPose(asset,model,pose,modelWorld);
+        if(asset.bodies.empty())return {};
+        const JPH::RRayCast query(JPH::RVec3(ray.origin[0],ray.origin[1],ray.origin[2]),native(displacement));
+        JPH::RayCastSettings settings;std::optional<RagdollBodyHit> nearest;
+        // Validate every selected bone before accepting any hit, so malformed
+        // later bodies cannot publish a partially valid skeletal query.
+        std::vector<Mat4> frames;frames.reserve(asset.bodies.size());
+        for(const auto& body:asset.bodies)frames.push_back(rigidFrame(modelWorld*pose.worldTransforms[body.node]));
+        for(std::size_t index=0;index<asset.bodies.size();++index) {
+            const auto shape=ragdollBodyShape(asset.bodies[index],scale);if(shape.HasError())return {};
+            JPH::TransformedShape target;target.mShape=shape.Get();target.SetWorldTransform(position(frames[index]),rotation(frames[index]),JPH::Vec3::sOne());
+            JPH::ClosestHitCollisionCollector<JPH::CastRayCollector> collector;target.CastRay(query,settings,collector);
+            if(!collector.HadHit())continue;const auto& hit=collector.mHit;const auto distance=hit.mFraction*maxDistance;
+            if(nearest&&distance>=nearest->distance)continue;
+            const auto point=query.GetPointOnRay(hit.mFraction);const auto normal=hit.mFraction==0?native(direction*-1):target.GetWorldSpaceSurfaceNormal(hit.mSubShapeID2,point);
+            if(!math::finite(own(point))||!math::finite(own(normal))||!std::isfinite(distance))return {};
+            nearest=RagdollBodyHit{id,index,own(point),own(normal),distance};
+        }
+        if(valid)*valid=true;return nearest;
+    }catch(const std::exception&){return {};}
 }
 bool PhysicsWorld::beginRagdollDrag(EntityId id,std::size_t body,const Vec3& point) {
     endRagdollDrag();const auto found=impl_->ragdolls.find(id);if(found==impl_->ragdolls.end()||body>=found->second.native->GetBodyCount()||!math::finite(point))return false;
@@ -1043,7 +1080,13 @@ PhysicsTraceResult PhysicsWorld::trace(const PhysicsTrace& request,const Physics
     const auto earlier=[](const PhysicsTraceHit& a,const PhysicsTraceHit& b) {
         if(a.fraction!=b.fraction)return a.fraction<b.fraction;
         if(a.entity!=b.entity)return a.entity<b.entity;
-        return a.subshape<b.subshape;
+        if(a.subshape!=b.subshape)return a.subshape<b.subshape;
+        return a.ragdollBodyIndex<b.ragdollBodyIndex;
+    };
+    const auto ragdollIndex=[&](EntityId id,const JPH::BodyID& body) {
+        const auto found=impl_->ragdolls.find(id);if(found==impl_->ragdolls.end()||body.IsInvalid())return -1;
+        const auto& bodies=found->second.native->GetBodyIDs();const auto index=std::find(bodies.begin(),bodies.end(),body);
+        return index==bodies.end()?-1:static_cast<int>(index-bodies.begin());
     };
     std::map<EntityId,PhysicsTraceHit> entries;
     const auto remember=[&](PhysicsTraceHit hit) {
@@ -1092,9 +1135,10 @@ PhysicsTraceResult PhysicsWorld::trace(const PhysicsTrace& request,const Physics
         const JPH::RRayCast ray(origin,native(displacement));
         JPH::RayCastSettings settings;settings.mBackFaceModeTriangles=JPH::EBackFaceMode::CollideWithBackFaces;
         TraceCollector<JPH::CastRayCollector> collector;collector.mode=mode;
-        collector.accept=[&](EntityId id,const JPH::TransformedShape* shape,const JPH::RayCastResult& hit) {
+        collector.accept=[&](EntityId id,const JPH::BodyID& body,const JPH::TransformedShape* shape,const JPH::RayCastResult& hit) {
             if(!shape)return false;
             PhysicsTraceHit contact;contact.entity=id;contact.fraction=hit.mFraction;
+            contact.ragdollBodyIndex=ragdollIndex(id,body);
             contact.startedInside=hit.mFraction==0;contact.subshape=hit.mSubShapeID2.GetValue();
             contact.position=own(ray.GetPointOnRay(hit.mFraction));
             // An interior point has no unique surface normal (a sphere's center
@@ -1106,15 +1150,16 @@ PhysicsTraceResult PhysicsWorld::trace(const PhysicsTrace& request,const Physics
         if(filter.includeWorld)impl_->world.GetNarrowPhaseQuery().CastRay(ray,settings,collector,broad,layer,bodies);
         if(mode==PhysicsTraceMode::Any && !result.hits.empty())return result;
         queryVirtuals([&](EntityId id,const JPH::TransformedShape& shape) {
-            auto direct=collector;direct.entity=id;direct.mode=mode==PhysicsTraceMode::Any?mode:PhysicsTraceMode::Closest;
+            auto direct=collector;direct.entity=id;direct.body=JPH::BodyID();direct.mode=mode==PhysicsTraceMode::Any?mode:PhysicsTraceMode::Closest;
             direct.Reset();shape.CastRay(ray,settings,direct);
         });
     } else {
         const JPH::RShapeCast cast(shapeResult.Get(),JPH::Vec3::sOne(),JPH::RMat44::sRotationTranslation(orientation,origin),native(displacement));
         JPH::ShapeCastSettings settings;settings.SetBackFaceMode(JPH::EBackFaceMode::CollideWithBackFaces);settings.mReturnDeepestPoint=true;
         TraceCollector<JPH::CastShapeCollector> collector;collector.mode=mode;
-        collector.accept=[&](EntityId id,const JPH::TransformedShape*,const JPH::ShapeCastResult& hit) {
+        collector.accept=[&](EntityId id,const JPH::BodyID& body,const JPH::TransformedShape*,const JPH::ShapeCastResult& hit) {
             PhysicsTraceHit contact;contact.entity=id;contact.fraction=hit.mFraction;
+            contact.ragdollBodyIndex=ragdollIndex(id,body);
             contact.startedInside=hit.mFraction==0;contact.subshape=hit.mSubShapeID2.GetValue();
             contact.position=request.ray.origin+Vec3{hit.mContactPointOn2.GetX(),hit.mContactPointOn2.GetY(),hit.mContactPointOn2.GetZ()};
             contact.normal={-hit.mPenetrationAxis.GetX(),-hit.mPenetrationAxis.GetY(),-hit.mPenetrationAxis.GetZ()};
@@ -1123,7 +1168,7 @@ PhysicsTraceResult PhysicsWorld::trace(const PhysicsTrace& request,const Physics
         if(filter.includeWorld)impl_->world.GetNarrowPhaseQuery().CastShape(cast,settings,origin,collector,broad,layer,bodies);
         if(mode==PhysicsTraceMode::Any && !result.hits.empty())return result;
         queryVirtuals([&](EntityId id,const JPH::TransformedShape& shape) {
-            auto direct=collector;direct.entity=id;direct.mode=mode==PhysicsTraceMode::Any?mode:PhysicsTraceMode::Closest;
+            auto direct=collector;direct.entity=id;direct.body=JPH::BodyID();direct.mode=mode==PhysicsTraceMode::Any?mode:PhysicsTraceMode::Closest;
             direct.Reset();shape.CastShape(cast,settings,origin,direct);
         });
     }

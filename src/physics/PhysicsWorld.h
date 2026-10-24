@@ -43,6 +43,7 @@ struct PhysicsTraceHit {
     float distance{},fraction{}; // Center travel in meters and normalized [0,1].
     bool startedInside{}; // Initial overlap/contact; normal may be a fallback.
     std::uint32_t subshape{}; // Opaque, transient primitive identifier, never saved.
+    int ragdollBodyIndex{-1}; // Physical body array index; independent of subshape.
 };
 struct PhysicsTraceResult {
     bool valid{}; // False for malformed/unsupported requests; a valid miss has no hits.
@@ -92,6 +93,12 @@ public:
     bool ragdollBodyPinned(EntityId,std::size_t bodyIndex) const;
     bool applyRagdollImpulse(EntityId,const Vec3&,std::optional<Vec3> worldPoint={},int bodyIndex=-1);
     std::optional<RagdollBodyHit> pickRagdoll(const Ray&,float maxDistance) const;
+    // Query the authored physical shapes at a model's current pose without
+    // creating simulation bodies or changing the accepted collision world.
+    // valid distinguishes a complete usable query (including a miss) from an
+    // unsupported/malformed setup, pose, transform or ray.
+    std::optional<RagdollBodyHit> pickRagdollPose(EntityId,const RagdollAsset&,const ModelAsset&,
+        const ModelPose&,const Mat4& modelWorld,const Ray&,float maxDistance,bool* valid=nullptr) const;
     bool beginRagdollDrag(EntityId,std::size_t bodyIndex,const Vec3& worldPoint);
     bool updateRagdollDrag(const Vec3& worldTarget);
     void endRagdollDrag();

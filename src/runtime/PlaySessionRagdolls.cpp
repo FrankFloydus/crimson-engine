@@ -78,9 +78,68 @@ bool PlaySession::resetRagdoll(EntityId id) {
     }
     physics_->removeRagdoll(id);ragdollBindings_.erase(id);status_.clear();return true;
 }
-bool PlaySession::applyRagdollImpulse(EntityId id,Vec3 impulse,std::optional<Vec3> point) {
+bool PlaySession::applyRagdollImpulse(EntityId id,Vec3 impulse,std::optional<Vec3> point,int bodyIndex) {
     if(!physics_||!physics_->hasRagdoll(id))return false;
-    return physics_->applyRagdollImpulse(id,impulse,point);
+    return physics_->applyRagdollImpulse(id,impulse,point,bodyIndex);
+}
+PhysicsTraceResult PlaySession::tracePlayerTargets(const PhysicsTrace& request,const PhysicsQueryFilter& filter,
+    std::shared_ptr<const ModelPose>& initialPose) {
+    initialPose.reset();
+    // World blockers and active native ragdolls retain their ordinary query
+    // semantics. A usable animated rig replaces its owner's coarse capsule.
+    auto result=physics_->trace(request,PhysicsQueryFilter{filter.mask,filter.ignored,filter.includeWorld,false,filter.includeTriggers},PhysicsTraceMode::Closest);
+    if(!result.valid||!filter.mask)return result;
+    const auto earlier=[](const PhysicsTraceHit& a,const PhysicsTraceHit& b) {
+        if(a.fraction!=b.fraction)return a.fraction<b.fraction;
+        if(a.entity!=b.entity)return a.entity<b.entity;
+        if(a.subshape!=b.subshape)return a.subshape<b.subshape;
+        return a.ragdollBodyIndex<b.ragdollBodyIndex;
+    };
+    const auto remember=[&](const PhysicsTraceHit& hit,std::shared_ptr<const ModelPose> pose={}) {
+        if(result.hits.empty())result.hits.push_back(hit);
+        else if(earlier(hit,result.hits.front()))result.hits.front()=hit;
+        else return;
+        initialPose=std::move(pose);
+    };
+    std::vector<EntityId> ignoredCharacters(filter.ignored.begin(),filter.ignored.end());
+    if(filter.includeWorld&&ragdollDefinitions_&&ragdollModels_) {
+        const auto scene=extractScene(document_->scene());
+        for(const auto& instance:scene.models) {
+            if(instance.ragdoll.asset.empty()||ragdollTransformLocked(instance.id))continue;
+            const auto owner=ragdollActorOwner(instance.id);
+            if(std::find(filter.ignored.begin(),filter.ignored.end(),instance.id)!=filter.ignored.end()||
+               std::find(filter.ignored.begin(),filter.ignored.end(),owner)!=filter.ignored.end()||
+               !(filter.mask&ragdollCollisionFilter(owner).layers))continue;
+            if(ragdollActive(instance.id)){ignoredCharacters.push_back(owner);continue;}
+            if(ragdollOwnsActor(owner))continue;
+            const auto definition=ragdollDefinitions_(instance.ragdoll.asset.id);
+            const auto model=ragdollModels_(instance.assetId);
+            if(!definition||!model)continue;
+            try {
+                // Evaluate the same fixed animation clock used by Play
+                // presentation and retain this exact pose for the handoff.
+                const auto pose=initialRagdollPose(instance.id,*model);
+                bool valid=false;
+                const auto hit=physics_->pickRagdollPose(instance.id,*definition,*model,*pose,instance.world,request.ray,request.maxDistance,&valid);
+                if(!valid)continue;
+                ignoredCharacters.push_back(owner);
+                if(!hit)continue;
+                PhysicsTraceHit contact;contact.entity=instance.id;contact.owner=owner;
+                contact.position=contact.center=hit->position;contact.normal=hit->normal;
+                contact.distance=hit->distance;contact.fraction=hit->distance/request.maxDistance;
+                contact.startedInside=hit->distance==0;contact.ragdollBodyIndex=static_cast<int>(hit->bodyIndex);
+                remember(contact,pose);
+            }catch(const std::exception&) {
+                // An unrelated pending/incompatible asset must not interrupt a
+                // valid local trace. Its existing collision remains eligible.
+            }
+        }
+    }
+    if(filter.includeCharacters) {
+        const auto characters=physics_->trace(request,PhysicsQueryFilter{filter.mask,ignoredCharacters,false,true,false},PhysicsTraceMode::Closest);
+        if(!characters.hits.empty())remember(characters.hits.front());
+    }
+    return result;
 }
 void PlaySession::reconcileRagdolls() {
     if(!physics_||!document_)return;

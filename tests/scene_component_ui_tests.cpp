@@ -606,6 +606,10 @@ public:
         if(!collapsed)drawTraceTestInspectorControls(value,names,[&](TraceTestInspectorControl control,const char* label,bool changed) {
             shown.push_back(control);const auto low=ImGui::GetItemRectMin(),high=ImGui::GetItemRectMax();
             centers[static_cast<std::size_t>(control)]={low.x+ImGui::CalcItemWidth()*.5f,(low.y+high.y)*.5f};
+            // resettableProperty places the button after the full item bounds,
+            // including its label, then restores those original item bounds.
+            resets[static_cast<std::size_t>(control)]={high.x+ImGui::GetStyle().ItemInnerSpacing.x+ImGui::GetFrameHeight()*.5f,(low.y+high.y)*.5f};
+            if(propertyResetClicked())++resetClicks;
             if(control==TraceTestInspectorControl::CollisionLayers) {
                 if(changed)require(document.edit(label,[&](auto& records,auto&){for(auto& record:records)if(record.id==player)record.playerInput->traceTest=value;}),"Trace mask edit failed.");
                 return;
@@ -633,17 +637,24 @@ public:
         require(document.transactionActive(),"Trace numeric entry did not activate its scene transaction.");io.AddInputCharactersUTF8(text);tick();
     }
     void key(ImGuiKey key){auto& io=ImGui::GetIO();io.AddKeyEvent(key,true);tick();io.AddKeyEvent(key,false);tick();tick();}
+    void reset(TraceTestInspectorControl control) {
+        const auto before=resetClicks;const auto center=resets[static_cast<std::size_t>(control)];auto& io=ImGui::GetIO();
+        io.AddMousePosEvent(center.x,center.y);io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);tick();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);tick();tick();
+        require(resetClicks==before+1,"Trace reset gesture did not click the actual reset button.");
+    }
     SceneDocument document;EntityId player{};
-    std::array<ImVec2,4> centers{};std::vector<TraceTestInspectorControl> shown;
+    std::array<ImVec2,5> centers{},resets{};std::vector<TraceTestInspectorControl> shown;
 private:
     Context context_;std::optional<TraceTestInspectorControl> active;std::array<std::string,32> names{};
+    std::size_t resetClicks{};
 };
 void traceTestInspector(const fs::path& root) {
-    TraceTestUi ui(root);require(ui.shown.size()==4,"Trace Test Inspector omitted a requested property.");
+    TraceTestUi ui(root);require(ui.shown.size()==5,"Trace Test Inspector omitted a requested property.");
     const auto initial=*ui.document.scene().find(ui.player);
     for(const auto& [control,text]:std::array{
         std::pair{TraceTestInspectorControl::Duration,"1.25"},std::pair{TraceTestInspectorControl::Length,"30"},
-        std::pair{TraceTestInspectorControl::CollisionQuadSize,"0.35"}}) {
+        std::pair{TraceTestInspectorControl::CollisionQuadSize,"0.35"},std::pair{TraceTestInspectorControl::HitImpulse,"150"}}) {
         const auto before=ui.capture();const auto history=ui.document.history().size();ui.text(control,text);
         const auto live=ui.capture();require(live!=before&&ui.document.transactionActive()&&ui.document.history().size()==history,
             "Trace numeric entry committed before release or failed to update.");
@@ -653,10 +664,19 @@ void traceTestInspector(const fs::path& root) {
         auto expected=initial;expected.playerInput->traceTest=live;
         require(sameEntity(expected,*ui.document.scene().find(ui.player)),"Trace tuning changed unrelated Player properties.");
     }
-    const auto before=ui.capture();const auto history=ui.document.history().size();ui.text(TraceTestInspectorControl::Length,"65");ui.key(ImGuiKey_Escape);
+    for(const auto& [text,expected]:std::array{std::pair{"-10",0.f},std::pair{"200000",100000.f}}) {
+        ui.text(TraceTestInspectorControl::HitImpulse,text);ui.key(ImGuiKey_Enter);
+        require(ui.capture().hitImpulse==expected,"Hit impulse Inspector input escaped its authored bounds.");
+    }
+    const auto tuned=ui.capture();const auto resetHistory=ui.document.history().size();ui.reset(TraceTestInspectorControl::HitImpulse);
+    require(ui.capture().hitImpulse==SceneTraceTestSettings{}.hitImpulse&&!ui.document.transactionActive()&&ui.document.history().size()==resetHistory+1,
+        "Hit impulse Reset did not restore the default in one undo command.");
+    require(ui.document.undo()&&ui.capture()==tuned,"Hit impulse Reset did not undo exactly.");ui.tick();
+    require(ui.document.redo()&&ui.capture().hitImpulse==50.f,"Hit impulse Reset did not redo exactly.");ui.tick();
+    const auto before=ui.capture();const auto history=ui.document.history().size();ui.text(TraceTestInspectorControl::HitImpulse,"65");ui.key(ImGuiKey_Escape);
     require(!ui.document.transactionActive()&&ui.capture()==before&&ui.document.history().size()==history,"Escape committed a trace setting gesture.");
     ui.tick();require(ui.capture()==before,"Canceled trace numeric input reapplied its value.");
-    ui.text(TraceTestInspectorControl::Duration,"2.5");ui.tick(true);
+    ui.text(TraceTestInspectorControl::HitImpulse,"2.5");ui.tick(true);
     require(!ui.document.transactionActive()&&ui.document.history().size()==history+1,"Collapsing Trace Test did not finish its property gesture.");
 }
 

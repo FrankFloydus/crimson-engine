@@ -6,7 +6,7 @@
 #include <functional>
 
 namespace crimson {
-enum class TraceTestInspectorControl : unsigned { Duration,Length,CollisionQuadSize,CollisionLayers };
+enum class TraceTestInspectorControl : unsigned { Duration,Length,CollisionQuadSize,CollisionLayers,HitImpulse };
 inline void drawTraceTestInspectorControls(SceneTraceTestSettings& value,const std::array<std::string,32>& collisionNames,
     const std::function<void(TraceTestInspectorControl,const char*,bool)>& edit) {
     const SceneTraceTestSettings defaults;
@@ -20,6 +20,10 @@ inline void drawTraceTestInspectorControls(SceneTraceTestSettings& value,const s
     edit(TraceTestInspectorControl::CollisionQuadSize,"Change trace collision quad size",resettableProperty(value.collisionQuadSize,defaults.collisionQuadSize,[&]{
         return ImGui::DragFloat("Collision Quad Size (m)",&value.collisionQuadSize,.005f,.001f,1000,"%.3f",ImGuiSliderFlags_AlwaysClamp);
     }));
+    edit(TraceTestInspectorControl::HitImpulse,"Change trace hit impulse",resettableProperty(value.hitImpulse,defaults.hitImpulse,[&]{
+        return ImGui::DragFloat("Hit Impulse (N s)",&value.hitImpulse,.5f,0,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+    }));
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Impulse along the trace at the struck ragdoll body. Zero activates without a kick.");
     edit(TraceTestInspectorControl::CollisionLayers,"Change trace collision layers",drawCollisionMaskControl("Collision Layers",value.collisionMask,
         collisionNames,AllCollisionLayers,nullptr,defaults.collisionMask));
     if(ImGui::IsItemHovered())ImGui::SetTooltip("Detect colliders belonging to any selected layer.");

@@ -138,10 +138,10 @@ PhysicsTraceResult PlaySession::trace(const PhysicsTrace& request,const PhysicsQ
     }
     return result;
 }
-void PlaySession::firePlayerTrace(EntityId id) {
+std::string PlaySession::firePlayerTrace(EntityId id) {
     const auto record=document_->scene().find(id);
     const auto camera=resolveGameCamera(presentation_);
-    if(!record || !record->playerInput || !camera)return;
+    if(!record || !record->playerInput || !camera)return {};
     // Ignore this actor's owned hierarchy, stopping at independent nested actors.
     std::vector<EntityId> ignored,pending{id};
     while(!pending.empty()) {
@@ -157,7 +157,15 @@ void PlaySession::firePlayerTrace(EntityId id) {
     request.ray={camera->position,camera->forward()};request.maxDistance=settings.length;
     TraceVisualizationSettings visualization;
     visualization.duration=settings.duration;visualization.collisionQuadSize=settings.collisionQuadSize;
-    trace(request,PhysicsQueryFilter{settings.collisionMask,ignored,true,true,false},PhysicsTraceMode::Closest,visualization);
+    std::shared_ptr<const ModelPose> initialPose;
+    const auto result=tracePlayerTargets(request,PhysicsQueryFilter{settings.collisionMask,ignored,true,true,false},initialPose);
+    traceVisualization_.add(request,result,visualization);
+    if(!result.valid||result.hits.empty()||result.hits.front().ragdollBodyIndex<0)return {};
+    const auto& hit=result.hits.front();
+    if(!ragdollActive(hit.entity)&&!activateRagdoll(hit.entity,{},std::move(initialPose)))return status_;
+    if(settings.hitImpulse>0&&!applyRagdollImpulse(hit.entity,math::normalized(request.ray.direction)*settings.hitImpulse,hit.position,hit.ragdollBodyIndex))
+        return "Cannot apply the trace impulse to the hit ragdoll body.";
+    return {};
 }
 bool PlaySession::prepareMeshColliders(const Scene& scene,bool requireReady) {
     std::vector<PhysicsMeshCollider> prepared;
@@ -587,9 +595,10 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         refreshPresentation();reconcileParticles(0);
         // Fire after render-frame look, tilt and stair compensation have all
         // resolved, including frames that execute no fixed simulation tick.
-        if(fireTrace)firePlayerTrace(controlled);
+        const auto traceStatus=fireTrace?firePlayerTrace(controlled):std::string{};
         status_=physics_->status();
         status_+=ragdollStatus();
+        if(!traceStatus.empty())status_+=traceStatus+"\n";
         if(!attributes_.status().empty())status_+=attributes_.status();
         if(!effects_.status().empty())status_+=effects_.status();
         for(const auto& profile:supportedProfiles_) {

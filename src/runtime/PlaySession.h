@@ -92,7 +92,7 @@ public:
     bool activateRagdoll(EntityId model,Vec3 impulse={},std::shared_ptr<const ModelPose> initialPose={});
     bool resetRagdoll(EntityId model);
     bool ragdollActive(EntityId model) const;
-    bool applyRagdollImpulse(EntityId model,Vec3 impulse,std::optional<Vec3> point={});
+    bool applyRagdollImpulse(EntityId model,Vec3 impulse,std::optional<Vec3> point={},int bodyIndex=-1);
     // Projects the fixed-tick Play animation clock and interpolated physics pose.
     // Scene/Game/shadow/picking consumers share the same immutable pose.
     void prepareRagdollPresentation(ExtractedScene&);
@@ -114,6 +114,8 @@ private:
     bool ragdollTransformLocked(EntityId) const;
     std::string ragdollStatus() const;
     bool ragdollOwnsActor(EntityId) const;
+    PhysicsTraceResult tracePlayerTargets(const PhysicsTrace&,const PhysicsQueryFilter&,
+        std::shared_ptr<const ModelPose>& initialPose);
     std::filesystem::path projectRoot_;
     std::unique_ptr<SceneDocument> document_;
     std::unique_ptr<PhysicsWorld> physics_;
@@ -196,7 +198,7 @@ private:
     bool suspended_{},failed_{};
     void advanceInternal(double,Vec2,const Camera&,bool,GameInput* = nullptr);
     void refreshPresentation();
-    void firePlayerTrace(EntityId);
+    std::string firePlayerTrace(EntityId);
     void reconcileParticles(double);
     void resetInterpolation();
     void reconcileAgents();

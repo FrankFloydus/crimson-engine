@@ -153,8 +153,46 @@ void isolatedBranchesRetainNativeConstraints() {
     const auto allPinned=world.ragdollBodyTransforms(1);tick(world,scene,60);for(std::size_t i=0;i<allPinned.size();++i)same(world.ragdollBodyTransforms(1)[i],allPinned[i],"All-pinned constraints changed a frozen pose.",.0005f);
     require(world.setRagdollBodyPinned(1,2,false),"Could not release the isolated joint.");tick(world,scene,15);require(world.ragdollActive(1),"Unpinning did not wake the connected ragdoll.");world.removeRagdoll(1);
 }
+void activeTracesRetainExactPhysicalBody() {
+    const auto source=model();const auto asset=setup(*source);const auto pose=evaluateModelPose(*source);PhysicsWorld world;
+    require(world.createRagdoll(11,asset,source,pose,Mat4{},{},{},10),"Could not create body trace fixture.");
+    for(const auto shape:{PhysicsTraceShape::Line,PhysicsTraceShape::Sphere,PhysicsTraceShape::Box,PhysicsTraceShape::Capsule}) {
+        PhysicsTrace query;query.shape=shape;query.ray={{0,2,3},{0,0,-1}};query.maxDistance=6;query.radius=.025f;query.halfExtents={.025f,.025f,.025f};query.capsuleHalfHeight=.025f;
+        const auto result=world.trace(query);require(result.valid&&result.hits.size()==1&&result.hits[0].entity==11&&result.hits[0].owner==10&&result.hits[0].ragdollBodyIndex==2,"Active line/shape trace lost its exact physical bone or actor owner.");
+        require(result.hits[0].subshape!=static_cast<std::uint32_t>(result.hits[0].ragdollBodyIndex),"Trace confused the shape's opaque subshape identifier with its ragdoll body index.");
+        const auto all=world.trace(query,{},PhysicsTraceMode::All);require(all.hits.size()==1&&all.hits[0].ragdollBodyIndex==2,"All trace lost the selected physical body.");
+    }
+    EntityRecord wall;wall.id=100;wall.name="Occluding wall";wall.local=math::translation({0,2,1});wall.collider.emplace();wall.collider->size={1,1,.1f};
+    EntityRecord character;character.id=20;character.name="Ordinary character";character.local=math::translation({2,0,0});character.controller.emplace();Scene scene;scene.apply({wall,character},{});world.reconcile(scene);
+    PhysicsTrace query;query.ray={{0,2,3},{0,0,-1}};query.maxDistance=6;const auto hit=world.trace(query);
+    require(hit.hits.size()==1&&hit.hits[0].entity==100&&hit.hits[0].ragdollBodyIndex==-1,"Physical bone metadata replaced ordinary closest-world occlusion.");
+    query.ray={{2,.9f,3},{0,0,-1}};const auto capsule=world.trace(query);require(capsule.hits.size()==1&&capsule.hits[0].entity==20&&capsule.hits[0].ragdollBodyIndex==-1,"A virtual character inherited a stale native ragdoll body identifier.");
+}
+void posedQueriesMatchSimulationShapesWithoutWorldChanges() {
+    const auto source=model(true);auto local=sample_model_local_pose(*source);local.nodes[1].matrix=math::translation({2,1.3f,-.4f})*math::rotation(math::axisAngle({0,0,1},.4f));const auto pose=finalize_model_pose(*source,local);
+    const float scale=1.75f;const auto worldTransform=math::translation({4,2,-3})*math::rotation(math::axisAngle({0,1,0},.65f))*math::scaling({scale,scale,scale});
+    const auto bone=math::orthonormalFrame(worldTransform*pose.worldTransforms[1]);PhysicsWorld world;
+    const auto revision=world.geometryRevision();const auto status=world.status();const auto poseBefore=pose.worldTransforms;
+    for(const auto shape:{RagdollShape::Sphere,RagdollShape::Box,RagdollShape::Capsule}) {
+        const auto asset=setup(*source,true);auto& body=asset->bodies[0];body.shape=shape;body.position={.15f,.05f,-.1f};body.rotation=math::axisAngle({1,1,0},.45f);body.radius=.08f;body.height=.4f;body.size={.3f,.2f,.4f};
+        const auto original=*asset;const auto shapeFrame=bone*math::translation(body.position*scale)*math::rotation(body.rotation);const Vec3 center{shapeFrame[12],shapeFrame[13],shapeFrame[14]},normal{shapeFrame[8],shapeFrame[9],shapeFrame[10]};
+        const Ray ray{center+normal*2,normal*-3};const float extent=(shape==RagdollShape::Box?body.size[2]*.5f:body.radius)*scale;bool valid{};
+        const auto posed=world.pickRagdollPose(11,*asset,*source,pose,worldTransform,ray,5,&valid);
+        require(valid&&posed&&posed->entity==11&&posed->bodyIndex==0&&near(posed->distance,2-extent,.004f)&&math::length(posed->position-(center+normal*extent))<.004&&math::length(posed->normal-normal)<.004,"Posed shape query lost current animation, authored offsets, orientation, dimensions or uniform instance scale.");
+        require(world.ragdollCount()==0&&world.colliderCount()==0&&world.characterCount()==0&&world.geometryRevision()==revision&&world.status()==status&&*asset==original&&pose.worldTransforms==poseBefore,"Posed query created bodies, changed world metadata or modified authored/pose data.");
+        valid=false;const auto miss=world.pickRagdollPose(11,*asset,*source,pose,worldTransform,{center+normal*2,{0,1,0}},.01f,&valid);require(valid&&!miss,"Valid posed miss was reported as an unsupported rig.");
+        require(world.createRagdoll(11,asset,source,pose,worldTransform),"Could not instantiate comparison shapes.");const auto active=world.pickRagdoll(ray,5);
+        require(active&&active->bodyIndex==posed->bodyIndex&&near(active->distance,posed->distance,.0005f)&&math::length(active->position-posed->position)<.0005,"Posed query geometry differs from native simulation body geometry.");world.removeRagdoll(11);
+    }
+    const auto asset=setup(*source,true);const Ray ray{{0,2,3},{0,0,-1}};bool valid=true;
+    require(!world.pickRagdollPose(11,*asset,*source,pose,math::scaling({1,2,1}),ray,5,&valid)&&!valid,"Nonuniform posed query was accepted.");
+    valid=true;require(!world.pickRagdollPose(11,*asset,*source,pose,math::scaling({-1,1,1}),ray,5,&valid)&&!valid,"Reflected posed query was accepted.");
+    auto malformed=pose;malformed.worldTransforms[1][12]=std::numeric_limits<float>::quiet_NaN();valid=true;require(!world.pickRagdollPose(11,*asset,*source,malformed,Mat4{},ray,5,&valid)&&!valid,"Malformed posed bone was accepted.");
+    auto stale=*asset;stale.sourceModel.id="58070ae2-87db-4923-9654-c0b335e877e2";valid=true;require(!world.pickRagdollPose(11,stale,*source,pose,Mat4{},ray,5,&valid)&&!valid,"Mismatched source identity was accepted.");
+    stale=*asset;stale.bodies.clear();valid=true;require(!world.pickRagdollPose(11,stale,*source,pose,Mat4{},ray,5,&valid)&&!valid,"Empty unfinished rig displaced ordinary collision fallback.");
+}
 }
 int main() {
-    try{poseBindingAndHandoff();dropSleepQueriesAndIndependence();actorCollisionOwnershipAndTriggers();physicsDragReleaseAndReset();stationaryControllerBlocksDynamicBones();dynamicPairMasks();asymmetricJointAxes();transientPinsFreezeAndResume();isolatedBranchesRetainNativeConstraints();std::cout<<"Ragdoll physics checks passed.\n";return 0;}
+    try{poseBindingAndHandoff();dropSleepQueriesAndIndependence();actorCollisionOwnershipAndTriggers();physicsDragReleaseAndReset();stationaryControllerBlocksDynamicBones();dynamicPairMasks();asymmetricJointAxes();transientPinsFreezeAndResume();isolatedBranchesRetainNativeConstraints();activeTracesRetainExactPhysicalBody();posedQueriesMatchSimulationShapesWithoutWorldChanges();std::cout<<"Ragdoll physics checks passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

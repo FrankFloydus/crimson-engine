@@ -141,6 +141,7 @@ struct SceneTraceTestSettings {
     float length{10.f}; // World-space meters along the camera's center ray.
     float collisionQuadSize{.12f}; // World-space side length of the contact marker.
     std::uint32_t collisionMask{AllCollisionLayers}; // Target layer membership to detect.
+    float hitImpulse{50.f}; // Newton seconds; zero activates a hit ragdoll without a kick.
     bool operator==(const SceneTraceTestSettings&) const = default;
 };
 struct ScenePlayerInput {
