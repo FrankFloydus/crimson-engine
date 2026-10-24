@@ -223,6 +223,7 @@ struct PhysicsWorld::Impl final: JPH::CharacterContactListener,JPH::CharacterVsC
         LocalModelPose basePose;
         Mat4 modelWorld,inverseWorld;
         std::vector<Mat4> residual,previous,current;
+        std::vector<bool> pinned;
         EntityId owner{};
         CollisionFilter collision;
     };
@@ -473,7 +474,7 @@ bool PhysicsWorld::createRagdoll(EntityId id,std::shared_ptr<const RagdollAsset>
             shape=JPH::RotatedTranslatedShapeSettings(native(body.position*scale),offsetRotation,shape.Get()).Create();
             if(shape.HasError())throw std::runtime_error(shape.GetError().c_str());
             JPH::RagdollSettings::Part part;part.SetShape(shape.Get());part.mPosition=position(frame);part.mRotation=q;
-            part.mMotionType=JPH::EMotionType::Dynamic;part.mObjectLayer=DynamicLayer;part.mMotionQuality=JPH::EMotionQuality::LinearCast;
+            part.mMotionType=JPH::EMotionType::Dynamic;part.mAllowDynamicOrKinematic=true;part.mObjectLayer=DynamicLayer;part.mMotionQuality=JPH::EMotionQuality::LinearCast;
             part.mFriction=body.friction;part.mRestitution=body.restitution;part.mGravityFactor=pending.asset->gravityFactor;
             part.mOverrideMassProperties=JPH::EOverrideMassProperties::CalculateInertia;part.mMassPropertiesOverride.mMass=body.mass;
             if(body.parent>=0) {
@@ -500,7 +501,7 @@ bool PhysicsWorld::createRagdoll(EntityId id,std::shared_ptr<const RagdollAsset>
         settings->DisableParentChildCollisions(referenceMatrices.data(),.002f*scale);
         pending.native=settings->CreateRagdoll(state.nextRagdollGroup++,id,&state.world);
         if(!pending.native)throw std::runtime_error("Physics body capacity exceeded; ragdoll was not created.");
-        pending.native->SetPose(JPH::RVec3::sZero(),currentMatrices.data());pending.native->SetLinearVelocity(native(velocity));pending.previous=pending.current;
+        pending.native->SetPose(JPH::RVec3::sZero(),currentMatrices.data());pending.native->SetLinearVelocity(native(velocity));pending.previous=pending.current;pending.pinned.resize(pending.current.size());
         removeRagdoll(id);
         state.ragdolls.emplace(id,std::move(pending));auto& accepted=state.ragdolls.at(id);state.queryOwners[id]=accepted.owner;
         accepted.native->AddToPhysicsSystem(JPH::EActivation::Activate);
@@ -532,6 +533,23 @@ std::vector<Mat4> PhysicsWorld::ragdollBodyTransforms(EntityId id,float alpha) c
         result.push_back(ownMatrix(position(previous)+(position(current)-position(previous))*alpha,rotation(previous).SLERP(rotation(current),alpha)));
     }return result;
 }
+bool PhysicsWorld::setRagdollBodyPinned(EntityId id,std::size_t body,bool pinned) {
+    const auto found=impl_->ragdolls.find(id);if(found==impl_->ragdolls.end()||body>=found->second.pinned.size())return false;
+    auto& ragdoll=found->second;if(ragdoll.pinned[body]==pinned)return true;
+    if(impl_->dragEntity==id&&impl_->dragBody==body)impl_->endDrag();
+    const auto nativeBody=ragdoll.native->GetBodyID(static_cast<int>(body));auto& bodies=impl_->world.GetBodyInterface();
+    // Switching motion type preserves the authored mass/inertia. Kinematic
+    // bodies have infinite solver mass and continue participating in picking
+    // and collisions, while all native skeletal constraints remain attached.
+    bodies.SetLinearAndAngularVelocity(nativeBody,JPH::Vec3::sZero(),JPH::Vec3::sZero());
+    bodies.SetMotionType(nativeBody,pinned?JPH::EMotionType::Kinematic:JPH::EMotionType::Dynamic,JPH::EActivation::Activate);
+    bodies.InvalidateContactCache(nativeBody);ragdoll.pinned[body]=pinned;
+    ragdoll.previous[body]=ragdoll.current[body];
+    ragdoll.native->ResetWarmStart();ragdoll.native->Activate();return true;
+}
+bool PhysicsWorld::ragdollBodyPinned(EntityId id,std::size_t body) const {
+    const auto found=impl_->ragdolls.find(id);return found!=impl_->ragdolls.end()&&body<found->second.pinned.size()&&found->second.pinned[body];
+}
 std::shared_ptr<const ModelPose> PhysicsWorld::sampleRagdollPose(EntityId id,float alpha) const {
     const auto found=impl_->ragdolls.find(id);if(found==impl_->ragdolls.end())return {};
     const auto& ragdoll=found->second;const auto frames=ragdollBodyTransforms(id,alpha);auto local=ragdoll.basePose;
@@ -560,9 +578,11 @@ bool PhysicsWorld::applyRagdollImpulse(EntityId id,const Vec3& impulse,std::opti
     if(bodyIndex<0) {
         // One authored impulse is a total impulse for the character, distributed
         // by mass. Applying the full impulse to every bone multiplies its energy.
-        float mass=0;for(const auto& body:ragdoll.asset->bodies)mass+=body.mass;
-        for(std::size_t body=0;body<count;++body)impl_->world.GetBodyInterface().AddImpulse(ragdoll.native->GetBodyID(static_cast<int>(body)),native(impulse*(ragdoll.asset->bodies[body].mass/mass)));
-    } else if(point)impl_->world.GetBodyInterface().AddImpulse(ragdoll.native->GetBodyID(bodyIndex),native(impulse),JPH::RVec3((*point)[0],(*point)[1],(*point)[2]));
+        float mass=0;for(std::size_t body=0;body<count;++body)if(!ragdoll.pinned[body])mass+=ragdoll.asset->bodies[body].mass;
+        if(mass<=0)return false;
+        for(std::size_t body=0;body<count;++body)if(!ragdoll.pinned[body])impl_->world.GetBodyInterface().AddImpulse(ragdoll.native->GetBodyID(static_cast<int>(body)),native(impulse*(ragdoll.asset->bodies[body].mass/mass)));
+    } else if(ragdoll.pinned[static_cast<std::size_t>(bodyIndex)])return false;
+    else if(point)impl_->world.GetBodyInterface().AddImpulse(ragdoll.native->GetBodyID(bodyIndex),native(impulse),JPH::RVec3((*point)[0],(*point)[1],(*point)[2]));
     else impl_->world.GetBodyInterface().AddImpulse(ragdoll.native->GetBodyID(bodyIndex),native(impulse));
     return true;
 }
@@ -582,6 +602,7 @@ std::optional<RagdollBodyHit> PhysicsWorld::pickRagdoll(const Ray& ray,float max
 }
 bool PhysicsWorld::beginRagdollDrag(EntityId id,std::size_t body,const Vec3& point) {
     endRagdollDrag();const auto found=impl_->ragdolls.find(id);if(found==impl_->ragdolls.end()||body>=found->second.native->GetBodyCount()||!math::finite(point))return false;
+    if(found->second.pinned[body])return false;
     const auto bodyId=found->second.native->GetBodyID(static_cast<int>(body));
     {JPH::BodyLockWrite lock(impl_->world.GetBodyLockInterface(),bodyId);if(!lock.Succeeded())return false;
         JPH::SixDOFConstraintSettings settings;settings.mPosition1=settings.mPosition2=JPH::RVec3(point[0],point[1],point[2]);

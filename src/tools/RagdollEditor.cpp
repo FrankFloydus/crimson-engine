@@ -3,6 +3,7 @@
 #include "DocumentEditorMenu.h"
 #include "PropertyReset.h"
 #include "physics/PhysicsWorld.h"
+#include "editor/RagdollAuthoring.h"
 #include <numbers>
 #include <unordered_set>
 #include <functional>
@@ -31,14 +32,17 @@ bool RagdollEditor::focused() const {
     return isOpen()&&window&&window->RootWindow->ID==ImHashStr("###RagdollEditor");
 }
 void RagdollEditor::finishInteraction(bool preserveActiveItem) {
-    if(document_.transactionActive()&&document_.commit()){if(!preserveActiveItem)ImGui::ClearActiveID();suppressFinalUpdate_=true;propertySection_=0;}
+    const bool gizmoActive=gizmo_.active();
+    if(gizmoActive&&!gizmo_.finish(document_)){message_=gizmo_.diagnostic();return;}
+    if(gizmoActive||(document_.transactionActive()&&document_.commit())){if(!preserveActiveItem)ImGui::ClearActiveID();suppressFinalUpdate_=true;propertySection_=0;}
 }
 void RagdollEditor::cancelInteraction() {
-    previewGesture_=0;endDrag();
+    previewGesture_=0;endDrag();gizmo_.cancel(document_);
     if(document_.transactionActive()){document_.cancel();ImGui::ClearActiveID();suppressFinalUpdate_=true;propertySection_=0;}
 }
 void RagdollEditor::request(Pending pending,std::string id,AssetLibrary* assets) {
     if(pending_!=Pending::None)return;
+    if(gizmo_.active())finishInteraction();
     if(document_.transactionActive()&&!document_.commit()){message_=document_.status();return;}
     pending_=pending;pendingId_=std::move(id);
     if(isOpen()&&document_.dirty())dirtyPopup_=true;
@@ -54,7 +58,7 @@ void RagdollEditor::perform(AssetLibrary& assets) {
     const auto pending=pending_;pending_=Pending::None;continueAfterSave_=false;
     if(pending==Pending::Exit){exitReady_=true;return;}
     if(pending==Pending::Close) {
-        document_.close();assets.protectRagdollDocument({});assets.setRagdollDocumentReferences({},{});assets.refreshRagdolls();
+        gizmo_.cancel(document_);document_.close();assets.protectRagdollDocument({});assets.setRagdollDocumentReferences({},{});assets.refreshRagdolls();
         resetSimulation();boundSource_.reset();return;
     }
     if(pending==Pending::Open) {
@@ -78,6 +82,7 @@ void RagdollEditor::publish(AssetLibrary& assets) {
 }
 void RagdollEditor::save(AssetLibrary& assets,bool saveAs) {
     if(!isOpen())return;
+    if(gizmo_.active())finishInteraction();
     if(document_.transactionActive()&&!document_.commit()){message_=document_.status();return;}
     publish(assets);
     if(saveAs){std::snprintf(saveName_.data(),saveName_.size(),"%s",document_.definition().name.c_str());savePopup_=true;return;}
@@ -296,17 +301,44 @@ void RagdollEditor::properties(AssetLibrary& assets,const std::shared_ptr<const 
     }else if(propertySection_==section)finishInteraction();
 }
 void RagdollEditor::endDrag(){if(simulation_)simulation_->endRagdollDrag();dragging_=false;}
-void RagdollEditor::resetSimulation(){endDrag();simulation_.reset();simulating_=false;paused_=false;accumulator_=0;previewWorld_=Mat4{};}
+void RagdollEditor::resetSimulation(){endDrag();simulation_.reset();simulating_=false;paused_=false;accumulator_=0;previewWorld_=Mat4{};manualPins_.clear();scopePins_.clear();}
+void RagdollEditor::testControls() {
+    const auto count=document_.definition().bodies.size();manualPins_.resize(count);
+    ImGui::BeginDisabled(simulating_);
+    ImGui::SetNextItemWidth(180);ImGui::Combo("Test Mode",&simulationMode_,"Whole Ragdoll\0Selected Body\0Selected Branch\0");
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Reset before changing the simulation scope");
+    ImGui::EndDisabled();
+    const bool selected=selectedBody_>=0&&std::size_t(selectedBody_)<count;
+    const bool fixed=selected&&std::size_t(selectedBody_)<scopePins_.size()&&scopePins_[std::size_t(selectedBody_)]!=0;
+    ImGui::BeginDisabled(!selected||fixed);bool pinned=selected&&(manualPins_[std::size_t(selectedBody_)]!=0||fixed);
+    if(ImGui::Checkbox("Pin Selected Body",&pinned)&&selected) {
+        const auto index=std::size_t(selectedBody_);
+        if(!simulation_||simulation_->setRagdollBodyPinned(1,index,pinned||fixed)){manualPins_[index]=pinned;if(dragging_&&pinned)endDrag();}
+        else message_=simulation_->status();
+    }
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",fixed?"Reset to change Test Mode; this body is outside the current scope":"Hold this body at its current pose during the test");
+    ImGui::EndDisabled();ImGui::SameLine();
+    if(ImGui::Button("Clear Pins"))for(std::size_t i=0;i<count;++i)if(manualPins_[i]) {
+        const bool scopePin=i<scopePins_.size()&&scopePins_[i];
+        if(!simulation_||simulation_->setRagdollBodyPinned(1,i,scopePin))manualPins_[i]=0;else message_=simulation_->status();
+    }
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Clear manual pins; bodies outside the test scope stay fixed");
+}
 void RagdollEditor::startSimulation(const std::shared_ptr<const ModelAsset>& source,const ModelPose& pose) {
-    resetSimulation();if(!source)return;
+    const auto manualPins=manualPins_;resetSimulation();manualPins_=manualPins;if(!source)return;
     try {
         finishInteraction();validateRagdollSource(document_.definition(),*source);
         if(document_.definition().bodies.empty())throw std::runtime_error("Add physical bodies before starting simulation.");
+        if(simulationMode_!=0&&(selectedBody_<0||std::size_t(selectedBody_)>=document_.definition().bodies.size()))throw std::runtime_error("Select a physical body before starting this test mode.");
         EntityRecord floor;floor.id=2;floor.name="Ragdoll preview floor";floor.local=math::translation({0,-.5f,0});floor.collider.emplace();floor.collider->size={100,1,100};floor_.apply({floor},{});
         simulation_=std::make_unique<PhysicsWorld>();simulation_->reconcileStatics(floor_);
         previewWorld_=math::translation({0,dropHeight_-(pose.bounds.valid?std::min(0.f,pose.bounds.minimum[1]):0.f),0});
         if(!simulation_->createRagdoll(1,std::make_shared<const RagdollAsset>(document_.definition()),source,pose,previewWorld_))throw std::runtime_error(simulation_->status());
-        simulationRevision_=document_.previewRevision();simulating_=true;message_.clear();
+        const auto mask=ragdollSimulationMask(document_.definition().bodies,std::size_t(selectedBody_),static_cast<RagdollSimulationScope>(simulationMode_));
+        scopePins_=ragdollScopePinMask(document_.definition().bodies,mask,false);manualPins_.resize(scopePins_.size());
+        for(std::size_t i=0;i<scopePins_.size();++i)if(scopePins_[i]||manualPins_[i])
+            if(!simulation_->setRagdollBodyPinned(1,i,true))throw std::runtime_error(simulation_->status());
+        simulationRevision_=document_.previewRevision();testRevision_=simulationRevision_;simulating_=true;message_.clear();
     }catch(const std::exception& error){resetSimulation();message_=error.what();}
 }
 
@@ -336,7 +368,8 @@ void RagdollEditor::overlays(const ModelAsset& source,const ModelPose& pose,cons
         const auto& body=definition.bodies[index];if(body.node>=pose.worldTransforms.size())continue;
         const auto bone=index<simulated.size()?simulated[index]:previewWorld_*math::orthonormalFrame(pose.worldTransforms[body.node]);
         const auto shape=bone*math::translation(body.position)*math::rotation(body.rotation);
-        const auto color=int(index)==selectedBody_?IM_COL32(255,195,50,255):IM_COL32(57,175,221,230);const float thick=int(index)==selectedBody_?2.f:1.f;
+        const bool manual=index<manualPins_.size()&&manualPins_[index],fixed=index<scopePins_.size()&&scopePins_[index];
+        const auto color=manual?IM_COL32(232,105,174,255):fixed?IM_COL32(125,145,165,230):int(index)==selectedBody_?IM_COL32(255,195,50,255):IM_COL32(57,175,221,230);const float thick=int(index)==selectedBody_?2.f:1.f;
         const auto edge=[&](const Vec3& a,const Vec3& b){line(math::transformPoint(shape,a),math::transformPoint(shape,b),color,thick);};
         const auto ring=[&](unsigned axis,float along,float radius){Vec3 previous{};for(unsigned i=0;i<=32;++i){const double angle=i*2*std::numbers::pi/32;Vec3 p;p[axis]=along;p[(axis+1)%3]=float(std::cos(angle)*radius);p[(axis+2)%3]=float(std::sin(angle)*radius);if(i)edge(previous,p);previous=p;}};
         if(showShapes_) {
@@ -371,22 +404,33 @@ void RagdollEditor::overlays(const ModelAsset& source,const ModelPose& pose,cons
 }
 void RagdollEditor::preview(AssetLibrary& assets,Renderer& renderer,ResourceManager& resources,EditorResources& prepared,double dt) {
     previewStatus_.clear();const auto source=assets.findModel(document_.definition().sourceModel.id);
-    if(source!=boundSource_){resetSimulation();boundSource_=source;framePending_=true;}
+    if(source!=boundSource_){gizmo_.cancel(document_);resetSimulation();simulationMode_=0;boundSource_=source;framePending_=true;}
     if(simulating_&&simulationRevision_!=document_.previewRevision())resetSimulation();
+    if(testRevision_!=document_.previewRevision()){manualPins_.assign(document_.definition().bodies.size(),0);scopePins_.clear();simulationMode_=0;testRevision_=document_.previewRevision();}
     std::shared_ptr<const ModelPose> startingPose;
     if(source)try {if(startingClip_>=int(source->animations.size()))startingClip_=-1;startingPose=std::make_shared<const ModelPose>(evaluateModelPose(*source,startingClip_>=0?std::optional<std::size_t>{std::size_t(startingClip_)}:std::nullopt,seconds_,false));}catch(const std::exception& error){previewStatus_=error.what();}
     ImGui::BeginDisabled(!source||!startingPose||document_.definition().bodies.empty());
     if(ImGui::Button(simulating_?(paused_?"Resume":"Pause"):"Simulate")){if(simulating_){paused_=!paused_;if(paused_)endDrag();}else startSimulation(source,*startingPose);}ImGui::EndDisabled();
-    ImGui::SameLine();if(ImGui::Button("Reset"))resetSimulation();ImGui::SameLine();if(ImGui::Button("Frame"))framePending_=true;
+    ImGui::SameLine();if(ImGui::Button("Reset")){finishInteraction();resetSimulation();}ImGui::SameLine();if(ImGui::Button("Frame")){finishInteraction();framePending_=true;}
     ImGui::SameLine();ImGui::Checkbox("Bones",&showBones_);ImGui::SameLine();ImGui::Checkbox("Shapes",&showShapes_);ImGui::SameLine();ImGui::Checkbox("Joints",&showJoints_);
+    testControls();
     ImGui::BeginDisabled(simulating_);
+    for(int operation=0;operation<3;++operation){if(operation)ImGui::SameLine();const char* labels[]{"Move (T)","Rotate (R)","Resize (E)"};if(ImGui::RadioButton(labels[operation],gizmoOperation_==operation)){finishInteraction();gizmoOperation_=operation;}}
+    ImGui::EndDisabled();
+    const auto& keyboard=ImGui::GetIO();
+    if(!simulating_&&!gizmo_.active()&&!keyboard.WantTextInput&&!ImGui::IsAnyItemActive()&&!ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup)&&ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) {
+        if(ImGui::IsKeyPressed(ImGuiKey_T,false))gizmoOperation_=0;
+        if(ImGui::IsKeyPressed(ImGuiKey_R,false))gizmoOperation_=1;
+        if(ImGui::IsKeyPressed(ImGuiKey_E,false))gizmoOperation_=2;
+    }
+    ImGui::BeginDisabled(simulating_||gizmo_.active());
     if(ImGui::BeginCombo("Starting Pose",source&&startingClip_>=0?source->animations[startingClip_].name.c_str():"Reference Pose")) {
         if(ImGui::Selectable("Reference Pose",startingClip_<0)){startingClip_=-1;seconds_=0;}
         if(source)for(std::size_t i=0;i<source->animations.size();++i){ImGui::PushID(int(i));const auto& clip=source->animations[i];const auto label=clip.name.empty()?"Animation "+std::to_string(i):clip.name;if(ImGui::Selectable(label.c_str(),startingClip_==int(i))){startingClip_=int(i);seconds_=clip.start;}ImGui::PopID();}ImGui::EndCombo();
     }
     if(source&&startingClip_>=0){const auto& clip=source->animations[startingClip_];float time=float(seconds_);if(ImGui::SliderFloat("Time (s)",&time,clip.start,clip.end,"%.3f"))seconds_=time;}
     ImGui::SetNextItemWidth(140);ImGui::DragFloat("Drop Height (m)",&dropHeight_,.05f,0,100,"%.2f",ImGuiSliderFlags_AlwaysClamp);ImGui::EndDisabled();
-    const auto available=ImGui::GetContentRegionAvail();if(available.x<=0||available.y<=0){endDrag();return;}
+    const auto available=ImGui::GetContentRegionAvail();if(available.x<=0||available.y<=0){gizmo_.cancel(document_);endDrag();return;}
     const auto origin=ImGui::GetCursorScreenPos();const ViewportRegion region{origin.x,origin.y,available.x,available.y};
     const auto scale=ImGui::GetWindowViewport()->FramebufferScale;
     const auto width=std::uint32_t(std::clamp(available.x*scale.x,1.f,16384.f)),height=std::uint32_t(std::clamp(available.y*scale.y,1.f,16384.f));
@@ -406,15 +450,29 @@ void RagdollEditor::preview(AssetLibrary& assets,Renderer& renderer,ResourceMana
         const bool activated=ImGui::IsItemActivated();
         const int mouseOwner=interaction.active?ImGui::GetCurrentContext()->ActiveIdMouseButton:-1;
         imageDrawn=true;displayedTarget_=texture.idx;
-        const auto& io=ImGui::GetIO();const bool ownsInput=!interaction.blocked;
+        if(activated&&mouseOwner==ImGuiMouseButton_Left&&!gizmo_.active()&&document_.transactionActive()) {
+            finishInteraction(true);suppressFinalUpdate_=false;
+        }
+        const auto& io=ImGui::GetIO();
+        std::vector<Mat4> boneFrames;bool compatible=false;
+        if(source&&startingPose)try {validateRagdollSource(document_.definition(),*source);compatible=true;boneFrames.reserve(startingPose->worldTransforms.size());for(const auto& matrix:startingPose->worldTransforms)boneFrames.push_back(previewWorld_*math::orthonormalFrame(matrix));}catch(...){ }
+        struct DrawChannels {ImDrawList* list;explicit DrawChannels(ImDrawList* value):list(value){list->ChannelsSplit(2);}~DrawChannels(){list->ChannelsMerge();}} channels(ImGui::GetWindowDrawList());
+        channels.list->ChannelsSetCurrent(1);bool overGizmo=false;
+        if(!simulating_&&compatible&&selectedBody_>=0&&std::size_t(selectedBody_)<document_.definition().bodies.size()) {
+            const auto node=document_.definition().bodies[std::size_t(selectedBody_)].node;
+            if(node<boneFrames.size())overGizmo=gizmo_.draw(document_,std::size_t(selectedBody_),boneFrames[node],settings_.camera,region,static_cast<RagdollAuthoringOperation>(gizmoOperation_),proportionLock_,!imageReady||interaction.blocked||(!interaction.hovered&&!gizmo_.active()));
+            if(!gizmo_.diagnostic().empty())previewStatus_=gizmo_.diagnostic();
+        }else if(gizmo_.active())gizmo_.cancel(document_);
+        channels.list->ChannelsSetCurrent(0);
+        const bool ownsInput=!interaction.blocked&&!overGizmo&&!gizmo_.active();
         const auto ray=settings_.camera.screenRay(io.MousePos.x,io.MousePos.y,region);
         if(ownsInput&&interaction.hovered) {
             if(activated&&mouseOwner==ImGuiMouseButton_Middle){endDrag();ImGui::SetWindowFocus();previewGesture_=io.KeyShift?2:1;}
             if(io.MouseWheel)settings_.camera.zoom(io.MouseWheel);
             if(activated&&mouseOwner==ImGuiMouseButton_Left&&ray&&previewGesture_==0) {
                 finishInteraction(true);ImGui::SetWindowFocus();
-                if(simulation_) {if(const auto hit=simulation_->pickRagdoll(*ray,settings_.camera.farPlane)){selectedBody_=int(hit->bodyIndex);selectedNode_=int(document_.definition().bodies[hit->bodyIndex].node);if(!paused_&&simulation_->beginRagdollDrag(hit->entity,hit->bodyIndex,hit->position)){dragging_=true;dragPoint_=hit->position;dragNormal_=settings_.camera.forward();}}}
-                else if(source&&startingPose){float best=14.f;int selected=-1;for(std::size_t i=0;i<document_.definition().bodies.size();++i){const auto& body=document_.definition().bodies[i];if(body.node>=startingPose->worldTransforms.size())continue;const auto world=startingPose->worldTransforms[body.node];const auto p=math::project({world[12],world[13],world[14]},settings_.camera.projectionMatrix(region.width/region.height,ClipDepth::ZeroToOne)*settings_.camera.viewMatrix(),{region.x,region.y,region.width,region.height},ClipDepth::ZeroToOne);if(p&&(*p)[2]>=0&&(*p)[2]<=1){const float distance=std::hypot((*p)[0]-io.MousePos.x,(*p)[1]-io.MousePos.y);if(distance<best){best=distance;selected=int(i);}}}if(selected>=0){selectedBody_=selected;selectedNode_=int(document_.definition().bodies[selected].node);}}
+                if(imageReady&&simulation_) {if(const auto hit=simulation_->pickRagdoll(*ray,settings_.camera.farPlane)){selectedBody_=int(hit->bodyIndex);selectedNode_=int(document_.definition().bodies[hit->bodyIndex].node);if(!paused_&&simulation_->beginRagdollDrag(hit->entity,hit->bodyIndex,hit->position)){dragging_=true;dragPoint_=hit->position;dragNormal_=settings_.camera.forward();}}}
+                else if(imageReady&&compatible&&ray)if(const auto hit=pickRagdollBodies(document_.definition().bodies,boneFrames,*ray,settings_.camera.farPlane)){selectedBody_=int(hit->body);selectedNode_=int(document_.definition().bodies[hit->body].node);}
             }
         }
         const bool focused=ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
@@ -429,13 +487,13 @@ void RagdollEditor::preview(AssetLibrary& assets,Renderer& renderer,ResourceMana
         else if(!model||!model->ready)previewStatus_="Preparing ragdoll preview...";else if(!environmentRevision_)previewStatus_="Preparing preview environment...";
         if(environment_.state()==ResourceState::Failed)previewStatus_=environment_.diagnostic();
         if(model&&model->ready&&pose&&environmentRevision_){auto pins=std::make_shared<PreviewPins>();pins->model=model;pins->pose=pose;pins->environment=environment.shared();std::array<RenderModelInstance,1> instances{{{0,{model->asset,previewWorld_},&model->textures,model->revision,false,false,&model->materials}}};instances.front().pose=pose;instances.front().castShadows=false;RenderScene scene{settings_,{},nullptr,nullptr,instances,{}, {},true,pins};renderer.renderRagdollPreview(scene);overlays(*source,*pose,region);}
-    }catch(const std::exception& error){previewStatus_=error.what();endDrag();if(!imageDrawn)drawRagdollPreviewImage(ImTextureRef{},available,false);}
+    }catch(const std::exception& error){previewStatus_=error.what();gizmo_.cancel(document_);endDrag();if(!imageDrawn)drawRagdollPreviewImage(ImTextureRef{},available,false);}
 }
 void RagdollEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManager& resources,EditorResources& prepared,double dt) {
     if(pending_==Pending::Exit&&!document_.dirty())perform(assets);
-    if(isOpen()&&assets.references().deleted(document_.assetId())){resetSimulation();document_.close();assets.protectRagdollDocument({});assets.setRagdollDocumentReferences({},{});message_="The open Ragdoll asset was deleted.";}
+    if(isOpen()&&assets.references().deleted(document_.assetId())){gizmo_.cancel(document_);resetSimulation();document_.close();assets.protectRagdollDocument({});assets.setRagdollDocumentReferences({},{});message_="The open Ragdoll asset was deleted.";}
     if(isOpen()&&externalChanged_&&!document_.transactionActive()&&pending_==Pending::None){externalChanged_=false;if(document_.externalFileChanged()){if(document_.dirty())externalPopup_=true;else {resetSimulation();if(!document_.load(document_.assetId()))message_=document_.status();}}}
-    if(!isOpen()){resetSimulation();renderer.releaseRagdollPreview();displayedTarget_=UINT16_MAX;environment_={};environmentRevision_=0;boundSource_.reset();modals(assets);return;}
+    if(!isOpen()){gizmo_.cancel(document_);resetSimulation();renderer.releaseRagdollPreview();displayedTarget_=UINT16_MAX;environment_={};environmentRevision_=0;boundSource_.reset();modals(assets);return;}
     if(focusNext_){ImGui::SetNextWindowFocus();focusNext_=false;}
     ImGui::SetNextWindowDockID(0,ImGuiCond_Always);ImGui::SetNextWindowSize({1240,800},ImGuiCond_FirstUseEver);ImGui::SetNextWindowSizeConstraints({840,480},{FLT_MAX,FLT_MAX});
     bool open=true;const auto title="Ragdoll Editor - "+document_.definition().name+(document_.dirty()?" *":"")+"###RagdollEditor";
@@ -449,7 +507,7 @@ void RagdollEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManager
                 ImGui::TableSetupColumn("Properties",ImGuiTableColumnFlags_WidthFixed,390);ImGui::TableSetupColumn("Preview",ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableNextColumn();ImGui::BeginChild("Ragdoll properties",{0,0});properties(assets,assets.findModel(document_.definition().sourceModel.id),canceled);if(!message_.empty())ImGui::TextWrapped("%s",message_.c_str());if(!document_.status().empty())ImGui::TextWrapped("%s",document_.status().c_str());if(!previewStatus_.empty())ImGui::TextWrapped("%s",previewStatus_.c_str());ImGui::EndChild();
                 ImGui::TableNextColumn();ImGui::BeginChild("Ragdoll preview",{0,0});preview(assets,renderer,resources,prepared,dt);ImGui::EndChild();ImGui::EndTable();
-            }else endDrag();
+            }else {gizmo_.cancel(document_);endDrag();}
         }
     }else {finishInteraction();endDrag();previewGesture_=0;}
     ImGui::End();publish(assets);modals(assets);

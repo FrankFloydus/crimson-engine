@@ -249,6 +249,7 @@ void EditorSession::cancelInteraction(Renderer& renderer) {
     playShortcuts_.cancel();playActionPending_=PlayAction::None;
 }
 void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,bool stop) {
+    ragdollEditor_.cancelInteraction();
     attributeDebug_.reset();
     cameraPilot_.useEditorCamera(activeDocument(),settings_.camera);cameraGestureCancel_=false;
     waitingForCollision_=false;

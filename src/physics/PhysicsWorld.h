@@ -86,6 +86,10 @@ public:
     std::shared_ptr<const ModelPose> sampleRagdollPose(EntityId,float alpha=1) const;
     // World rigid source-bone frames, parallel to the setup's body array.
     std::vector<Mat4> ragdollBodyTransforms(EntityId,float alpha=1) const;
+    // Transient authoring/test pins hold the current body pose through native
+    // kinematic motion. Unpinning restores dynamics and wakes the connected rig.
+    bool setRagdollBodyPinned(EntityId,std::size_t bodyIndex,bool pinned);
+    bool ragdollBodyPinned(EntityId,std::size_t bodyIndex) const;
     bool applyRagdollImpulse(EntityId,const Vec3&,std::optional<Vec3> worldPoint={},int bodyIndex=-1);
     std::optional<RagdollBodyHit> pickRagdoll(const Ray&,float maxDistance) const;
     bool beginRagdollDrag(EntityId,std::size_t bodyIndex,const Vec3& worldPoint);

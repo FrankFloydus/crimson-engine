@@ -108,7 +108,7 @@ void SceneViewport::cancel(SceneDocument& document, Renderer& renderer) {
     transformDrag_.cancel(document);
     colliderDrag_.cancel(document);
     volumeDrag_.cancel(document);
-    ImGuizmo::Enable(false);
+    if(!ImGuizmo::IsUsingAny()||ImGuizmo::IsUsing())ImGuizmo::Enable(false);
     renderer.cancelPicking(); ++serial_;
     pickIntent_=false;
     materialDrop_.cancel();
@@ -330,9 +330,12 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             const auto transformRoots=showTransformGizmo && !visibleSelection.empty()?document.scene().topmost(visibleSelection):std::vector<EntityId>{};
             const bool transformVisible=showTransformGizmo && !transformRoots.empty();
             if (!transformVisible && transformDrag_.active()) cancel(document,renderer);
-            if (!transformVisible) ImGuizmo::Enable(false);
+            // ImGuizmo's enabled/using state is global. An independent document
+            // preview may own the current drag even when Scene has no selection.
+            const bool foreignGizmo=ImGuizmo::IsUsingAny()&&!ImGuizmo::IsUsing();
+            if (!transformVisible&&!foreignGizmo) ImGuizmo::Enable(false);
             if (transformVisible && !waitForRelease_ && !colliderHandles.hovered && !volumeHandles.hovered && !colliderDrag_.active() && !volumeDrag_.active() && !materialDrop_.active() && !decalDrop_.active() && !frame.materialAssignment &&
-                !navigationActive && !keyboardBlocked && !ImGui::GetIO().AppFocusLost && (!document.transactionActive() || transformDrag_.active())) {
+                !foreignGizmo && !navigationActive && !keyboardBlocked && !ImGui::GetIO().AppFocusLost && (!document.transactionActive() || transformDrag_.active())) {
                 if (!transformDrag_.active()) {
                     decalEditFrame_.reset();
                     const auto bounds = boundsOf(document,assets,{},collisionMeshes_,agentProfiles_);
@@ -379,7 +382,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             // Release ownership even if a newly blocked/hidden handle skipped
             // Manipulate this frame. A transaction must not outlive its button.
             if(transformDrag_.active() && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                transformDrag_.finish(document);ImGuizmo::Enable(false);
+                transformDrag_.finish(document);if(!ImGuizmo::IsUsingAny()||ImGuizmo::IsUsing())ImGuizmo::Enable(false);
             }
             draw->ChannelsSetCurrent(0);
             // Resolve markers after applying this frame's gizmo delta, so their

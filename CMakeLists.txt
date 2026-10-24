@@ -236,7 +236,7 @@ add_executable(crimson-renderer WIN32
     src/editor/EditorPreferences.cpp src/editor/EditorResources.cpp src/editor/EditorRenderFrame.cpp src/editor/AssetPreviews.cpp src/editor/DecalPreview.cpp src/editor/AssetPreviewCache.cpp
     src/editor/ColliderGizmo.cpp src/editor/ColliderGizmoUi.cpp
     src/editor/NavigationVolumeGizmo.cpp src/editor/NavigationPreview.cpp src/editor/NavigationAgentProfileDocument.cpp
-    src/editor/CollisionLayersDocument.cpp src/editor/GameplayEffectDocument.cpp src/editor/AnimationDocument.cpp src/editor/RagdollDocument.cpp
+    src/editor/CollisionLayersDocument.cpp src/editor/GameplayEffectDocument.cpp src/editor/AnimationDocument.cpp src/editor/RagdollDocument.cpp src/editor/RagdollAuthoring.cpp
     src/editor/CommandConsole.cpp src/editor/AttributeDebug.cpp
     src/editor/MaterialPreview.cpp src/editor/MaterialPreviewNavigation.cpp
     src/editor/CollisionResources.cpp src/editor/QuaderSceneIntegration.cpp
@@ -270,7 +270,7 @@ add_executable(crimson-renderer WIN32
     src/tools/ColorGradientEditor.cpp
     src/tools/HdrColorEditor.cpp
     src/tools/MaterialEditor.cpp src/tools/MaterialGraphEditor.cpp src/tools/TextureAssetField.cpp src/tools/DecalEditor.cpp
-    src/tools/NavigationAgentProfileEditor.cpp src/tools/CollisionLayersEditor.cpp src/tools/GameplayEffectEditor.cpp src/tools/AnimationEditor.cpp src/tools/RagdollEditor.cpp
+    src/tools/NavigationAgentProfileEditor.cpp src/tools/CollisionLayersEditor.cpp src/tools/GameplayEffectEditor.cpp src/tools/AnimationEditor.cpp src/tools/RagdollEditor.cpp src/tools/RagdollBodyGizmo.cpp
     src/input/Navigation.h src/input/Navigation.cpp
     src/assets/AssetLibrary.h src/assets/AssetLibrary.cpp src/assets/AssetLibraryDecals.cpp
     src/assets/AssetReferenceManager.cpp src/assets/AsyncImports.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp
@@ -331,6 +331,15 @@ if(BUILD_TESTING)
     target_link_libraries(ragdoll_asset_tests PRIVATE crimson-scene)
     target_compile_options(ragdoll_asset_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME ragdoll_asset_core COMMAND ragdoll_asset_tests)
+    add_executable(ragdoll_authoring_tests tests/ragdoll_authoring_tests.cpp src/editor/RagdollAuthoring.cpp)
+    target_link_libraries(ragdoll_authoring_tests PRIVATE crimson-scene)
+    target_compile_options(ragdoll_authoring_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME ragdoll_authoring_core COMMAND ragdoll_authoring_tests)
+    add_executable(ragdoll_gizmo_ui_tests tests/ragdoll_gizmo_ui_tests.cpp src/tools/RagdollBodyGizmo.cpp src/editor/RagdollAuthoring.cpp src/editor/RagdollDocument.cpp)
+    target_include_directories(ragdoll_gizmo_ui_tests PRIVATE src)
+    target_link_libraries(ragdoll_gizmo_ui_tests PRIVATE crimson-scene imguizmo::imguizmo imgui::imgui)
+    target_compile_options(ragdoll_gizmo_ui_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME ragdoll_gizmo_ui_core COMMAND ragdoll_gizmo_ui_tests)
     add_executable(ragdoll_document_tests tests/ragdoll_document_tests.cpp src/editor/RagdollDocument.cpp)
     target_link_libraries(ragdoll_document_tests PRIVATE crimson-scene)
     target_compile_options(ragdoll_document_tests PRIVATE /W4 /permissive- /utf-8)

@@ -121,8 +121,40 @@ void asymmetricJointAxes() {
     const auto frames=world.ragdollBodyTransforms(1);const auto relative=*math::inverse(frames[0])*frames[1];
     require(relative[0]>.995f&&std::abs(relative[2])<.08f,"Authored Swing Y limit was applied to the wrong joint axis.");
 }
+void transientPinsFreezeAndResume() {
+    Scene scene;const auto source=model();const auto asset=setup(*source,true);const auto pose=evaluateModelPose(*source);PhysicsWorld world;
+    require(world.createRagdoll(1,asset,source,pose,math::translation({0,2,0}),{1,0,0}),"Could not create moving pin fixture.");tick(world,scene,15);
+    const auto moving=world.ragdollBodyTransforms(1).front();require(world.setRagdollBodyPinned(1,0,true)&&world.ragdollBodyPinned(1,0),"Body pin did not become active.");
+    same(world.ragdollBodyTransforms(1,0).front(),moving,"Pin retained an interpolated pose instead of freezing the actual body.");
+    require(world.setRagdollBodyPinned(1,0,true),"Repeated pin changed its result.");tick(world,scene,120);
+    same(world.ragdollBodyTransforms(1).front(),moving,"Pinned body moved under gravity.",.0005f);
+    const auto pick=world.pickRagdoll({{moving[12],moving[13]+2,moving[14]},{0,-1,0}},4);require(pick&&pick->entity==1&&pick->bodyIndex==0,"Kinematic pinned body disappeared from picking.");
+    require(!world.beginRagdollDrag(1,0,{moving[12],moving[13],moving[14]}),"Pinned body accepted a mouse drag.");
+    require(!world.applyRagdollImpulse(1,{0,5,0},{},0)&&!world.applyRagdollImpulse(1,{0,5,0}),"Pinned body accepted an impulse.");
+    require(world.setRagdollBodyPinned(1,0,false)&&!world.ragdollBodyPinned(1,0),"Body unpin failed.");tick(world,scene,30);
+    const auto released=world.ragdollBodyTransforms(1).front();require(released[13]<moving[13]-.8f&&near(released[12],moving[12]),"Unpin did not resume gravity with cleared prior velocity.");
+    require(!world.setRagdollBodyPinned(1,9,true)&&!world.ragdollBodyPinned(1,9),"Invalid body index accepted a pin.");
+    world.removeRagdoll(1);require(!world.ragdollBodyPinned(1,0)&&!world.setRagdollBodyPinned(1,0,false),"Removed rig retained transient pins.");
+    require(world.createRagdoll(1,asset,source,pose,Mat4{})&&!world.ragdollBodyPinned(1,0),"Recreated rig inherited old pins.");
+}
+void isolatedBranchesRetainNativeConstraints() {
+    Scene scene;const auto source=model();const auto asset=setup(*source);for(auto& body:asset->bodies)body.position={.1f,0,0};
+    PhysicsWorld world;require(world.createRagdoll(1,asset,source,evaluateModelPose(*source),Mat4{}),"Could not create isolated branch fixture.");
+    const auto initial=world.ragdollBodyTransforms(1);require(world.setRagdollBodyPinned(1,0,true),"Could not pin the branch parent.");
+    require(world.applyRagdollImpulse(1,{2,0,0},{},1),"Free selected body rejected an impulse.");tick(world,scene,90);
+    const auto branch=world.ragdollBodyTransforms(1);same(branch[0],initial[0],"Selected branch moved its pinned ancestor.",.0005f);
+    require(std::abs(branch[1][0]-initial[1][0])>.02f&&math::length(Vec3{branch[2][12]-initial[2][12],branch[2][13]-initial[2][13],branch[2][14]-initial[2][14]})>.05f,"Selected body or its free descendants did not respond below the pin.");
+    require(math::length(Vec3{branch[1][12]-initial[1][12],branch[1][13]-initial[1][13],branch[1][14]-initial[1][14]})<.02f,"Pinning discarded the native parent joint anchor.");
+    require(world.setRagdollBodyPinned(1,1,true),"Could not isolate the leaf joint.");const auto fixedParent=world.ragdollBodyTransforms(1)[1];
+    require(world.applyRagdollImpulse(1,{-2,1,0},{},2),"Selected leaf rejected an impulse.");tick(world,scene,60);const auto leaf=world.ragdollBodyTransforms(1);
+    same(leaf[1],fixedParent,"Testing a leaf joint moved its pinned parent.",.0005f);require(std::abs(leaf[2][0]-branch[2][0])>.02f,"The isolated selected joint did not respond.");
+    const Vec3 grab{leaf[2][12]+.1f,leaf[2][13],leaf[2][14]};require(world.beginRagdollDrag(1,2,grab),"Free isolated joint could not be grabbed.");
+    require(world.setRagdollBodyPinned(1,2,true)&&!world.updateRagdollDrag(grab+Vec3{1,0,0}),"Pinning a grabbed body retained its mouse constraint.");
+    const auto allPinned=world.ragdollBodyTransforms(1);tick(world,scene,60);for(std::size_t i=0;i<allPinned.size();++i)same(world.ragdollBodyTransforms(1)[i],allPinned[i],"All-pinned constraints changed a frozen pose.",.0005f);
+    require(world.setRagdollBodyPinned(1,2,false),"Could not release the isolated joint.");tick(world,scene,15);require(world.ragdollActive(1),"Unpinning did not wake the connected ragdoll.");world.removeRagdoll(1);
+}
 }
 int main() {
-    try{poseBindingAndHandoff();dropSleepQueriesAndIndependence();actorCollisionOwnershipAndTriggers();physicsDragReleaseAndReset();stationaryControllerBlocksDynamicBones();dynamicPairMasks();asymmetricJointAxes();std::cout<<"Ragdoll physics checks passed.\n";return 0;}
+    try{poseBindingAndHandoff();dropSleepQueriesAndIndependence();actorCollisionOwnershipAndTriggers();physicsDragReleaseAndReset();stationaryControllerBlocksDynamicBones();dynamicPairMasks();asymmetricJointAxes();transientPinsFreezeAndResume();isolatedBranchesRetainNativeConstraints();std::cout<<"Ragdoll physics checks passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

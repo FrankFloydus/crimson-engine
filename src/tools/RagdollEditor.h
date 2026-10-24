@@ -2,6 +2,7 @@
 #include "editor/RagdollDocument.h"
 #include "editor/EditorResources.h"
 #include "physics/PhysicsWorld.h"
+#include "RagdollBodyGizmo.h"
 #include <array>
 #include <span>
 
@@ -18,8 +19,8 @@ public:
     bool canRedo() const {return document_.canRedo();}
     bool canSave() const {return document_.editable();}
     bool canSaveAs() const {return isOpen();}
-    void undo(){resetSimulation();document_.undo();}
-    void redo(){resetSimulation();document_.redo();}
+    void undo(){finishInteraction();resetSimulation();document_.undo();}
+    void redo(){finishInteraction();resetSimulation();document_.redo();}
     void finishInteraction(bool preserveActiveItem=false);
     void cancelInteraction();
     void requestOpen(std::string id,AssetLibrary&);
@@ -39,6 +40,10 @@ private:
     bool dirtyPopup_{},savePopup_{},externalPopup_{},externalChanged_{},focusNext_{},exitReady_{},continueAfterSave_{},suppressFinalUpdate_{};
     bool simulating_{},paused_{},framePending_{true},dragging_{},showBones_{true},showShapes_{true},showJoints_{true};
     bool proportionLock_{};
+    int gizmoOperation_{},simulationMode_{};
+    RagdollBodyGizmo gizmo_;
+    std::uint64_t testRevision_{};
+    std::vector<std::uint8_t> manualPins_,scopePins_;
     float dropHeight_{.5f};
     double seconds_{},accumulator_{};
     int previewGesture_{},propertySection_{},selectedBody_{-1},selectedNode_{-1},startingClip_{-1},rebindSkin_{};
@@ -64,5 +69,6 @@ private:
     void resetSimulation();
     void endDrag();
     void startSimulation(const std::shared_ptr<const ModelAsset>&,const ModelPose&);
+    void testControls();
 };
 }
