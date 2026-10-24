@@ -1,5 +1,6 @@
 #include "decals/DecalSurface.h"
 #include "decals/DecalResolve.h"
+#include "decal_arch_fixture.h"
 #include <iostream>
 #include <cmath>
 #include <stdexcept>
@@ -20,7 +21,48 @@ void planeAndAffine(){
     r.frame.at(0,0)=-1;r.frame.at(0,1)=.25f;auto mirror=build(s,r,"mirrored sheared plane");require(mirror.usable(),mirror.message);for(const auto&c:mirror.chunks)for(const auto&v:c.vertices){double y=v.position[1],x=v.position[0];require(std::abs(v.uv[0]-(.5-x+.25*y))<.02,"Mirror/shear applied incorrectly");}provenance(s,mirror);
     auto&m=s.receivers[0].localToWorld;m.at(0,0)=2;m.at(1,1)=.5f;m.at(2,2)=-1;m.at(0,3)=2;m.at(1,3)=3;m.at(2,3)=1;r=request();r.frame.at(0,3)=2;r.frame.at(1,3)=3;r.frame.at(2,3)=1;auto affine=build(s,r,"affine receiver");require(affine.usable(),affine.message);provenance(s,affine);for(const auto&c:affine.chunks)for(const auto&v:c.vertices)require(v.baseNormal[2]<-.99f,"Mirrored normal transform lost handedness");
 }
+void translatedPlanePrecision(){
+    DecalSurfaceSnapshot s{{quad(1,{-10,-10,0},{10,-10,0},{10,10,0},{-10,10,0})}};
+    const float angle=.67f;const Mat4 world=math::translation({170,110,1000})*math::eulerRotationXYZ({angle*.33f,angle,angle*.71f});s.receivers[0].localToWorld=world;
+    // This interior seed is valid at every size. Rounding the published world
+    // vertices before seed-distance/connectivity validation used to reject the
+    // first three sizes while accepting the larger footprint on the same plane.
+    for(const float size:{.5f,1.f,1.3f,2.f}){
+        auto r=request();r.seed.barycentrics={.4f,.1f,.5f};r.frame=world*math::translation({2,0,0})*math::scaling({size,size,1});
+        const auto p=build(s,r,"translated rotated plane precision");require(p.status==DecalPatchStatus::Ready,"World-coordinate quantization rejected a valid plane footprint: "+p.message);
+        double area=0;for(const auto&chunk:p.chunks)for(size_t i=0;i<chunk.indices.size();i+=3){const auto a=chunk.vertices[chunk.indices[i]].uv,b=chunk.vertices[chunk.indices[i+1]].uv,c=chunk.vertices[chunk.indices[i+2]].uv;area+=.5*std::abs((double(b[0])-a[0])*(double(c[1])-a[1])-(double(b[1])-a[1])*(double(c[0])-a[0]));}
+        require(area>.999,"Translated plane lost part of its interior decal footprint.");
+    }
+}
 DecalSurfaceSnapshot corner(float y0=-1,float y1=1,float gap=0){return {{quad(1,{-1,-1,0},{0,-1,0},{0,1,0},{-1,1,0}),quad(2,{gap,y1,0},{gap,y0,0},{gap,y0,1},{gap,y1,1})}};}
+double uvArea(const DecalPatch&patch){
+    double area=0;for(const auto&chunk:patch.chunks)for(size_t i=0;i<chunk.indices.size();i+=3){const auto a=chunk.vertices[chunk.indices[i]].uv,b=chunk.vertices[chunk.indices[i+1]].uv,c=chunk.vertices[chunk.indices[i+2]].uv;area+=.5*std::abs((double(b[0])-a[0])*(double(c[1])-a[1])-(double(b[1])-a[1])*(double(c[0])-a[0]));}return area;
+}
+void resizedArch(){
+    const auto[boundarySurface,boundaryRequest]=test::bloodDecalArchFixture();
+    const auto boundary=build(boundarySurface,boundaryRequest,"resized arch retained vertex fans");
+    require(boundary.usable()&&uvArea(boundary)>.1,"Resizing the saved arch decal lost its seed-connected chart: "+boundary.message);provenance(boundarySurface,boundary);
+    const auto[surface,baseRequest]=test::bloodDecalCutoffFixture();
+    for(const float size:{1.f,1.5f,2.f}){
+        auto r=baseRequest;for(size_t axis=0;axis<3;++axis){r.frame.at(axis,0)*=size*.5f;r.frame.at(axis,1)*=size*.5f;}
+        const auto patch=build(surface,r,"resized arch thin chart triangles");
+        require(patch.usable()&&uvArea(patch)>.999,"A valid arch footprint stopped at a source face edge after resize: "+patch.message);provenance(surface,patch);
+    }
+}
+void localDevelopableFootprint(){
+    // The image lies on a cylindrical side. End caps are outside the image but
+    // inside the wider analysis halo, so their curvature must not distort it.
+    SurfaceReceiver receiver;receiver.id.entity=1;receiver.generation=1;constexpr unsigned sides=32;
+    const auto point=[](unsigned i,float y){const double angle=(i==sides?0.:double(i)/sides*2*3.14159265358979323846);return Vec3{.75*std::cos(angle),y,.75*std::sin(angle)};};
+    const auto add=[&](Vec3 a,Vec3 b,Vec3 c,Vec3 cap=Vec3{}){SurfaceTriangle t;t.triangle=static_cast<uint32_t>(receiver.triangles.size());t.positions={a,b,c};for(unsigned j=0;j<3;++j)t.normals[j]=math::length(cap)>.5?cap:math::normalized(Vec3{t.positions[j][0],0,t.positions[j][2]});receiver.triangles.push_back(t);};
+    for(unsigned i=0;i<sides;++i){add(point(i,2),point(i+1,2),point(i,-2));add(point(i+1,2),point(i+1,-2),point(i,-2));}
+    for(unsigned i=0;i<sides;++i){add({0,2,0},point(i+1,2),point(i,2),{0,1,0});add({0,-2,0},point(i,-2),point(i+1,-2),{0,-1,0});}
+    receiver.localToWorld=math::translation({3,2,25});DecalSurfaceSnapshot surface{{receiver}};auto r=request();r.seed.barycentrics={.25f,.35f,.4f};
+    const auto&t=receiver.triangles[0];Vec3 local{},normal{};for(size_t j=0;j<3;++j){local=local+t.positions[j]*r.seed.barycentrics[j];normal=normal+t.normals[j]*r.seed.barycentrics[j];}
+    const auto center=math::transformPoint(receiver.localToWorld,local);r.frame=surfacePlacementFrame(center,normal)*math::scaling({2,2,1});
+    const auto patch=build(surface,r,"local cylinder image excludes curved end-cap halo");
+    require(patch.usable()&&patch.statistics.usedDevelopableUnfolding&&uvArea(patch)>.999,"Outside-image end-cap curvature changed the local cylindrical footprint: "+patch.message);provenance(surface,patch);
+}
 DecalBuildRequest cornerRequest(){auto r=request();r.seed.triangle=0;r.seed.barycentrics={.2f,.3f,.5f};r.frame.at(0,3)=-.2f;return r;}
 void seams(){
     auto s=corner();auto r=cornerRequest();auto p=build(s,r,"separate mesh 90deg corner");require(p.usable(),p.message);require(p.chunks.size()==2,"90-degree corner did not reach second mesh");provenance(s,p);double worst=0;for(const auto&c:p.chunks)for(const auto&v:c.vertices){const double unrolled=c.receiver.entity==1?v.position[0]:v.position[2];worst=std::max(worst,std::abs(v.uv[0]-(.7+unrolled)));}require(worst<.02,"Corner wrap streaked or changed metre scale");
@@ -69,4 +111,4 @@ void closedBuiltinCylinder(){
 }
 void failures(){DecalSurfaceSnapshot s{{quad(1,{-1,-1,0},{1,-1,0},{1,1,0},{-1,1,0})}};auto r=request();std::stop_source stop;stop.request_stop();require(buildDecalPatch(s,r,stop.get_token()).status==DecalPatchStatus::Cancelled,"Cancellation ignored");r.limits.maximumTriangles=5;require(buildDecalPatch(s,r).status==DecalPatchStatus::LimitExceeded,"Geometry cap silently truncated");r=request();r.frame.at(0,0)=0;require(buildDecalPatch(s,r).status==DecalPatchStatus::InvalidInput,"Singular frame accepted");r=request();r.seed.receiver.entity=99;require(buildDecalPatch(s,r).status==DecalPatchStatus::MissingSeed,"Missing seed invented surface");}
 }
-int main(){try{planeAndAffine();seams();curved();nondevelopable();closedBuiltinCylinder();failures();std::cout<<"All decal CPU surface proofs passed\n";return 0;}catch(const std::exception&e){std::cerr<<"DECAL PROOF FAILED: "<<e.what()<<'\n';return 1;}}
+int main(){try{planeAndAffine();translatedPlanePrecision();resizedArch();localDevelopableFootprint();seams();curved();nondevelopable();closedBuiltinCylinder();failures();std::cout<<"All decal CPU surface proofs passed\n";return 0;}catch(const std::exception&e){std::cerr<<"DECAL PROOF FAILED: "<<e.what()<<'\n';return 1;}}

@@ -14,6 +14,22 @@
 #include <limits>
 
 namespace crimson {
+namespace {
+void drawCrosshair(ImDrawList& draw,ImVec2 origin,ImVec2 size) {
+    const ImVec2 center{origin.x+size.x*.5f,origin.y+size.y*.5f};
+    constexpr float gap=3.f,extent=8.f;
+    draw.PushClipRect(origin,{origin.x+size.x,origin.y+size.y},true);
+    const auto arm=[&](ImVec2 start,ImVec2 end) {
+        draw.AddLine(start,end,IM_COL32(0,0,0,220),3.f);
+        draw.AddLine(start,end,IM_COL32(255,255,255,255),1.f);
+    };
+    arm({center.x-extent,center.y},{center.x-gap,center.y});
+    arm({center.x+gap,center.y},{center.x+extent,center.y});
+    arm({center.x,center.y-extent},{center.x,center.y-gap});
+    arm({center.x,center.y+gap},{center.x,center.y+extent});
+    draw.PopClipRect();
+}
+}
 void GameView::updateMetrics(Renderer& renderer,std::uint64_t textureAndProgramBytes) {
     if(!newFrameTiming_)return;
     newFrameTiming_=false;FrameMetricsSample sample;sample.timing=frameTiming_;
@@ -78,6 +94,7 @@ GameViewFrame GameView::draw(SceneDocument& document,Renderer& renderer,bool& op
                 imageWidth_=frame.pixelWidth;imageHeight_=frame.pixelHeight;
                 frame.viewport.hovered=interaction.hovered;frame.clicked=interaction.clicked;
                 frame.viewport.inputBlocked=interaction.blocked;
+                if(playing)drawCrosshair(*imageDrawList_,origin,size);
             } else {
                 ImGui::TextUnformatted("No active camera");
                 frame.pixelWidth=frame.pixelHeight=0;

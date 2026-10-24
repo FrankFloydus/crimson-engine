@@ -92,9 +92,9 @@ AnalysisPatch buildTopology(const DecalSurfaceSnapshot&snapshot,const DecalBuild
     }
     std::map<std::pair<size_t,size_t>,std::vector<EdgeUse>> edges;size_t seedFace=SIZE_MAX,seedCorner=0;
     for(size_t i=0;i<allFaces.size();++i){const auto&f=allFaces[i];for(size_t j=0;j<3;++j){if(f.source==seedSource&&length(patch.positions[f.v[j]]-o)<=tol){seedFace=i;seedCorner=j;}edges[std::minmax(f.v[j],f.v[(j+1)%3])].push_back({i,j});}}
-    if(seedFace==SIZE_MAX)throw Failure(DecalPatchStatus::InvalidChart,"Seed insertion failed in the derived patch.");std::vector<std::vector<size_t>> adjacent(allFaces.size());Dsu corners(allFaces.size()*3);std::set<size_t> ambiguousFaces;
+    if(seedFace==SIZE_MAX)throw Failure(DecalPatchStatus::InvalidChart,"Seed insertion failed in the derived patch.");std::vector<std::vector<size_t>> adjacent(allFaces.size());Dsu corners(allFaces.size()*3);std::set<size_t> ambiguousFaces;std::vector<std::pair<EdgeUse,EdgeUse>> joinedEdges;
     for(const auto&[edge,uses]:edges){if(uses.size()<2)continue;bool good=uses.size()==2;if(good){const auto&a=uses[0];const auto&b=uses[1];const auto&fa=allFaces[a.face];const auto&fb=allFaces[b.face];good=fa.v[a.corner]==fb.v[(b.corner+1)%3]&&dot(patch.sources[fa.source].geometricNormal,patch.sources[fb.source].geometricNormal)>-.999999;
-            if(good){adjacent[a.face].push_back(b.face);adjacent[b.face].push_back(a.face);corners.join(3*a.face+a.corner,3*b.face+(b.corner+1)%3);corners.join(3*a.face+(a.corner+1)%3,3*b.face+b.corner);if(patch.sources[fa.source].receiver!=patch.sources[fb.source].receiver)++stats.joinedEdges;}}
+            if(good){adjacent[a.face].push_back(b.face);adjacent[b.face].push_back(a.face);joinedEdges.emplace_back(a,b);corners.join(3*a.face+a.corner,3*b.face+(b.corner+1)%3);corners.join(3*a.face+(a.corner+1)%3,3*b.face+b.corner);if(patch.sources[fa.source].receiver!=patch.sources[fb.source].receiver)++stats.joinedEdges;}}
         if(!good){++stats.ambiguousEdges;for(auto use:uses)ambiguousFaces.insert(use.face);}
     }
     // The Euclidean extraction box is only a broad phase. A small mark on a
@@ -112,8 +112,18 @@ AnalysisPatch buildTopology(const DecalSurfaceSnapshot&snapshot,const DecalBuild
     while(!frontier.empty()){cancelled(stop);const auto current=frontier.top();frontier.pop();if(current.distance!=distances[current.corner]||current.distance>intrinsicRadius+spacing)continue;for(const auto[next,weight]:graph[current.corner])if(current.distance+weight<distances[next]){distances[next]=current.distance+weight;frontier.push({distances[next],next});}}
     const auto insideFrontier=[&](size_t face){for(size_t j=0;j<3;++j)if(distances[corners.find(face*3+j)]<=intrinsicRadius)return true;return false;};
     std::vector<bool>visited(allFaces.size());std::queue<size_t>queue;queue.push(seedFace);visited[seedFace]=true;while(!queue.empty()){const size_t f=queue.front();queue.pop();if(ambiguousFaces.contains(f))patch.incomplete=true;for(size_t n:adjacent[f])if(!visited[n]&&insideFrontier(n)){visited[n]=true;queue.push(n);}}
+    // Clipping the neighborhood can separate vertex fans that were joined
+    // through faces outside the intrinsic frontier. Reusing their old roots
+    // would give the chart a bow-tie vertex with multiple boundary loops.
+    // Only retain proven joins whose two incident faces survived; a rejected
+    // ambiguous branch must not become a new seam after pruning.
+    Dsu retainedCorners(allFaces.size()*3);
+    for(const auto&[a,b]:joinedEdges)if(visited[a.face]&&visited[b.face]) {
+        retainedCorners.join(3*a.face+a.corner,3*b.face+(b.corner+1)%3);
+        retainedCorners.join(3*a.face+(a.corner+1)%3,3*b.face+b.corner);
+    }
     std::vector<D3> compact;std::map<size_t,size_t> remap;
-    for(size_t i=0;i<allFaces.size();++i)if(visited[i]){AnalysisFace f=allFaces[i];for(size_t j=0;j<3;++j){const size_t root=corners.find(i*3+j);auto[it,inserted]=remap.try_emplace(root,compact.size());if(inserted)compact.push_back(patch.positions[f.v[j]]);f.v[j]=it->second;if(i==seedFace&&j==seedCorner)patch.seedVertex=f.v[j];}if(i==seedFace)patch.seedFace=patch.faces.size();patch.faces.push_back(f);}
+    for(size_t i=0;i<allFaces.size();++i)if(visited[i]){AnalysisFace f=allFaces[i];for(size_t j=0;j<3;++j){const size_t root=retainedCorners.find(i*3+j);auto[it,inserted]=remap.try_emplace(root,compact.size());if(inserted)compact.push_back(patch.positions[f.v[j]]);f.v[j]=it->second;if(i==seedFace&&j==seedCorner)patch.seedVertex=f.v[j];}if(i==seedFace)patch.seedFace=patch.faces.size();patch.faces.push_back(f);}
     patch.positions=std::move(compact);stats.analysisTriangles=static_cast<uint32_t>(patch.faces.size());stats.topologyMilliseconds=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();return patch;
 }
 }
