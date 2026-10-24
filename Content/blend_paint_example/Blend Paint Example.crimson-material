@@ -28,10 +28,38 @@
         "id": 4,
         "toNode": 1,
         "toPin": 41
+      },
+      {
+        "fromNode": 6,
+        "fromPin": 2,
+        "id": 5,
+        "toNode": 2,
+        "toPin": 26
+      },
+      {
+        "fromNode": 7,
+        "fromPin": 2,
+        "id": 6,
+        "toNode": 3,
+        "toPin": 26
+      },
+      {
+        "fromNode": 7,
+        "fromPin": 2,
+        "id": 7,
+        "toNode": 4,
+        "toPin": 26
+      },
+      {
+        "fromNode": 7,
+        "fromPin": 2,
+        "id": 8,
+        "toNode": 5,
+        "toPin": 26
       }
     ],
-    "nextLinkId": 5,
-    "nextNodeId": 6,
+    "nextLinkId": 9,
+    "nextNodeId": 8,
     "nodes": [
       {
         "id": 1,
@@ -93,6 +121,44 @@
         ]
       },
       {
+        "blendLayer": {
+          "blendSoftness": 0.18,
+          "colorInfluence": 1.0,
+          "heightBlend": false,
+          "heightInfluence": 0.9,
+          "heightMidpoint": 0.5,
+          "heightScale": 1.25,
+          "mapping": {
+            "mode": 0,
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "scaleLinked": true
+          },
+          "mappingOverride": false,
+          "metallicInfluence": 1.0,
+          "normalInfluence": 1.0,
+          "occlusionInfluence": 1.0,
+          "roughnessInfluence": 1.0,
+          "roughnessScale": 1.0,
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
         "id": 2,
         "kind": 53,
         "material": "f37c79e5-2491-5de8-be53-f93c9ad627ca",
@@ -103,6 +169,44 @@
         ]
       },
       {
+        "blendLayer": {
+          "blendSoftness": 0.25,
+          "colorInfluence": 1.0,
+          "heightBlend": true,
+          "heightInfluence": 0.9,
+          "heightMidpoint": 0.5,
+          "heightScale": 0.45,
+          "mapping": {
+            "mode": 0,
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "scaleLinked": true
+          },
+          "mappingOverride": false,
+          "metallicInfluence": 1.0,
+          "normalInfluence": 0.7,
+          "occlusionInfluence": 1.0,
+          "roughnessInfluence": 1.0,
+          "roughnessScale": 1.0,
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
         "id": 3,
         "kind": 53,
         "material": "a98c9d63-efed-5f84-b13a-9273b13b1734",
@@ -113,6 +217,44 @@
         ]
       },
       {
+        "blendLayer": {
+          "blendSoftness": 0.3,
+          "colorInfluence": 1.0,
+          "heightBlend": true,
+          "heightInfluence": 0.9,
+          "heightMidpoint": 0.5,
+          "heightScale": 0.45,
+          "mapping": {
+            "mode": 0,
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "scaleLinked": true
+          },
+          "mappingOverride": false,
+          "metallicInfluence": 1.0,
+          "normalInfluence": 0.6,
+          "occlusionInfluence": 1.0,
+          "roughnessInfluence": 1.0,
+          "roughnessScale": 0.8,
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
         "id": 4,
         "kind": 53,
         "material": "80e5ff16-d4ec-5cd2-82d1-44533377a593",
@@ -123,6 +265,44 @@
         ]
       },
       {
+        "blendLayer": {
+          "blendSoftness": 0.2,
+          "colorInfluence": 1.0,
+          "heightBlend": true,
+          "heightInfluence": 0.9,
+          "heightMidpoint": 0.5,
+          "heightScale": 0.3,
+          "mapping": {
+            "mode": 0,
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "scaleLinked": true
+          },
+          "mappingOverride": false,
+          "metallicInfluence": 1.0,
+          "normalInfluence": 1.0,
+          "occlusionInfluence": 1.0,
+          "roughnessInfluence": 1.0,
+          "roughnessScale": 1.0,
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
         "id": 5,
         "kind": 53,
         "material": "85a9cae6-eac4-529c-8c39-ac09f521b84c",
@@ -131,9 +311,49 @@
           180.0,
           650.0
         ]
+      },
+      {
+        "id": 6,
+        "kind": 2,
+        "name": "Stone floor height",
+        "position": [
+          -220.0,
+          120.0
+        ],
+        "texture": {
+          "image": "18bdef7c-9a45-4cc7-bb40-c46175fd4d84",
+          "normalStrength": 1.0,
+          "role": 1,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "id": 7,
+        "kind": 2,
+        "name": "Coating height variation",
+        "position": [
+          -220.0,
+          500.0
+        ],
+        "texture": {
+          "image": "b06af4bf-5165-4418-b9c0-d21fd23f8592",
+          "normalStrength": 1.0,
+          "role": 1,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
       }
     ],
-    "version": 19
+    "version": 20
   },
   "id": "c3744381-b311-4b32-a277-507ee54a5269",
   "name": "Blend Paint Example",

@@ -213,4 +213,26 @@ MaterialNodeId addConnectedMaterialGraphNode(MaterialGraph& graph,MaterialGraphE
     auto candidate=graph;const auto id=createConnected(candidate,endpoint,choice,position,type);
     validateMaterialGraph(candidate);graph=std::move(candidate);return id;
 }
+MaterialNodeId assignMaterialLayerHeightMap(MaterialGraph& graph,MaterialNodeId layer,const std::string& image) {
+    validateMaterialGraph(graph);
+    const auto* reference=findMaterialNode(graph,layer);
+    if(!reference||reference->kind!=MaterialNodeKind::MaterialReference)invalid("Height Map requires a Material Reference layer.");
+    const auto position=reference->position;
+    auto candidate=graph;MaterialNodeId texture{};
+    if(const auto* link=materialInputLink(candidate,layer,MaterialPin::Height)) {
+        const auto* source=findMaterialNode(candidate,link->fromNode);
+        if(!image.empty()&&source&&source->kind==MaterialNodeKind::Texture2D&&source->texture.role==MaterialTextureRole::Data&&link->fromPin==MaterialPin::R&&
+            std::count_if(candidate.links.begin(),candidate.links.end(),[&](const auto& item){return item.fromNode==source->id;})==1)texture=source->id;
+        if(!texture)removeMaterialLink(candidate,link->id);
+    }
+    if(!image.empty()) {
+        if(!texture) {
+            auto& source=addMaterialNode(candidate,MaterialNodeKind::Texture2D,{position[0]-320,position[1]+100});
+            source.name="Layer Height";source.texture.role=MaterialTextureRole::Data;texture=source.id;
+            connectMaterialNodes(candidate,texture,MaterialPin::R,layer,MaterialPin::Height);
+        }
+        findMaterialNode(candidate,texture)->texture.image.id=image;
+    }
+    validateMaterialGraph(candidate);graph=std::move(candidate);return texture;
+}
 } // namespace crimson

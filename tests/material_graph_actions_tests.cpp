@@ -1,7 +1,9 @@
 #include "resources/AssetId.h"
 #include "editor/MaterialGraphActions.h"
 #include "editor/MaterialDocument.h"
+#include "editor/MaterialTextureDemand.h"
 #include "assets/MaterialGraphReferences.h"
+#include <crimson/renderer/forward/MaterialGraphShader.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
@@ -726,9 +728,64 @@ void cachedRuntimeUvRequirements() {
     findMaterialNode(graph,empty)->texture.image={};
     require(materialGraphRequiredUvs(graph)==0,"Clearing Texture2D retained its previous image's mesh UV requirement.");
 }
+void blendLayerRuntimeMappingRequirements() {
+    for(const auto kind:{MaterialNodeKind::Resize,MaterialNodeKind::Blur,MaterialNodeKind::ProceduralTexture,MaterialNodeKind::ImageTransform,MaterialNodeKind::Noise,MaterialNodeKind::RadialGradient}) {
+        auto graph=graphWithOutput();const auto output=materialOutputNode(graph).id;
+        const auto source=addMaterialNode(graph,kind).id;
+        connectMaterialNodes(graph,source,MaterialPin::Value,output,MaterialPin::Roughness);
+        if(kind==MaterialNodeKind::Noise||kind==MaterialNodeKind::RadialGradient) {
+            const auto uv=addMaterialNode(graph,MaterialNodeKind::UV).id;findMaterialNode(graph,uv)->uv.mode=MaterialUvMode::UV1;
+            connectMaterialNodes(graph,uv,MaterialPin::UV,source,MaterialPin::UV);
+        }
+        for(const auto mode:{MaterialUvMode::UV1,MaterialUvMode::WorldTriplanar,MaterialUvMode::LocalTriplanar,MaterialUvMode::UV0}) {
+            MaterialUvMapping overrideMapping;overrideMapping.mode=mode;overrideMapping.scale={2,3,4};overrideMapping.offset={.2f,.3f,.4f};overrideMapping.rotation={10,20,30};
+            findMaterialNode(graph,source)->layerMapping=overrideMapping;
+            require(materialGraphRequiredUvs(graph)==(mode==MaterialUvMode::UV0?1:mode==MaterialUvMode::UV1?2:0),
+                "Blend layer mapping did not control cached/analytic mesh UV requirements.");
+            const auto demand=materialRuntimeTextureMappings(graph);
+            if(materialNodeCachedImage(kind))require(demand.size()==1&&demand.front().node==source&&demand.front().mapping==overrideMapping,
+                "Cached image streaming demand lost a Blend layer's mapping mode or transform.");
+            else require(demand.empty(),"Analytic Blend layer mapping added an unneeded texture streaming demand.");
+        }
+    }
+}
+void expandedHeightBranchTextureDemand() {
+    auto source=std::make_shared<MaterialAsset>();source->id=newAssetId();source->name="Constant layer";
+    addMaterialNode(source->graph,MaterialNodeKind::Output);
+    MaterialAsset parent;parent.id=newAssetId();parent.name="Expanded Height demand";
+    const auto output=addMaterialNode(parent.graph,MaterialNodeKind::Output).id;
+    materialOutputNode(parent.graph).output.shading=MaterialShading::BlendPbr;
+    const auto texture=addMaterialNode(parent.graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(parent.graph,texture)->texture.role=MaterialTextureRole::Data;
+    findMaterialNode(parent.graph,texture)->texture.image.id=canonicalAssetId("assets/textures/expanded-height.png");
+    auto height=texture;
+    for(unsigned index=0;index<34;++index) {
+        const auto clamp=addMaterialNode(parent.graph,MaterialNodeKind::Clamp).id;
+        connectMaterialNodes(parent.graph,height,height==texture?MaterialPin::R:MaterialPin::Value,clamp,MaterialPin::Left);height=clamp;
+    }
+    const std::array slots{MaterialPin::Base,MaterialPin::Red,MaterialPin::Green,MaterialPin::Blue};
+    std::array<MaterialUvMapping,4> mappings;
+    for(unsigned index=0;index<slots.size();++index) {
+        const auto reference=addMaterialNode(parent.graph,MaterialNodeKind::MaterialReference).id;
+        auto& node=*findMaterialNode(parent.graph,reference);node.material.id=source->id;node.blendLayer.mappingOverride=true;
+        mappings[index].mode=MaterialUvMode::UV1;mappings[index].scale={float(index+1),2,3};mappings[index].offset={float(index)*.1f,.2f,.3f};
+        node.blendLayer.mapping=mappings[index];node.blendLayer.heightBlend=index==1;
+        connectMaterialNodes(parent.graph,height,MaterialPin::Value,reference,MaterialPin::Height);
+        connectMaterialNodes(parent.graph,reference,MaterialPin::Surface,output,slots[index]);
+    }
+    const auto resolved=resolveMaterialGraphSourcesData(parent,{source},material_graph_image_policy());
+    const auto active=materialGraphOrder(*resolved.graph,MaterialShading::BlendPbr,MaterialBlend::Opaque);
+    require(active.size()==145&&resolved.graph->nodes.size()>MaterialGraph::MaximumNodes,
+        "Expanded Height fixture did not exceed the authored graph traversal capacity.");
+    const auto demand=materialRuntimeTextureMappings(*resolved.graph);
+    require(demand.size()==4,"Expanded Height branches silently lost a layer's runtime texture demand.");
+    for(const auto& mapping:mappings)require(std::count_if(demand.begin(),demand.end(),[&](const auto& entry){return entry.mapping==mapping;})==1,
+        "Expanded Height demand omitted or duplicated an independently mapped layer texture.");
+    require(materialGraphRequiredUvs(*resolved.graph)==2,"Expanded Height clones lost their required UV1 chart.");
+}
 
 }
 int main() {
-    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();directChannelAuthoringAndResize();directDesaturationHeightRoute();mixedImageInputCapabilities();animatedNodeHistory();adjustmentAndGrungeActions();requestedImageAndChannelActions();materialStylizationAuthoring();atomicAuthoringAndReferences();imageRemappingAuthoring();cachedRuntimeUvRequirements();std::cout<<"Material graph actions tests passed.\n";return 0;}
+    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();directChannelAuthoringAndResize();directDesaturationHeightRoute();mixedImageInputCapabilities();animatedNodeHistory();adjustmentAndGrungeActions();requestedImageAndChannelActions();materialStylizationAuthoring();atomicAuthoringAndReferences();imageRemappingAuthoring();cachedRuntimeUvRequirements();blendLayerRuntimeMappingRequirements();expandedHeightBranchTextureDemand();std::cout<<"Material graph actions tests passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

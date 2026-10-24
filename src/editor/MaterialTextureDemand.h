@@ -3,6 +3,7 @@
 #include "assets/MaterialGraph.h"
 #include <array>
 #include <algorithm>
+#include <span>
 #include <vector>
 
 namespace crimson {
@@ -19,7 +20,12 @@ inline std::vector<MaterialRuntimeTextureMapping> materialRuntimeTextureMappings
     const auto& output=materialOutputNode(graph);
     std::vector<MaterialRuntimeTextureMapping> result;
     result.reserve(MaterialGraph::MaximumTextureBindings);
-    std::array<MaterialNodeId,MaterialGraph::MaximumNodes> visited{};
+    std::array<MaterialNodeId,MaterialGraph::MaximumNodes> inlineVisited{};
+    std::vector<MaterialNodeId> expandedVisited;
+    std::span<MaterialNodeId> visited{inlineVisited};
+    // Resolving four layers can legitimately exceed the authored graph limit.
+    // Ordinary materials keep the allocation-free stack storage.
+    if(graph.nodes.size()>inlineVisited.size()){expandedVisited.resize(graph.nodes.size());visited=std::span<MaterialNodeId>{expandedVisited};}
     std::size_t visitedCount{};
     const auto walk=[&](auto&& self,MaterialNodeId id)->void {
         if(std::find(visited.begin(),visited.begin()+visitedCount,id)!=visited.begin()+visitedCount)return;
@@ -27,7 +33,7 @@ inline std::vector<MaterialRuntimeTextureMapping> materialRuntimeTextureMappings
         if(visitedCount>=visited.size())return; // Invalid graphs are diagnosed by their owning document.
         visited[visitedCount++]=id;
         if(materialNodeCachedImage(node->kind)) {
-            result.push_back({id,node->kind==MaterialNodeKind::ImageTransform?
+            result.push_back({id,node->layerMapping||node->kind==MaterialNodeKind::ImageTransform?
                 materialTextureMapping(graph,id,context):MaterialUvMapping{}});
             return;
         }

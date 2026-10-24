@@ -935,6 +935,73 @@ void inlineDefaultsAndOpacityActivation() {
     require(hasField(output,MaterialPin::Opacity)&&!hasField(output,MaterialPin::OpacityMask),"Translucent output activated the wrong coverage default.");
 }
 
+void blendLayerHeightControlsAndAssignment() {
+    GraphUi ui;MaterialNodeId output{},base{},layer{},scalar{};
+    require(ui.document.edit("Blend layer UI fixture",[&](auto& asset) {
+        asset.graph={};output=addMaterialNode(asset.graph,MaterialNodeKind::Output,{390,-100}).id;
+        materialOutputNode(asset.graph).output.shading=MaterialShading::BlendPbr;
+        base=addMaterialNode(asset.graph,MaterialNodeKind::MaterialReference,{-300,-170}).id;
+        layer=addMaterialNode(asset.graph,MaterialNodeKind::MaterialReference,{-300,100}).id;
+        scalar=addMaterialNode(asset.graph,MaterialNodeKind::Scalar,{-620,80}).id;
+        connectMaterialNodes(asset.graph,base,MaterialPin::Surface,output,MaterialPin::Base);
+        connectMaterialNodes(asset.graph,layer,MaterialPin::Surface,output,MaterialPin::Red);
+    })&&ui.document.save(),"Could not configure Blend layer UI fixture.");ui.frame(24);
+    const auto hasControl=[&](MaterialNodeId id,const char* label){return std::any_of(ui.editor.presentation().controls.begin(),ui.editor.presentation().controls.end(),[&](const auto& item){return item.node==id&&item.label==label;});};
+    const auto control=[&](const char* label,float fraction=.25f,bool slider=false) {
+        const auto& view=ui.editor.presentation();
+        for(const auto& item:view.controls)if(item.node==layer&&item.label==label) {
+            const auto trailing=slider?(ImGui::CalcTextSize(label).x+ImGui::GetStyle().ItemInnerSpacing.x)*view.zoom:0.f;
+            return ImVec2{item.minimum[0]+(item.maximum[0]-item.minimum[0]-trailing)*fraction,(item.minimum[1]+item.maximum[1])*.5f};
+        }
+        throw std::runtime_error(std::string("Missing Blend layer control: ")+label);
+    };
+    require(hasControl(layer,"Height Blend")&&!hasControl(base,"Height Blend")&&!hasControl(layer,"Blend Softness"),
+        "Blend layer showed overlay-only controls on Base or active height settings before enabling them.");
+    const auto referenceHeight=[&] {
+        for(const auto& pin:ui.editor.presentation().pins)if(pin.node==layer&&pin.input&&pin.pin==MaterialPin::Height)return pin.active;
+        return false;
+    };
+    require(referenceHeight()&&std::none_of(ui.editor.presentation().fields.begin(),ui.editor.presentation().fields.end(),[&](const auto& item){return item.node==layer&&item.pin==MaterialPin::Height;}),
+        "Reference Height was not authorable while disabled, or a fallback hid source-height inheritance.");
+    const auto disabled=ui.snapshot();ui.click(control("Height Blend"));
+    require(findMaterialNode(ui.document.definition().graph,layer)->blendLayer.heightBlend&&hasControl(layer,"Blend Softness"),"Inline Height Blend did not enable the layer controls.");ui.oneUndo(disabled);
+    const auto beforeSoftness=ui.snapshot();ui.click(control("Blend Softness",.85f,true));
+    require(findMaterialNode(ui.document.definition().graph,layer)->blendLayer.blendSoftness>.6f,"Inline Blend Softness did not change.");ui.oneUndo(beforeSoftness);
+    const auto beforeCancel=ui.snapshot();auto& io=ImGui::GetIO();ui.move(control("Height Influence",.8f,true));
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);ui.frame();ui.move(control("Height Influence",.2f,true));
+    require(ui.document.transactionActive()&&ui.snapshot()!=beforeCancel,"Height Influence drag did not own a live transaction.");
+    ui.key(ImGuiKey_Escape);io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);ui.frame(3);
+    require(!ui.document.transactionActive()&&ui.snapshot()==beforeCancel,"Escape failed to restore exact layer controls.");
+    const auto beforeLink=ui.snapshot();ui.drag(ui.pin(scalar,MaterialPin::Value,false),ui.pin(layer,MaterialPin::Height,true));
+    const auto* heightLink=materialInputLink(ui.document.definition().graph,layer,MaterialPin::Height);
+    require(heightLink&&heightLink->fromNode==scalar,"Could not connect a procedural Height source to a Blend layer.");ui.oneUndo(beforeLink);
+    const auto originalScalar=*findMaterialNode(ui.document.definition().graph,scalar);
+    const auto mapA=canonicalAssetId("assets/textures/blend-height-a.png"),mapB=canonicalAssetId("assets/textures/blend-height-b.png");
+    MaterialNodeId texture{};const auto beforeAssign=ui.snapshot();
+    require(ui.document.edit("Assign Height Map",[&](auto& asset){texture=assignMaterialLayerHeightMap(asset.graph,layer,mapA);}),"Height Map assignment failed.");
+    require(texture&&findMaterialNode(ui.document.definition().graph,texture)->texture.role==MaterialTextureRole::Data&&
+        findMaterialNode(ui.document.definition().graph,texture)->texture.image.id==mapA&&findMaterialNode(ui.document.definition().graph,scalar)->scalar==originalScalar.scalar,
+        "Height Map assignment lost the custom source or did not make an explicit Linear Data texture.");ui.oneUndo(beforeAssign);
+    const auto count=ui.document.definition().graph.nodes.size();
+    require(ui.document.edit("Replace owned Height Map",[&](auto& asset){require(assignMaterialLayerHeightMap(asset.graph,layer,mapB)==texture,"Exclusive Height Map node was not reused.");})&&
+        ui.document.definition().graph.nodes.size()==count,"Replacing an exclusively owned Height Map added another node.");
+    require(ui.document.edit("Share Height Map",[&](auto& asset){connectMaterialNodes(asset.graph,texture,MaterialPin::R,base,MaterialPin::Height);}),"Could not share a Height Map fixture.");
+    MaterialNodeId replacement{};const auto beforeShared=ui.snapshot();
+    require(ui.document.edit("Replace shared Height Map",[&](auto& asset){replacement=assignMaterialLayerHeightMap(asset.graph,layer,mapA);})&&replacement!=texture&&
+        findMaterialNode(ui.document.definition().graph,texture)->texture.image.id==mapB&&
+        materialInputLink(ui.document.definition().graph,base,MaterialPin::Height)->fromNode==texture,
+        "Replacing a shared Height Map changed another layer's source.");ui.oneUndo(beforeShared);
+    const auto beforeClear=ui.snapshot();
+    require(ui.document.edit("Clear Height Map",[&](auto& asset){assignMaterialLayerHeightMap(asset.graph,layer,{});})&&
+        !materialInputLink(ui.document.definition().graph,layer,MaterialPin::Height)&&findMaterialNode(ui.document.definition().graph,replacement),
+        "Clearing Height Map did not restore inheritance or removed graph content.");ui.oneUndo(beforeClear);
+    auto rejected=ui.document.definition().graph;const auto beforeRejected=serializeMaterialGraph(rejected);bool invalidTarget{};
+    try {assignMaterialLayerHeightMap(rejected,scalar,mapA);}catch(const std::exception&){invalidTarget=true;}
+    require(invalidTarget&&serializeMaterialGraph(rejected)==beforeRejected,"Rejected Height Map target changed graph data.");
+    const auto beforeSave=ui.snapshot();require(ui.document.save()&&ui.document.load(ui.document.assetId())&&ui.snapshot()==beforeSave&&!ui.document.dirty(),
+        "Blend layer controls or map graph did not survive Save and reopen.");
+}
+
 void heightInputActivationAndFallback() {
     GraphUi ui;MaterialNodeId output{},scalar{};
     require(ui.document.edit("Height UI fixture",[&](auto& asset) {
@@ -2168,5 +2235,5 @@ void boundedNodeSearchResults() {
 }
 
 }
-int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();refractionInputActivationAndFallbacks();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();decalOutputPresentation();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();textureImagePresentationAndLegacyPins();staticNodeImagePresentation();overviewNodeImageCulling();doubleClickNodePreview();requestedImageAndChannelControls();imageNodeParameterTransactions();typedPinColorsConversionsAndResize();mixedImageInputsAndResolvedOutputs();imageEffectPreviewsAndMask();materialGradientEditing();atomicNodeCatalogAndTransactions();proceduralFamilyControlsAndResolution();atomicImageSourceAndMappingPins();boundedNodeSearchResults();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
+int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();blendLayerHeightControlsAndAssignment();heightInputActivationAndFallback();refractionInputActivationAndFallbacks();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();decalOutputPresentation();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();textureImagePresentationAndLegacyPins();staticNodeImagePresentation();overviewNodeImageCulling();doubleClickNodePreview();requestedImageAndChannelControls();imageNodeParameterTransactions();typedPinColorsConversionsAndResize();mixedImageInputsAndResolvedOutputs();imageEffectPreviewsAndMask();materialGradientEditing();atomicNodeCatalogAndTransactions();proceduralFamilyControlsAndResolution();atomicImageSourceAndMappingPins();boundedNodeSearchResults();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

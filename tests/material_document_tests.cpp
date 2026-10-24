@@ -1,4 +1,5 @@
 #include "editor/MaterialDocument.h"
+#include "editor/MaterialGraphActions.h"
 #include "assets/ContentStorage.h"
 #include "resources/AssetId.h"
 #include "material_fixtures.h"
@@ -450,6 +451,38 @@ void decalMaterialTransactions() {
     require(document.save()&&document.load(staged.id)&&same(document.definition(),configured)&&!document.dirty(),"Decal graph failed explicit save and reopen.");
     require(document.edit("Switch output model",[](auto& a){materialOutputNode(a.graph).output.shading=MaterialShading::StandardPbr;})&&document.undo()&&same(document.definition(),configured),"Shader model switching lost Decal output values.");
 }
+void blendLayerAuthoringTransactions() {
+    Project project;MaterialDocument document(project.root);MaterialNodeId layer{},height{};
+    require(document.create("Height blend history")&&document.edit("Configure Blend",[&](auto& asset) {
+        initializeBlendMaterialGraph(asset.graph);
+        const auto* link=materialInputLink(asset.graph,materialOutputNode(asset.graph).id,MaterialPin::Red);require(link!=nullptr,"Blend fixture has no Red reference.");layer=link->fromNode;
+        height=assignMaterialLayerHeightMap(asset.graph,layer,canonicalAssetId("assets/textures/brick-height.png"));
+    })&&document.save(),"Could not create height-blend document fixture.");
+    const auto original=document.definition();const auto snapshot=document.committed();const auto bytes=text(materialAssetPath(project.root,document.assetId()));
+    const auto configure=[&](auto& asset) {
+        auto& settings=findMaterialNode(asset.graph,layer)->blendLayer;
+        settings.heightBlend=true;settings.heightInfluence=.8f;settings.blendSoftness=.12f;settings.heightScale=1.4f;settings.heightMidpoint=.45f;
+        settings.normalInfluence=.25f;settings.roughnessInfluence=.8f;settings.colorInfluence=.9f;settings.metallicInfluence=.4f;settings.occlusionInfluence=.6f;
+        settings.tint={.8f,.65f,.5f};settings.roughnessScale=1.2f;settings.mappingOverride=true;
+        settings.mapping.mode=MaterialUvMode::WorldTriplanar;settings.mapping.scale={2,3,4};settings.mapping.rotation={10,20,30};settings.mapping.offset={.1f,.2f,.3f};
+    };
+    require(document.begin("Layer property gesture")&&document.update(configure)&&document.committed()==snapshot&&same(*snapshot,original),
+        "Live layer controls mutated the committed material snapshot.");
+    document.cancel();require(same(document.definition(),original)&&!document.dirty(),"Cancelling layer controls lost their exact starting state.");
+    require(document.edit("Layer controls",configure),"Layer controls were rejected.");const auto configured=document.definition();
+    require(document.undo()&&same(document.definition(),original)&&!document.dirty()&&document.redo()&&same(document.definition(),configured),
+        "Layer controls did not commit as one complete undo/redo command.");
+    require(document.edit("Disable layer features",[&](auto& asset){auto& settings=findMaterialNode(asset.graph,layer)->blendLayer;settings.heightBlend=false;settings.mappingOverride=false;}),
+        "Could not make layer controls dormant.");
+    const auto& dormant=findMaterialNode(document.definition().graph,layer)->blendLayer;
+    require(dormant.mapping==findMaterialNode(configured.graph,layer)->blendLayer.mapping&&dormant.heightScale==1.4f&&
+        materialInputLink(document.definition().graph,layer,MaterialPin::Height)->fromNode==height,
+        "Disabling layer features lost authored mapping, height settings or map wiring.");
+    require(document.undo()&&same(document.definition(),configured)&&text(materialAssetPath(project.root,document.assetId()))==bytes,
+        "Layer feature undo was inexact or rewrote disk before Save.");
+    const auto id=document.assetId();require(document.save()&&document.load(id)&&same(document.definition(),configured)&&!document.dirty(),
+        "Layer controls or map assignment did not survive explicit Save and reopen.");
+}
 void usageBlendAndHdrTransactions() {
     Project project;MaterialDocument document(project.root);require(document.create("Coverage history"),"Coverage fixture creation failed.");
     const auto original=document.definition();const auto output=materialOutputNode(original.graph).id;
@@ -473,5 +506,5 @@ void usageBlendAndHdrTransactions() {
 }
 int main(int argc,char** argv){try{if(argc==4&&std::string(argv[1])=="--verify-material"){verifyActualMaterial(argv[2],argv[3]);return 0;}
     require(argc==1,"Expected --verify-material <project root> <material id>, or no arguments.");
-    publicationAndHistory();returningGestureAndDirtyState();displacementTransactions();identityAndExternalAuthority();dormantGraphTextureHistory();reconcileDeletedGraphTextureHistory();boundedHistoryAndRedo();protectedDefaultsAndImportedAuthoring();importedPackedMapsAndPromotion();sharedQuaderMaterialAuthoring();mappingAndSamplerTransactions();spriteMappingMigration();fogReceptionTransactions();refractionTransactions();decalMaterialTransactions();usageBlendAndHdrTransactions();std::cout<<"Material document transactions, history, storage and authority checks passed.\n";return 0;}
+    publicationAndHistory();returningGestureAndDirtyState();displacementTransactions();identityAndExternalAuthority();dormantGraphTextureHistory();reconcileDeletedGraphTextureHistory();boundedHistoryAndRedo();protectedDefaultsAndImportedAuthoring();importedPackedMapsAndPromotion();sharedQuaderMaterialAuthoring();mappingAndSamplerTransactions();spriteMappingMigration();fogReceptionTransactions();refractionTransactions();decalMaterialTransactions();blendLayerAuthoringTransactions();usageBlendAndHdrTransactions();std::cout<<"Material document transactions, history, storage and authority checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

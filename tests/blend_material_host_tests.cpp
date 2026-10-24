@@ -107,5 +107,40 @@ void referenceHistoryReconciliation() {
     const auto history=document.historicalMaterialReferences();require(std::find(history.begin(),history.end(),deleted)==history.end(),"Retained document history still references a deleted child.");
     require(document.redo(),"Child reference reconciliation destroyed redo.");
 }
+void heightLayerPublicationAndHistory() {
+    Fixture fixture;
+    auto& graph=fixture.blend.graph;
+    const auto base=layer(fixture.blend,MaterialPin::Base).id;
+    const auto red=layer(fixture.blend,MaterialPin::Red).id;
+    const auto height=addMaterialNode(graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(graph,height)->texture.image.id=canonicalAssetId("assets/textures/blend-height.png");
+    findMaterialNode(graph,height)->texture.role=MaterialTextureRole::Data;
+    connectMaterialNodes(graph,height,MaterialPin::R,base,MaterialPin::Height);
+    canonicalizeMaterialAsset(fixture.blend);
+    const auto disabled=generateMaterialGraphShader(fixture.blend,fixture.snapshots());
+    require(disabled.textures.empty(),"Disabled height blending demanded an otherwise unused height texture.");
+    auto& settings=findMaterialNode(graph,red)->blendLayer;
+    settings.heightBlend=true;settings.heightInfluence=.8f;settings.blendSoftness=.16f;
+    settings.normalInfluence=.45f;settings.roughnessInfluence=.7f;settings.tint={.7f,.8f,.9f};
+    const auto enabled=generateMaterialGraphShader(fixture.blend,fixture.snapshots());
+    require(enabled.meshPaint&&!enabled.tessellation.enabled&&enabled.textures.size()==1&&
+        enabled.textures.front().role==MaterialGraphTextureRole::Data,"Height blend omitted the underlying data map or enabled geometry displacement.");
+    settings.blendSoftness=.43f;settings.normalInfluence=.2f;settings.roughnessScale=.6f;
+    const auto adjusted=generateMaterialGraphShader(fixture.blend,fixture.snapshots());
+    require(enabled.topologyKey==adjusted.topologyKey&&enabled.uniforms!=adjusted.uniforms,
+        "Layer appearance controls failed to update uniforms independently of shader topology.");
+    canonicalizeMaterialAsset(fixture.blend);saveMaterialAsset(fixture.project.root,fixture.blend);
+    MaterialDocument document(fixture.project.root);require(document.load(fixture.blend.id),"Could not reopen configured height blend.");
+    require(layer(document.definition(),MaterialPin::Red).blendLayer==settings,
+        "Saved Blend layer controls did not roundtrip through the material document.");
+    const auto baseline=serializeMaterialAsset(document.definition());
+    require(document.begin("Layer height softness")&&document.update([&](auto& asset){layer(asset,MaterialPin::Red).blendLayer.blendSoftness=.9f;}),
+        "Could not start a height blend edit.");
+    document.cancel();require(serializeMaterialAsset(document.definition())==baseline,
+        "Cancel did not restore the exact saved layer settings and height connections.");
+    require(document.edit("Layer normal response",[&](auto& asset){layer(asset,MaterialPin::Red).blendLayer.normalInfluence=.9f;})&&
+        document.undo()&&serializeMaterialAsset(document.definition())==baseline&&document.redo(),
+        "Layer controls failed document undo/redo.");
 }
-int main(){try{roundtripAndCompatibility();sourceLoweringAndCommittedVersions();referenceHistoryReconciliation();std::cout<<"Blend host references, child shader inputs, immutable publication and deletion history passed.\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+}
+int main(){try{roundtripAndCompatibility();sourceLoweringAndCommittedVersions();referenceHistoryReconciliation();heightLayerPublicationAndHistory();std::cout<<"Blend host references, height layers, immutable publication and history passed.\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

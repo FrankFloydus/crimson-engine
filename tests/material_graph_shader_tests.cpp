@@ -1,6 +1,7 @@
 #include "assets/MaterialAsset.h"
 #include "crimson-renderer/MaterialGraphShader.h"
 #include "assets/AtomicFile.h"
+#include <crimson/renderer/forward/MaterialBlendMath.h>
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
@@ -14,6 +15,121 @@
 namespace {
 using namespace crimson;
 void check(bool value,const char* message){if(!value)throw std::runtime_error(message);}
+struct HeightBlendFixture {
+    MaterialAsset material,source;
+    std::array<MaterialNodeId,4> references{};
+    HeightBlendFixture() {
+        source.id="height-blend-source";source.name="Height source";
+        const auto output=addMaterialNode(source.graph,MaterialNodeKind::Output).id;
+        // Ordinary Lit authoring exposes Height while tessellation is enabled.
+        // Retain that authored link after disabling displacement so Blend can
+        // inherit it without changing the existing output activation contract.
+        materialOutputNode(source.graph).output.tessellation.enabled=true;
+        for(unsigned channel=0;channel<3;++channel) {
+            const auto image=addMaterialNode(source.graph,MaterialNodeKind::Texture2D).id;
+            auto& node=*findMaterialNode(source.graph,image);
+            node.texture.image.id=channel==0?"assets/textures/blend-color.png":channel==1?"assets/textures/blend-normal.png":"assets/textures/blend-height.png";
+            node.texture.role=channel==0?MaterialTextureRole::Color:channel==1?MaterialTextureRole::Normal:MaterialTextureRole::Data;
+            connectMaterialNodes(source.graph,image,channel==0?MaterialPin::RGB:channel==1?MaterialPin::Normal:MaterialPin::R,
+                output,channel==0?MaterialPin::BaseColor:channel==1?MaterialPin::Normal:MaterialPin::Height);
+        }
+        materialOutputNode(source.graph).output.tessellation.enabled=false;
+        material.id="height-blend-parent";material.name="Height Blend";
+        const auto root=addMaterialNode(material.graph,MaterialNodeKind::Output).id;
+        materialOutputNode(material.graph).output.shading=MaterialShading::BlendPbr;
+        const std::array pins{MaterialPin::Base,MaterialPin::Red,MaterialPin::Green,MaterialPin::Blue};
+        for(unsigned i=0;i<4;++i) {
+            references[i]=addMaterialNode(material.graph,MaterialNodeKind::MaterialReference).id;
+            findMaterialNode(material.graph,references[i])->material.id=source.id;
+            connectMaterialNodes(material.graph,references[i],MaterialPin::Surface,root,pins[i]);
+        }
+    }
+    MaterialGraphSourceSet snapshots()const{return {std::make_shared<const MaterialAsset>(source)};}
+};
+void heightBlendMathChecks() {
+    const auto close=[](float a,float b){return std::abs(a-b)<2e-6f;};
+    check(material_blend_height_alpha(0,-16,16,16,0)==0&&material_blend_height_alpha(1,16,-16,16,0)==1,
+        "Height blending leaked into zero paint or prevented full painted coverage.");
+    for(float alpha:{.001f,.1f,.25f,.5f,.9f,.999f}) {
+        check(material_blend_height_alpha(alpha,4,-3,0,.001f)==alpha&&close(material_blend_height_alpha(alpha,.3f,.3f,1,.2f),alpha),
+            "Zero height influence or equal heights changed the ordinary paint alpha.");
+        check(material_blend_height_alpha(alpha,-.3f,0,1,.2f)>alpha&&material_blend_height_alpha(alpha,.3f,0,1,.2f)<alpha,
+            "Height did not reveal a coating sooner in recesses and later on raised areas.");
+    }
+    for(float underlying:{-16.f,-.5f,0.f,.5f,16.f})for(float layer:{-16.f,0.f,16.f})
+        for(float influence:{0.f,1.f,16.f})for(float softness:{0.f,.001f,.2f,1.f}) {
+            float previous=-1;
+            for(unsigned step=0;step<=100;++step) {
+                const auto alpha=material_blend_height_alpha(step*.01f,underlying,layer,influence,softness);
+                check(std::isfinite(alpha)&&alpha>=0&&alpha<=1&&alpha>=previous,"Height alpha became nonfinite, escaped its range, or reversed paint coverage.");
+                previous=alpha;
+            }
+        }
+    // The ordered composition must retain the former normalized weighted sum
+    // when height and per-property overrides are neutral, including RGB sums>1.
+    constexpr std::array<float,4> values{.17f,.63f,-.4f,1.7f};
+    for(unsigned r=0;r<=4;++r)for(unsigned g=0;g<=4;++g)for(unsigned b=0;b<=4;++b) {
+        std::array<float,4> weights{std::max(0.f,1.f-(r+g+b)*.25f),r*.25f,g*.25f,b*.25f};
+        float total{};for(auto weight:weights)total+=weight;for(auto& weight:weights)weight/=total;
+        float flat{},accumulated=weights[0],composed=values[0];
+        for(unsigned i=0;i<4;++i)flat+=values[i]*weights[i];
+        for(unsigned i=1;i<4;++i){const auto alpha=weights[i]/std::max(accumulated+weights[i],1e-8f);composed+=(values[i]-composed)*alpha;accumulated+=weights[i];}
+        check(close(flat,composed),"Neutral layer controls changed the existing normalized painting result.");
+    }
+}
+void heightBlendShaderChecks() {
+    HeightBlendFixture fixture;
+    const auto flat=generateMaterialGraphShader(fixture.material,fixture.snapshots());
+    check(flat.textures.size()==2&&flat.meshPaint&&!flat.tessellation.enabled&&!flat.dynamicHeight,
+        "Flat Blend demanded an inactive Height texture or changed paint/geometry behavior.");
+    check(flat.variants.front().source.find("ccGraphBlendHeightAlpha")==std::string::npos,"Disabled height blending retained active shader work.");
+    auto& layer=findMaterialNode(fixture.material.graph,fixture.references[1])->blendLayer;layer.heightBlend=true;
+    const auto height=generateMaterialGraphShader(fixture.material,fixture.snapshots());
+    check(height.textures.size()==3&&!height.tessellation.enabled&&!height.dynamicHeight&&!height.dynamicCoverage,
+        "Height-aware appearance changed displacement/coverage or duplicated a shared Height sample.");
+    check(height.variants.front().source.find(MaterialBlendHeightShaderFunction)!=std::string::npos&&
+        height.variants.front().source.find("underlyingHeight = mix(")!=std::string::npos,
+        "Height Blend omitted its bounded transition or accumulated underlying height.");
+    check(std::count_if(height.textures.begin(),height.textures.end(),[](const auto& binding){return binding.image.id=="assets/textures/blend-height.png"&&binding.role==MaterialGraphTextureRole::Data;})==1,
+        "Inherited height lost its linear data role or repeated-reference sharing.");
+    for(const auto& variant:height.variants)if(variant.pass==MaterialGraphPass::Picking||variant.pass==MaterialGraphPass::PointShadow||variant.pass==MaterialGraphPass::DirectionalShadow)
+        check(variant.source.find("ccGraphBlendHeightAlpha")==std::string::npos&&variant.source.find("underlyingHeight")==std::string::npos,
+            "Surface height blending leaked into opaque depth/picking/shadow passes.");
+    layer.heightInfluence=.3f;layer.blendSoftness=.07f;layer.heightScale=2;layer.heightMidpoint=.4f;
+    layer.normalInfluence=0;layer.roughnessInfluence=.6f;layer.colorInfluence=.8f;layer.metallicInfluence=.2f;layer.occlusionInfluence=.4f;
+    layer.tint={.7f,.8f,.9f};layer.roughnessScale=.75f;
+    const auto values=generateMaterialGraphShader(fixture.material,fixture.snapshots());
+    check(height.topologyKey==values.topologyKey&&height.uniforms!=values.uniforms,"A numeric layer edit compiled a new shader instead of updating uniforms.");
+    layer.mappingOverride=true;layer.mapping.mode=MaterialUvMode::LocalTriplanar;layer.mapping.scale={2,3,4};
+    const auto mapped=generateMaterialGraphShader(fixture.material,fixture.snapshots());
+    layer.mapping.scale={5,6,7};layer.mapping.offset={.1f,.2f,.3f};layer.mapping.rotation={0,45,0};
+    const auto moved=generateMaterialGraphShader(fixture.material,fixture.snapshots());
+    check(mapped.topologyKey==moved.topologyKey&&mapped.uniforms!=moved.uniforms,"Layer placement values changed shader topology.");
+    check(std::any_of(moved.textures.begin(),moved.textures.end(),[&](const auto& binding){return moved.uniforms[binding.mappingRow][0]==5&&moved.uniforms[binding.mappingRow][1]==6;}),
+        "Layer placement override did not reach generated sample mappings.");
+    const auto preview=generateMaterialGraphPreviewShader(fixture.material,{fixture.references[1],MaterialPin::Surface},fixture.snapshots());
+    check(preview.variants.size()==1&&!preview.meshPaint,"Layer appearance preview acquired scene paint ownership.");
+}
+void heightBlendCompileChecks(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include) {
+    const auto root=std::filesystem::temp_directory_path()/("crimson-height-blend-shaders-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    struct Cleanup {std::filesystem::path path;~Cleanup(){std::error_code error;const auto resolved=std::filesystem::weakly_canonical(path,error),temp=std::filesystem::weakly_canonical(std::filesystem::temp_directory_path(),error);if(!error&&resolved.parent_path()==temp&&resolved.filename().string().starts_with("crimson-height-blend-shaders-"))std::filesystem::remove_all(resolved,error);}} cleanup{root};
+    const ShaderCompileConfig config{compiler,source,include,root};
+    const auto compile=[&](const MaterialGraphShader& graph,bool onlySurface=false){
+        for(const auto& variant:graph.variants) {
+            if(onlySurface&&variant.pass!=MaterialGraphPass::Model)continue;
+            const auto fragment=compileShader(config,materialGraphShaderRecipe(config,graph,variant));
+            const auto vertex=compileShader(config,variant.vertexName);std::string diagnostic;
+            if(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,variant.manifest,diagnostic))throw std::runtime_error("Height Blend: "+diagnostic);
+        }
+    };
+    HeightBlendFixture fixture;compile(generateMaterialGraphShader(fixture.material,fixture.snapshots()),true);
+    for(unsigned i=1;i<4;++i){auto& layer=findMaterialNode(fixture.material.graph,fixture.references[i])->blendLayer;layer.heightBlend=true;layer.normalInfluence=.4f;layer.roughnessInfluence=.7f;}
+    auto& mapping=findMaterialNode(fixture.material.graph,fixture.references[1])->blendLayer;
+    mapping.mappingOverride=true;mapping.mapping.mode=MaterialUvMode::LocalTriplanar;mapping.mapping.scale={2,3,4};
+    compile(generateMaterialGraphShader(fixture.material,fixture.snapshots()));
+    compile(generateMaterialGraphPreviewShader(fixture.material,{fixture.references[1],MaterialPin::Surface},fixture.snapshots()));
+    std::cout<<"Height Blend compiled flat/height surfaces, particle, reflection, depth/shadow/picking and a layer preview with DXBC interface preflight.\n";
+}
 void constantRoughnessEligibilityChecks() {
     MaterialAsset material;auto& graph=material.graph;
     const auto output=addMaterialNode(graph,MaterialNodeKind::Output).id;
@@ -323,7 +439,7 @@ void cpuChecks() {
                 "Reflection variants were omitted from Lit coverage or admitted for Unlit/Additive materials.");
         }
     for(const auto& variant:original.variants) {
-        check(variant.source.find("crimson-material-graph-generator-v40")!=std::string::npos,
+        check(variant.source.find("crimson-material-graph-generator-v41")!=std::string::npos,
             "Generated material identity does not invalidate earlier PBR/optical bundles.");
         const bool circularInput=variant.source.find("v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode")!=std::string::npos;
         check(circularInput==(variant.pass!=MaterialGraphPass::Particle&&variant.pass!=MaterialGraphPass::ParticleReflection),
@@ -1013,6 +1129,13 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
                 throw std::runtime_error("Grunge/image adjustments: "+diagnostic);
         }
     };
+    {
+        HeightBlendFixture fixture;findMaterialNode(fixture.material.graph,fixture.references[1])->blendLayer.heightBlend=true;
+        findMaterialNode(fixture.material.graph,fixture.references[2])->blendLayer.heightBlend=true;
+        findMaterialNode(fixture.material.graph,fixture.references[3])->blendLayer.heightBlend=true;
+        compileGenerated(generateMaterialGraphShader(fixture.material,fixture.snapshots()));
+        compileGenerated(generateMaterialGraphPreviewShader(fixture.material,{fixture.references[1],MaterialPin::Surface},fixture.snapshots()));
+    }
     compileStylization(config);compileImageStyle(config);
     {
         auto material=refractionFixture();const auto ordinary=generateMaterialGraphShader(material);compileGenerated(ordinary);
@@ -1350,13 +1473,14 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
 }
 int main(int argc,char** argv) {
     try {
-        imageStyleShaderChecks();stylizationShaderChecks();constantRoughnessEligibilityChecks();decodedNormalMappingChecks();atomicShaderChecks();resizeShaderChecks();imageFoundationShaderChecks();refractionShaderChecks();cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();
+        heightBlendMathChecks();heightBlendShaderChecks();imageStyleShaderChecks();stylizationShaderChecks();constantRoughnessEligibilityChecks();decodedNormalMappingChecks();atomicShaderChecks();resizeShaderChecks();imageFoundationShaderChecks();refractionShaderChecks();cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();
         if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
         else if(argc==5&&std::string_view(argv[1])=="--ssr")ssrCompileChecks(argv[2],argv[3],argv[4]);
         else if(argc==5&&std::string_view(argv[1])=="--stylization")stylizationCompileChecks(argv[2],argv[3],argv[4]);
         else if(argc==5&&std::string_view(argv[1])=="--image-style")imageStyleCompileChecks(argv[2],argv[3],argv[4]);
         else if(argc==5&&std::string_view(argv[1])=="--detail-balance")imageStyleCompileChecks(argv[2],argv[3],argv[4],true);
-        else if(argc!=1)throw std::runtime_error("Usage: material_graph_shader_tests [--ssr|--stylization|--image-style|--detail-balance] <shaderc> <source-dir> <include-dir>");
+        else if(argc==5&&std::string_view(argv[1])=="--blend-height")heightBlendCompileChecks(argv[2],argv[3],argv[4]);
+        else if(argc!=1)throw std::runtime_error("Usage: material_graph_shader_tests [--ssr|--stylization|--image-style|--detail-balance|--blend-height] <shaderc> <source-dir> <include-dir>");
         std::cout<<"Material graph lowering, packets, limits and generated shader checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

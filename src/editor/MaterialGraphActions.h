@@ -42,4 +42,10 @@ struct MaterialGraphNodeChoice {
 std::vector<MaterialGraphNodeChoice> materialGraphNodeChoices(const MaterialGraph&,MaterialGraphEndpoint);
 MaterialNodeId addConnectedMaterialGraphNode(MaterialGraph&,MaterialGraphEndpoint,MaterialGraphNodeChoice,Vec2 position);
 
+// Explicit Height Map assignment for a Blend layer. Creates an ordinary visible
+// Linear Data texture and Height link, or reuses an exclusively owned direct
+// texture. Clearing restores the referenced material's inherited Height; graph
+// sources used by other inputs are never changed or removed.
+MaterialNodeId assignMaterialLayerHeightMap(MaterialGraph&,MaterialNodeId layer,const std::string& image);
+
 } // namespace crimson

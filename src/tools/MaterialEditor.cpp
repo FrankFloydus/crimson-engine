@@ -3,6 +3,7 @@
 #include "TextureAssetField.h"
 #include "MaterialAtomicControls.h"
 #include "MaterialGradientEditor.h"
+#include "editor/MaterialGraphActions.h"
 #include "assets/AssetLibrary.h"
 #include "assets/ContentStorage.h"
 #include "resources/AssetId.h"
@@ -234,16 +235,17 @@ void MaterialEditor::properties(AssetLibrary& assets,Renderer& renderer) {
     const auto defaults=materialPropertyDefaults(*findMaterialNode(document_.definition().graph,selected));
     const auto hdr=[&](const char* label,const char* transaction,bool outputColor,bool emission=false,bool attenuation=false) {
         auto candidate=document_.definition();auto* node=findMaterialNode(candidate.graph,selected);if(!node)return;
-        const bool range=node->kind==MaterialNodeKind::ColorRangeMask;
-        Vec3 value=outputColor?(attenuation?node->output.attenuationColor:emission?node->output.emission:node->output.baseColor):range?node->colorRangeMask.color:Vec3{node->color[0],node->color[1],node->color[2]};
+        const bool range=node->kind==MaterialNodeKind::ColorRangeMask,layer=node->kind==MaterialNodeKind::MaterialReference;
+        Vec3 value=outputColor?(attenuation?node->output.attenuationColor:emission?node->output.emission:node->output.baseColor):layer?node->blendLayer.tint:range?node->colorRangeMask.color:Vec3{node->color[0],node->color[1],node->color[2]};
         float alpha=node->color[3];ImGui::BeginDisabled(!editable);
-        const Vec3 defaultColor=outputColor?(attenuation?defaults.output.attenuationColor:emission?defaults.output.emission:defaults.output.baseColor):range?defaults.colorRangeMask.color:Vec3{defaults.color[0],defaults.color[1],defaults.color[2]};
-        auto edit=drawHdrColorControl(label,value,outputColor||range?nullptr:&alpha,attenuation?alphaEditor_:emission?emissionEditor_:colorEditor_,false,attenuation||range?1.f:1000000.f,"Alpha",defaultColor,defaults.color[3]);
+        const Vec3 defaultColor=outputColor?(attenuation?defaults.output.attenuationColor:emission?defaults.output.emission:defaults.output.baseColor):layer?defaults.blendLayer.tint:range?defaults.colorRangeMask.color:Vec3{defaults.color[0],defaults.color[1],defaults.color[2]};
+        auto edit=drawHdrColorControl(label,value,outputColor||range||layer?nullptr:&alpha,attenuation?alphaEditor_:emission?emissionEditor_:colorEditor_,false,attenuation||range?1.f:1000000.f,"Alpha",defaultColor,defaults.color[3]);
         ImGui::EndDisabled();if(!editable)return;
         if(!canceled && (edit.activated || edit.changed) && !document_.transactionActive())propertyEditing_=document_.begin(transaction);
         if(!canceled && edit.changed && propertyEditing_) {
             if(outputColor){if(attenuation)node->output.attenuationColor=value;else if(emission)node->output.emission=value;else node->output.baseColor=value;}
             else if(range)node->colorRangeMask.color=value;
+            else if(layer)node->blendLayer.tint=value;
             else node->color={value[0],value[1],value[2],alpha};
             document_.update([&](auto& asset){asset=std::move(candidate);});
         }
@@ -559,7 +561,68 @@ void MaterialEditor::properties(AssetLibrary& assets,Renderer& renderer) {
             }
             ImGui::SameLine();if(ImGui::SmallButton("x##Blend material"))assign({});
             ImGui::EndDisabled();
-            ImGui::BeginDisabled(!reference);if(ImGui::Button("Open Material"))requestOpen(node.material.id,assets);ImGui::EndDisabled();
+            ImGui::BeginDisabled(!reference);const bool openSource=ImGui::Button("Open Material");ImGui::EndDisabled();
+            if(openSource){requestOpen(node.material.id,assets);return;}
+            ImGui::SeparatorText("Height");
+            const auto* heightLink=materialInputLink(document_.definition().graph,selected,MaterialPin::Height);
+            const auto* heightSource=heightLink?findMaterialNode(document_.definition().graph,heightLink->fromNode):nullptr;
+            const bool directMap=heightSource&&heightSource->kind==MaterialNodeKind::Texture2D&&heightSource->texture.role==MaterialTextureRole::Data&&heightLink->fromPin==MaterialPin::R;
+            if(heightSource&&!directMap) {
+                ImGui::TextDisabled("Height: %s",heightSource->name.empty()?materialNodeKindName(heightSource->kind):heightSource->name.c_str());
+                ImGui::SetItemTooltip("Driven by the graph. Assigning a Height Map replaces this input.");
+            }
+            auto heightMap=directMap?heightSource->texture.image.id:std::string{};
+            ImGui::BeginDisabled(!editable);
+            const bool heightChanged=drawTextureAssetField(assets,"Height Map",heightMap,message_);
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("Linear height data. With no override, uses the source material's Height.");
+            ImGui::EndDisabled();
+            if(heightChanged&&editable&&!canceled) {
+                finish();if(!document_.edit("Assign layer height map",[&](auto& asset){assignMaterialLayerHeightMap(asset.graph,selected,heightMap);}))message_=document_.status();
+                else message_.clear();
+            }
+            const auto outputId=materialOutputNode(document_.definition().graph).id;
+            const auto isBase=std::any_of(document_.definition().graph.links.begin(),document_.definition().graph.links.end(),[&](const auto& link){return link.fromNode==selected&&link.toNode==outputId&&link.toPin==MaterialPin::Base;})&&
+                std::none_of(document_.definition().graph.links.begin(),document_.definition().graph.links.end(),[&](const auto& link){return link.fromNode==selected&&link.toNode==outputId&&link.toPin!=MaterialPin::Base;});
+            if(!isBase) {
+                control("Toggle layer height blending",[defaults](auto& n){return resettableProperty(n.blendLayer.heightBlend,defaults.blendLayer.heightBlend,[&]{return ImGui::Checkbox("Height Blend",&n.blendLayer.heightBlend);});});
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("Shape painted coverage using this layer's height and the underlying surface height.");
+                if(findMaterialNode(document_.definition().graph,selected)->blendLayer.heightBlend) {
+                    control("Change layer height influence",[defaults](auto& n){return resettableProperty(n.blendLayer.heightInfluence,defaults.blendLayer.heightInfluence,[&]{return ImGui::SliderFloat("Height Influence",&n.blendLayer.heightInfluence,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+                    control("Change layer blend softness",[defaults](auto& n){return resettableProperty(n.blendLayer.blendSoftness,defaults.blendLayer.blendSoftness,[&]{return ImGui::SliderFloat("Blend Softness",&n.blendLayer.blendSoftness,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+                }
+            }
+            control("Change layer height scale",[defaults](auto& n){return resettableProperty(n.blendLayer.heightScale,defaults.blendLayer.heightScale,[&]{return ImGui::DragFloat("Height Scale",&n.blendLayer.heightScale,.01f,-16,16,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+            control("Change layer height midpoint",[defaults](auto& n){return resettableProperty(n.blendLayer.heightMidpoint,defaults.blendLayer.heightMidpoint,[&]{return ImGui::SliderFloat("Height Midpoint",&n.blendLayer.heightMidpoint,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+            ImGui::SeparatorText("Appearance");
+            hdr("Tint","Change layer tint",false);
+            control("Change layer roughness scale",[defaults](auto& n){return resettableProperty(n.blendLayer.roughnessScale,defaults.blendLayer.roughnessScale,[&]{return ImGui::DragFloat("Roughness Multiplier",&n.blendLayer.roughnessScale,.01f,0,4,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+            if(!isBase) {
+                control("Change layer normal influence",[defaults](auto& n){return resettableProperty(n.blendLayer.normalInfluence,defaults.blendLayer.normalInfluence,[&]{return ImGui::SliderFloat("Normal Influence",&n.blendLayer.normalInfluence,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("Zero retains the underlying normal. One fully applies this layer's normal at full coverage.");
+                control("Change layer roughness influence",[defaults](auto& n){return resettableProperty(n.blendLayer.roughnessInfluence,defaults.blendLayer.roughnessInfluence,[&]{return ImGui::SliderFloat("Roughness Influence",&n.blendLayer.roughnessInfluence,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+                if(ImGui::TreeNodeEx("Advanced##Layer",ImGuiTreeNodeFlags_SpanAvailWidth)) {
+                    control("Change layer color influence",[defaults](auto& n){return resettableProperty(n.blendLayer.colorInfluence,defaults.blendLayer.colorInfluence,[&]{return ImGui::SliderFloat("Color Influence",&n.blendLayer.colorInfluence,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+                    control("Change layer metallic influence",[defaults](auto& n){return resettableProperty(n.blendLayer.metallicInfluence,defaults.blendLayer.metallicInfluence,[&]{return ImGui::SliderFloat("Metallic Influence",&n.blendLayer.metallicInfluence,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+                    control("Change layer occlusion influence",[defaults](auto& n){return resettableProperty(n.blendLayer.occlusionInfluence,defaults.blendLayer.occlusionInfluence,[&]{return ImGui::SliderFloat("AO Influence",&n.blendLayer.occlusionInfluence,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+                    ImGui::TreePop();
+                }
+            }
+            if(ImGui::TreeNodeEx("Mapping##Layer",ImGuiTreeNodeFlags_SpanAvailWidth)) {
+                control("Toggle layer mapping override",[defaults](auto& n){return resettableProperty(n.blendLayer.mappingOverride,defaults.blendLayer.mappingOverride,[&]{return ImGui::Checkbox("Override Mapping",&n.blendLayer.mappingOverride);});});
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("Replace source material texture mapping for this layer only.");
+                if(findMaterialNode(document_.definition().graph,selected)->blendLayer.mappingOverride) {
+                    control("Change layer mapping",[defaults](auto& n){int mode=static_cast<int>(n.blendLayer.mapping.mode);const bool changed=resettableProperty(mode,static_cast<int>(defaults.blendLayer.mapping.mode),[&]{return ImGui::Combo("Mapping",&mode,"UV0\0UV1\0Local Triplanar\0World Triplanar\0");});if(changed)n.blendLayer.mapping.mode=static_cast<MaterialUvMode>(mode);return changed;});
+                    const auto mode=findMaterialNode(document_.definition().graph,selected)->blendLayer.mapping.mode;
+                    const bool triplanar=mode==MaterialUvMode::LocalTriplanar||mode==MaterialUvMode::WorldTriplanar;
+                    control("Link layer scale",[defaults](auto& n){return resettableProperty(n.blendLayer.mapping.scaleLinked,defaults.blendLayer.mapping.scaleLinked,[&]{return ImGui::Checkbox("Link scale",&n.blendLayer.mapping.scaleLinked);});});
+                    control("Change layer scale",[&](auto& n){auto& mapping=n.blendLayer.mapping;const auto before=mapping.scale;const bool changed=resettableProperty(mapping.scale,defaults.blendLayer.mapping.scale,[&]{return triplanar?ImGui::DragFloat3("Scale",mapping.scale.data(),.01f,0,0,"%.3f"):ImGui::DragFloat2("Scale XY",mapping.scale.data(),.01f,0,0,"%.3f");});
+                        if(ImGui::IsItemActivated())uvScaleBaseline_=before;
+                        if(changed&&mapping.scaleLinked&&!propertyResetClicked())for(unsigned axis=0;axis<(triplanar?3u:2u);++axis)if(mapping.scale[axis]!=before[axis]){const auto baseline=ImGui::IsItemActive()?uvScaleBaseline_:before;const float value=mapping.scale[axis];if(std::abs(baseline[axis])>1e-8f)mapping.scale=baseline*(static_cast<double>(value)/baseline[axis]);else mapping.scale=before+Vec3{value-before[axis],value-before[axis],value-before[axis]};break;}return changed;});
+                    control("Change layer rotation",[&](auto& n){auto& mapping=n.blendLayer.mapping;return resettableProperty(mapping.rotation,defaults.blendLayer.mapping.rotation,[&]{return triplanar?ImGui::DragFloat3("Rotation (deg)",mapping.rotation.data(),.5f,0,0,"%.2f"):ImGui::DragFloat("Rotation (deg)",&mapping.rotation[2],.5f,0,0,"%.2f");});});
+                    control("Change layer offset",[&](auto& n){auto& mapping=n.blendLayer.mapping;return resettableProperty(mapping.offset,defaults.blendLayer.mapping.offset,[&]{return triplanar?ImGui::DragFloat3("Offset",mapping.offset.data(),.01f,0,0,"%.3f"):ImGui::DragFloat2("Offset XY",mapping.offset.data(),.01f,0,0,"%.3f");});});
+                }
+                ImGui::TreePop();
+            }
         }
         if(node.kind==MaterialNodeKind::Texture2D || node.kind==MaterialNodeKind::ImageInput) {
             {

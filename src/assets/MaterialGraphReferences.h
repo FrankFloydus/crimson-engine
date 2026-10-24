@@ -20,12 +20,12 @@ inline std::uint8_t materialGraphRequiredUvs(const MaterialGraph& graph) {
         const auto* node=findMaterialNode(graph,id);if(!node||count>=visited.size())return;
         visited[count++]=id;
         if(materialNodeCachedImage(node->kind)) {
-            demandMapping(node->kind==MaterialNodeKind::ImageTransform?materialTextureMapping(graph,id):MaterialUvMapping{});
+            demandMapping(node->layerMapping||node->kind==MaterialNodeKind::ImageTransform?materialTextureMapping(graph,id):MaterialUvMapping{});
             return;
         }
         if(node->kind==MaterialNodeKind::Noise||node->kind==MaterialNodeKind::RadialGradient) {
             const auto* mapping=materialInputLink(graph,id,MaterialPin::UV);
-            demandMapping(mapping?resolveMaterialUvMapping(graph,mapping->fromNode):MaterialUvMapping{});
+            demandMapping(node->layerMapping?*node->layerMapping:mapping?resolveMaterialUvMapping(graph,mapping->fromNode):MaterialUvMapping{});
         } else if(node->kind==MaterialNodeKind::Grunge||
             (node->kind==MaterialNodeKind::Texture2D&&!node->texture.image.empty())||
             (node->kind==MaterialNodeKind::ImageInput&&node->atomic.enabled&&!node->texture.image.empty()))
