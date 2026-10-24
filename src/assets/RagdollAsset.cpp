@@ -79,7 +79,7 @@ void validateRagdollAsset(const RagdollAsset& asset){
     }
 }
 void validateRagdollSource(const RagdollAsset& asset,const ModelAsset& model){
-    validateRagdollAsset(asset);check(asset.sourceModel.id==model.id,"Ragdoll source model identity does not match.");check(asset.bindingSignature==animationBindingSignature(model),"Ragdoll skeleton binding no longer matches its source; explicitly remap the source.");
+    validateRagdollAsset(asset);check(asset.sourceModel.id==model.id,"Ragdoll source model identity does not match.");check(asset.bindingSignature==animationBindingSignature(model),"Ragdoll skeleton binding no longer matches its source.");
     const auto joints=sourceJoints(model,asset.skin);const auto tree=hierarchy(model);(void)ragdollReferenceTransforms(model);std::unordered_map<std::uint32_t,std::int32_t> indices;
     for(std::size_t i=0;i<asset.bodies.size();++i){check(joints.contains(asset.bodies[i].node),"Ragdoll body is not a joint of its selected skin.");indices.emplace(asset.bodies[i].node,std::int32_t(i));}
     for(const auto& body:asset.bodies)check(body.parent==physicalParent(body.node,tree,indices),"Ragdoll parent must be the nearest selected joint ancestor.");

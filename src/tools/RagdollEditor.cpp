@@ -1,5 +1,6 @@
 #include "RagdollEditor.h"
 #include "RagdollPreviewInteraction.h"
+#include "RagdollEditorLayout.h"
 #include "DocumentEditorMenu.h"
 #include "PropertyReset.h"
 #include "physics/PhysicsWorld.h"
@@ -65,7 +66,7 @@ void RagdollEditor::perform(AssetLibrary& assets) {
         if(document_.load(pendingId_)) {
             assets.protectRagdollDocument(document_.assetId());publishedRevision_=0;
             publish(assets);focusNext_=true;externalChanged_=false;message_.clear();
-            seconds_=0;startingClip_=-1;framePending_=true;resetSimulation();boundSource_.reset();previewGesture_=0;selectedBody_=-1;selectedNode_=-1;rotationBody_=-1;selectedNodes_.clear();rebindModel_.clear();
+            seconds_=0;startingClip_=-1;framePending_=true;resetSimulation();boundSource_.reset();previewGesture_=0;selectedBody_=-1;selectedNode_=-1;rotationBody_=-1;selectedNodes_.clear();
         }else message_=document_.status();
     }
     pendingId_.clear();
@@ -194,47 +195,66 @@ void setPhysicalNodes(RagdollAsset& asset,const ModelAsset& model,const std::vec
     for(auto& body:generated.bodies)for(const auto& existing:asset.bodies)if(body.node==existing.node){const auto parent=body.parent;body=existing;body.parent=parent;break;}
     asset=std::move(generated);
 }
-bool bonePicker(const char* label,const ModelAsset& model,std::uint32_t skin,std::uint32_t& value) {
-    bool changed=false;const auto name=nodeLabel(model,value);
-    if(ImGui::BeginCombo(label,name.c_str())) {
-        if(skin<model.skins.size())for(const auto node:model.skins[skin].joints) {
-            ImGui::PushID(int(node));if(ImGui::Selectable(nodeLabel(model,node).c_str(),value==node)){value=node;changed=true;}ImGui::PopID();
-        }
-        ImGui::EndCombo();
+}
+void RagdollEditor::bones(AssetLibrary& assets,const std::shared_ptr<const ModelAsset>& source) {
+    ImGui::SeparatorText("Bones");
+    ImGui::TextDisabled("%zu physical bodies",document_.definition().bodies.size());
+    if(!source) {
+        ImGui::TextWrapped("%s",assets.modelLoading(document_.definition().sourceModel.id)?"Preparing skeleton...":"Source model is unavailable.");
+        return;
     }
-    return changed;
-}
-}
-void RagdollEditor::sourceProperties(AssetLibrary& assets,const std::shared_ptr<const ModelAsset>& source) {
-    if(!ImGui::CollapsingHeader("Skeleton",ImGuiTreeNodeFlags_DefaultOpen))return;
-    const auto& definition=document_.definition();
-    if(ImGui::Button(assets.displayName(definition.sourceModel.id).c_str(),{ImGui::GetContentRegionAvail().x,0}))assets.select(definition.sourceModel.id);
-    std::string diagnostic;
-    if(source)try{validateRagdollSource(definition,*source);}catch(const std::exception& error){diagnostic=error.what();}
-    else diagnostic=assets.modelLoading(definition.sourceModel.id)?"Preparing skeleton...":"Source model is unavailable.";
-    if(!diagnostic.empty())ImGui::TextWrapped("%s",diagnostic.c_str());
-    if(ImGui::TreeNode("Remap Skeleton")) {
-        if(rebindModel_.empty()){rebindModel_=definition.sourceModel.id;rebindSkin_=int(definition.skin);mappedNodes_.clear();for(const auto& body:definition.bodies)mappedNodes_.push_back(body.node);}
-        if(ImGui::BeginCombo("Model",assets.displayName(rebindModel_).c_str())) {
-            for(const auto& entry:assets.catalog())if(entry.kind==AssetKind::Model) {
-                ImGui::PushID(entry.id.c_str());if(ImGui::Selectable(entry.name.c_str(),rebindModel_==entry.id)){rebindModel_=entry.id;rebindSkin_=0;}ImGui::PopID();
-            }ImGui::EndCombo();
-        }
-        const auto target=assets.findModel(rebindModel_);
-        if(target&&!target->skins.empty()) {
-            rebindSkin_=std::clamp(rebindSkin_,0,int(target->skins.size()-1));
-            const auto skinName=target->skins[rebindSkin_].name.empty()?"Skin "+std::to_string(rebindSkin_):target->skins[rebindSkin_].name;
-            if(ImGui::BeginCombo("Skin",skinName.c_str())){for(std::size_t i=0;i<target->skins.size();++i){ImGui::PushID(int(i));const auto name=target->skins[i].name.empty()?"Skin "+std::to_string(i):target->skins[i].name;if(ImGui::Selectable(name.c_str(),int(i)==rebindSkin_))rebindSkin_=int(i);ImGui::PopID();}ImGui::EndCombo();}
-            if(mappedNodes_.size()!=definition.bodies.size()){mappedNodes_.clear();for(const auto& body:definition.bodies)mappedNodes_.push_back(body.node);}
-            for(std::size_t i=0;i<definition.bodies.size();++i){ImGui::PushID(int(i));const auto label=source?nodeLabel(*source,definition.bodies[i].node):"Body "+std::to_string(i);bonePicker(label.c_str(),*target,std::uint32_t(rebindSkin_),mappedNodes_[i]);ImGui::PopID();}
-            if(ImGui::Button("Apply Mapping")){finishInteraction();if(document_.rebindSource(*target,std::uint32_t(rebindSkin_),mappedNodes_)){resetSimulation();selectedBody_=-1;selectedNode_=-1;selectedNodes_.clear();framePending_=true;message_.clear();}else message_=document_.status();}
-        }else ImGui::TextUnformatted(target?"Model has no skin.":"Preparing model...");
-        ImGui::TreePop();
+    try {validateRagdollSource(document_.definition(),*source);}
+    catch(const std::exception& error){ImGui::TextWrapped("%s",error.what());return;}
+    const auto& model=*source;const auto& skin=model.skins[document_.definition().skin];
+    const std::unordered_set<std::uint32_t> joints(skin.joints.begin(),skin.joints.end());
+    const float halfWidth=std::max(1.f,(ImGui::GetContentRegionAvail().x-ImGui::GetStyle().ItemSpacing.x)*.5f);
+    if(ImGui::Button("Select All",{halfWidth,0}))selectedNodes_=skin.joints;
+    ImGui::SameLine();if(ImGui::Button("Clear Selection",{halfWidth,0}))selectedNodes_.clear();
+    if(ImGui::Button(selectedNodes_.empty()?"Generate All Bodies":"Generate Selected Bodies",{ImGui::GetContentRegionAvail().x,0})) {
+        finishInteraction();document_.edit("Generate ragdoll bodies",[&](auto& asset){generateRagdollBodies(asset,model,selectedNodes_);});selectedBody_=-1;resetSimulation();
     }
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Replace the current body setup with fitted starting shapes");
+    const bool canAdd=selectedNode_>=0&&joints.contains(std::uint32_t(selectedNode_))&&selectedBody_<0;
+    ImGui::BeginDisabled(!canAdd);
+    if(ImGui::Button("Add Body",{halfWidth,0})) {
+        finishInteraction();std::vector<std::uint32_t> nodes;for(const auto& body:document_.definition().bodies)nodes.push_back(body.node);nodes.push_back(std::uint32_t(selectedNode_));
+        document_.edit("Add ragdoll body",[&](auto& asset){setPhysicalNodes(asset,model,nodes);});
+        for(std::size_t i=0;i<document_.definition().bodies.size();++i)if(document_.definition().bodies[i].node==std::uint32_t(selectedNode_))selectedBody_=int(i);
+        resetSimulation();
+    }
+    ImGui::EndDisabled();ImGui::SameLine();
+    ImGui::BeginDisabled(selectedBody_<0||std::size_t(selectedBody_)>=document_.definition().bodies.size());
+    if(ImGui::Button("Remove Body",{halfWidth,0})) {
+        finishInteraction();std::vector<std::uint32_t> nodes;for(std::size_t i=0;i<document_.definition().bodies.size();++i)if(int(i)!=selectedBody_)nodes.push_back(document_.definition().bodies[i].node);
+        document_.edit("Remove ragdoll body",[&](auto& asset){setPhysicalNodes(asset,model,nodes);});selectedBody_=-1;resetSimulation();
+    }
+    ImGui::EndDisabled();
+    ImGui::BeginChild("Bone hierarchy",{0,0},ImGuiChildFlags_None,ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing,ImGui::GetFontSize()*.65f);
+    const std::function<void(std::uint32_t)> node=[&](std::uint32_t index) {
+        const auto& value=model.nodes[index];ImGui::PushID(int(index));
+        const bool joint=joints.contains(index);bool included=std::find(selectedNodes_.begin(),selectedNodes_.end(),index)!=selectedNodes_.end();
+        if(joint) {
+            if(ImGui::Checkbox("##generate",&included)){if(included)selectedNodes_.push_back(index);else std::erase(selectedNodes_,index);}
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Include when generating bodies");
+            ImGui::SameLine(0,ImGui::GetStyle().ItemInnerSpacing.x);
+        }
+        const auto flags=ImGuiTreeNodeFlags_OpenOnArrow|ImGuiTreeNodeFlags_DefaultOpen|ImGuiTreeNodeFlags_SpanAvailWidth|
+            (value.children.empty()?ImGuiTreeNodeFlags_Leaf:0)|(selectedNode_==int(index)?ImGuiTreeNodeFlags_Selected:0);
+        const auto label=nodeLabel(model,index);const bool expanded=ImGui::TreeNodeEx("Bone",flags,"%s",label.c_str());
+        if(ImGui::IsItemClicked()&&!ImGui::IsItemToggledOpen()) {
+            finishInteraction();selectedNode_=int(index);selectedBody_=-1;
+            for(std::size_t i=0;i<document_.definition().bodies.size();++i)if(document_.definition().bodies[i].node==index)selectedBody_=int(i);
+        }
+        if(expanded){for(const auto child:value.children)node(child);ImGui::TreePop();}ImGui::PopID();
+    };
+    for(const auto root:model.roots)node(root);
+    ImGui::PopStyleVar();ImGui::EndChild();
 }
-void RagdollEditor::properties(AssetLibrary& assets,const std::shared_ptr<const ModelAsset>& source,bool canceled) {
-    sourceProperties(assets,source);
-    bool valid=false;if(source)try{validateRagdollSource(document_.definition(),*source);valid=true;}catch(...){ }
+void RagdollEditor::properties(const std::shared_ptr<const ModelAsset>& source,bool canceled) {
+    ImGui::SeparatorText("Properties");
+    ImGui::PushItemWidth(std::max(70.f,ImGui::GetContentRegionAvail().x*.46f));
+    struct ItemWidthScope {~ItemWidthScope(){ImGui::PopItemWidth();}} itemWidthScope;
     int section=1;
     const auto field=[&](const char* label,const ItemEdit& item,const RagdollDocument::Mutation& mutation) {
         if(!canceled&&(item.activated||item.changed)&&!document_.transactionActive())if(document_.begin(std::string("Change ")+label))propertySection_=section;
@@ -245,37 +265,13 @@ void RagdollEditor::properties(AssetLibrary& assets,const std::shared_ptr<const 
     if(ImGui::CollapsingHeader("Ragdoll",ImGuiTreeNodeFlags_DefaultOpen)) {
         float gravity=document_.definition().gravityFactor;
         ordinary("gravity",resettableProperty(gravity,1.f,[&]{return ImGui::DragFloat("Gravity Factor",&gravity,.01f,0,10,"%.2f",ImGuiSliderFlags_AlwaysClamp);}),[&](auto& asset){asset.gravityFactor=gravity;});
-        ImGui::Text("%zu physical bodies",document_.definition().bodies.size());
     }else if(propertySection_==section)finishInteraction();
-    ImGui::BeginDisabled(!valid);
-    if(valid&&ImGui::CollapsingHeader("Bones",ImGuiTreeNodeFlags_DefaultOpen)) {
-        const auto& model=*source;const auto& skin=model.skins[document_.definition().skin];const std::unordered_set<std::uint32_t> joints(skin.joints.begin(),skin.joints.end());
-        ImGui::BeginChild("Bone hierarchy",{0,220},ImGuiChildFlags_Borders);
-        const std::function<void(std::uint32_t)> node=[&](std::uint32_t index) {
-            const auto& value=model.nodes[index];ImGui::PushID(int(index));
-            const bool joint=joints.contains(index);bool included=std::find(selectedNodes_.begin(),selectedNodes_.end(),index)!=selectedNodes_.end();
-            if(joint){if(ImGui::Checkbox("##generate",&included)){if(included)selectedNodes_.push_back(index);else std::erase(selectedNodes_,index);}if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Include when generating bodies");ImGui::SameLine();}
-            const auto flags=ImGuiTreeNodeFlags_OpenOnArrow|ImGuiTreeNodeFlags_DefaultOpen|(value.children.empty()?ImGuiTreeNodeFlags_Leaf:0)|(selectedNode_==int(index)?ImGuiTreeNodeFlags_Selected:0);
-            const auto label=nodeLabel(model,index);const bool expanded=ImGui::TreeNodeEx("Bone",flags,"%s",label.c_str());
-            if(ImGui::IsItemClicked()&&!ImGui::IsItemToggledOpen()){finishInteraction();selectedNode_=int(index);selectedBody_=-1;for(std::size_t i=0;i<document_.definition().bodies.size();++i)if(document_.definition().bodies[i].node==index)selectedBody_=int(i);}
-            if(expanded){for(const auto child:value.children)node(child);ImGui::TreePop();}ImGui::PopID();
-        };
-        for(const auto root:model.roots)node(root);ImGui::EndChild();
-        if(ImGui::Button("Select All"))selectedNodes_=skin.joints;ImGui::SameLine();if(ImGui::Button("Clear Selection"))selectedNodes_.clear();
-        if(ImGui::Button(selectedNodes_.empty()?"Generate All Bodies":"Generate Selected Bodies")){finishInteraction();document_.edit("Generate ragdoll bodies",[&](auto& asset){generateRagdollBodies(asset,model,selectedNodes_);});selectedBody_=-1;resetSimulation();}
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Replace the current body setup with fitted starting shapes");
-        const bool canAdd=selectedNode_>=0&&joints.contains(std::uint32_t(selectedNode_))&&selectedBody_<0;
-        ImGui::BeginDisabled(!canAdd);if(ImGui::Button("Add Body")){finishInteraction();std::vector<std::uint32_t> nodes;for(const auto& body:document_.definition().bodies)nodes.push_back(body.node);nodes.push_back(std::uint32_t(selectedNode_));document_.edit("Add ragdoll body",[&](auto& asset){setPhysicalNodes(asset,model,nodes);});for(std::size_t i=0;i<document_.definition().bodies.size();++i)if(document_.definition().bodies[i].node==std::uint32_t(selectedNode_))selectedBody_=int(i);resetSimulation();}ImGui::EndDisabled();
-        ImGui::SameLine();ImGui::BeginDisabled(selectedBody_<0||std::size_t(selectedBody_)>=document_.definition().bodies.size());
-        if(ImGui::Button("Remove Body")){finishInteraction();std::vector<std::uint32_t> nodes;for(std::size_t i=0;i<document_.definition().bodies.size();++i)if(int(i)!=selectedBody_)nodes.push_back(document_.definition().bodies[i].node);document_.edit("Remove ragdoll body",[&](auto& asset){setPhysicalNodes(asset,model,nodes);});selectedBody_=-1;resetSimulation();}ImGui::EndDisabled();
-    }
-    ImGui::EndDisabled();
     if(selectedBody_<0||std::size_t(selectedBody_)>=document_.definition().bodies.size())return;
     if(rotationBody_!=selectedBody_){bodyRotationFields_={};jointRotationFields_={};rotationBody_=selectedBody_;}
     section=2;
     if(ImGui::CollapsingHeader("Body",ImGuiTreeNodeFlags_DefaultOpen)) {
         const auto index=std::size_t(selectedBody_);auto value=document_.definition().bodies[index];
-        if(source){auto node=value.node;if(bonePicker("Bone",*source,document_.definition().skin,node)){finishInteraction();std::vector<std::uint32_t> mapping;for(std::size_t i=0;i<document_.definition().bodies.size();++i)mapping.push_back(i==index?node:document_.definition().bodies[i].node);if(!document_.rebindSource(*source,document_.definition().skin,mapping))message_=document_.status();else{selectedNode_=int(node);resetSimulation();}}}
+        ImGui::TextWrapped("Bone: %s",source?nodeLabel(*source,value.node).c_str():std::to_string(value.node).c_str());
         if(value.parent>=0&&std::size_t(value.parent)<document_.definition().bodies.size())ImGui::TextWrapped("Parent: %s",source?nodeLabel(*source,document_.definition().bodies[value.parent].node).c_str():std::to_string(value.parent).c_str());else ImGui::TextUnformatted("Parent: None");
         int shape=int(value.shape);const bool changed=ImGui::Combo("Shape",&shape,"Capsule\0Box\0Sphere\0");ordinary("body shape",changed,[&](auto& asset){asset.bodies[index].shape=RagdollShape(shape);});
         auto position=value.position;const auto positionEdit=axisRow("Position (m)",position,.005f);field("body position",positionEdit,[&](auto& asset){asset.bodies[index].position=position;});
@@ -305,7 +301,7 @@ void RagdollEditor::resetSimulation(){endDrag();simulation_.reset();simulating_=
 void RagdollEditor::testControls() {
     const auto count=document_.definition().bodies.size();manualPins_.resize(count);
     ImGui::BeginDisabled(simulating_);
-    ImGui::SetNextItemWidth(180);ImGui::Combo("Test Mode",&simulationMode_,"Whole Ragdoll\0Selected Body\0Selected Branch\0");
+    ImGui::Combo("Test Mode",&simulationMode_,"Whole Ragdoll\0Selected Body\0Selected Branch\0");
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Reset before changing the simulation scope");
     ImGui::EndDisabled();
     const bool selected=selectedBody_>=0&&std::size_t(selectedBody_)<count;
@@ -402,34 +398,49 @@ void RagdollEditor::overlays(const ModelAsset& source,const ModelPose& pose,cons
     if(dragging_){point(dragPoint_,IM_COL32(255,195,50,255),5);}
     draw->PopClipRect();
 }
-void RagdollEditor::preview(AssetLibrary& assets,Renderer& renderer,ResourceManager& resources,EditorResources& prepared,double dt) {
-    previewStatus_.clear();const auto source=assets.findModel(document_.definition().sourceModel.id);
-    if(source!=boundSource_){gizmo_.cancel(document_);resetSimulation();simulationMode_=0;boundSource_=source;framePending_=true;}
+void RagdollEditor::preparePreview(const std::shared_ptr<const ModelAsset>& source) {
+    if(source!=boundSource_){previewStatus_.clear();gizmo_.cancel(document_);resetSimulation();simulationMode_=0;boundSource_=source;framePending_=true;}
     if(simulating_&&simulationRevision_!=document_.previewRevision())resetSimulation();
     if(testRevision_!=document_.previewRevision()){manualPins_.assign(document_.definition().bodies.size(),0);scopePins_.clear();simulationMode_=0;testRevision_=document_.previewRevision();}
-    std::shared_ptr<const ModelPose> startingPose;
-    if(source)try {if(startingClip_>=int(source->animations.size()))startingClip_=-1;startingPose=std::make_shared<const ModelPose>(evaluateModelPose(*source,startingClip_>=0?std::optional<std::size_t>{std::size_t(startingClip_)}:std::nullopt,seconds_,false));}catch(const std::exception& error){previewStatus_=error.what();}
-    ImGui::BeginDisabled(!source||!startingPose||document_.definition().bodies.empty());
-    if(ImGui::Button(simulating_?(paused_?"Resume":"Pause"):"Simulate")){if(simulating_){paused_=!paused_;if(paused_)endDrag();}else startSimulation(source,*startingPose);}ImGui::EndDisabled();
-    ImGui::SameLine();if(ImGui::Button("Reset")){finishInteraction();resetSimulation();}ImGui::SameLine();if(ImGui::Button("Frame")){finishInteraction();framePending_=true;}
-    ImGui::SameLine();ImGui::Checkbox("Bones",&showBones_);ImGui::SameLine();ImGui::Checkbox("Shapes",&showShapes_);ImGui::SameLine();ImGui::Checkbox("Joints",&showJoints_);
-    testControls();
-    ImGui::BeginDisabled(simulating_);
-    for(int operation=0;operation<3;++operation){if(operation)ImGui::SameLine();const char* labels[]{"Move (T)","Rotate (R)","Resize (E)"};if(ImGui::RadioButton(labels[operation],gizmoOperation_==operation)){finishInteraction();gizmoOperation_=operation;}}
-    ImGui::EndDisabled();
-    const auto& keyboard=ImGui::GetIO();
-    if(!simulating_&&!gizmo_.active()&&!keyboard.WantTextInput&&!ImGui::IsAnyItemActive()&&!ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup)&&ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)) {
-        if(ImGui::IsKeyPressed(ImGuiKey_T,false))gizmoOperation_=0;
-        if(ImGui::IsKeyPressed(ImGuiKey_R,false))gizmoOperation_=1;
-        if(ImGui::IsKeyPressed(ImGuiKey_E,false))gizmoOperation_=2;
+    if(source&&startingClip_>=int(source->animations.size()))startingClip_=-1;
+}
+std::shared_ptr<const ModelPose> RagdollEditor::startingPose(const std::shared_ptr<const ModelAsset>& source) {
+    if(source)try {
+        return std::make_shared<const ModelPose>(evaluateModelPose(*source,startingClip_>=0?std::optional<std::size_t>{std::size_t(startingClip_)}:std::nullopt,seconds_,false));
+    }catch(const std::exception& error){previewStatus_=error.what();}
+    return {};
+}
+void RagdollEditor::simulationControls(const std::shared_ptr<const ModelAsset>& source) {
+    preparePreview(source);
+    ImGui::SeparatorText("Simulation");
+    ImGui::PushItemWidth(std::max(70.f,ImGui::GetContentRegionAvail().x*.5f));
+    bool compatible=false;if(source)try{validateRagdollSource(document_.definition(),*source);compatible=true;}catch(...){ }
+    ImGui::BeginDisabled(!compatible||document_.definition().bodies.empty());
+    if(ImGui::Button(simulating_?(paused_?"Resume":"Pause"):"Simulate")) {
+        if(simulating_){paused_=!paused_;if(paused_)endDrag();}
+        else if(const auto pose=startingPose(source))startSimulation(source,*pose);
     }
+    ImGui::EndDisabled();ImGui::SameLine();
+    if(ImGui::Button("Reset")){finishInteraction();resetSimulation();}
+    ImGui::SameLine();if(ImGui::Button("Frame")){finishInteraction();framePending_=true;}
+    testControls();
     ImGui::BeginDisabled(simulating_||gizmo_.active());
     if(ImGui::BeginCombo("Starting Pose",source&&startingClip_>=0?source->animations[startingClip_].name.c_str():"Reference Pose")) {
         if(ImGui::Selectable("Reference Pose",startingClip_<0)){startingClip_=-1;seconds_=0;}
         if(source)for(std::size_t i=0;i<source->animations.size();++i){ImGui::PushID(int(i));const auto& clip=source->animations[i];const auto label=clip.name.empty()?"Animation "+std::to_string(i):clip.name;if(ImGui::Selectable(label.c_str(),startingClip_==int(i))){startingClip_=int(i);seconds_=clip.start;}ImGui::PopID();}ImGui::EndCombo();
     }
     if(source&&startingClip_>=0){const auto& clip=source->animations[startingClip_];float time=float(seconds_);if(ImGui::SliderFloat("Time (s)",&time,clip.start,clip.end,"%.3f"))seconds_=time;}
-    ImGui::SetNextItemWidth(140);ImGui::DragFloat("Drop Height (m)",&dropHeight_,.05f,0,100,"%.2f",ImGuiSliderFlags_AlwaysClamp);ImGui::EndDisabled();
+    ImGui::DragFloat("Drop Height (m)",&dropHeight_,.05f,0,100,"%.2f",ImGuiSliderFlags_AlwaysClamp);ImGui::EndDisabled();
+    ImGui::SeparatorText("Display");
+    ImGui::Checkbox("Bones",&showBones_);ImGui::SameLine();ImGui::Checkbox("Shapes",&showShapes_);ImGui::SameLine();ImGui::Checkbox("Joints",&showJoints_);
+    ImGui::PopItemWidth();
+}
+void RagdollEditor::preview(AssetLibrary& assets,Renderer& renderer,ResourceManager& resources,EditorResources& prepared,double dt) {
+    // Sidebar edits and test controls run first, so this image always consumes
+    // the current document and pose rather than the previous frame's controls.
+    const auto source=assets.findModel(document_.definition().sourceModel.id);
+    preparePreview(source);previewStatus_.clear();
+    const auto startingPose=this->startingPose(source);
     const auto available=ImGui::GetContentRegionAvail();if(available.x<=0||available.y<=0){gizmo_.cancel(document_);endDrag();return;}
     const auto origin=ImGui::GetCursorScreenPos();const ViewportRegion region{origin.x,origin.y,available.x,available.y};
     const auto scale=ImGui::GetWindowViewport()->FramebufferScale;
@@ -503,11 +514,24 @@ void RagdollEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManager
         if(action==DocumentEditorAction::Save)save(assets);if(action==DocumentEditorAction::SaveAs)save(assets,true);if(action==DocumentEditorAction::Close)request(Pending::Close,{},&assets);if(action==DocumentEditorAction::Undo)undo();if(action==DocumentEditorAction::Redo)redo();
         if(isOpen()) {
             const bool canceled=suppressFinalUpdate_||(document_.transactionActive()&&(ImGui::IsKeyPressed(ImGuiKey_Escape,false)||ImGui::GetIO().AppFocusLost));if(canceled&&document_.transactionActive())cancelInteraction();suppressFinalUpdate_=false;
-            if(ImGui::BeginTable("Ragdoll layout",2,ImGuiTableFlags_Resizable|ImGuiTableFlags_BordersInnerV)) {
-                ImGui::TableSetupColumn("Properties",ImGuiTableColumnFlags_WidthFixed,390);ImGui::TableSetupColumn("Preview",ImGuiTableColumnFlags_WidthStretch);
-                ImGui::TableNextColumn();ImGui::BeginChild("Ragdoll properties",{0,0});properties(assets,assets.findModel(document_.definition().sourceModel.id),canceled);if(!message_.empty())ImGui::TextWrapped("%s",message_.c_str());if(!document_.status().empty())ImGui::TextWrapped("%s",document_.status().c_str());if(!previewStatus_.empty())ImGui::TextWrapped("%s",previewStatus_.c_str());ImGui::EndChild();
-                ImGui::TableNextColumn();ImGui::BeginChild("Ragdoll preview",{0,0});preview(assets,renderer,resources,prepared,dt);ImGui::EndChild();ImGui::EndTable();
-            }else {gizmo_.cancel(document_);endDrag();}
+            const auto source=assets.findModel(document_.definition().sourceModel.id);
+            preparePreview(source);
+            const auto& keyboard=ImGui::GetIO();
+            if(!simulating_&&!gizmo_.active()&&!keyboard.WantTextInput&&!ImGui::IsAnyItemActive()&&!ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup)&&ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+                if(ImGui::IsKeyPressed(ImGuiKey_T,false))gizmoOperation_=0;
+                if(ImGui::IsKeyPressed(ImGuiKey_R,false))gizmoOperation_=1;
+                if(ImGui::IsKeyPressed(ImGuiKey_E,false))gizmoOperation_=2;
+            }
+            if(!drawRagdollWorkspace(simulationHeight_,
+                [&]{bones(assets,source);},
+                [&]{
+                    simulationControls(source);
+                    if(!message_.empty())ImGui::TextWrapped("%s",message_.c_str());
+                    if(!document_.status().empty())ImGui::TextWrapped("%s",document_.status().c_str());
+                    if(!previewStatus_.empty())ImGui::TextWrapped("%s",previewStatus_.c_str());
+                },
+                [&]{properties(source,canceled);},
+                [&]{preview(assets,renderer,resources,prepared,dt);})) {gizmo_.cancel(document_);endDrag();}
         }
     }else {finishInteraction();endDrag();previewGesture_=0;}
     ImGui::End();publish(assets);modals(assets);
