@@ -4,6 +4,7 @@
 #include "crimson-renderer/Renderer.h"
 #include "resources/ResourceManager.h"
 #include "runtime/AnimationPlayback.h"
+#include "MeshPaintResources.h"
 #include <chrono>
 #include <filesystem>
 #include <unordered_map>
@@ -23,6 +24,7 @@ struct PreparedEditorModel {
     bool ready{};
     bool refined{}; // Requested detail is resident (including pressure policy).
     std::shared_ptr<const void> pinned;
+    std::vector<RenderMeshPaintBinding> meshPaint;
 };
 // One world-wide caster set shared by Scene and Game. Its immutable packets
 // keep alpha textures and model versions alive through queued shadow draws.
@@ -52,6 +54,10 @@ public:
     const std::string& status() const { return status_; }
     bool failed(const std::string& id) const;
     void retainExternalModelForFrame(const std::string& id) { externalModels_.push_back(id); }
+    VertexPaintTargets vertexPaintTargets(const SceneDocument& document,EntityId entity) {return meshPaint_.targets(document,entity);}
+    bool meshPaintSubdivision(const EntityRecord& record,std::uint32_t level,SceneMeshPaint& result,std::string& diagnostic) {
+        return meshPaint_.subdivision(record,level,result,diagnostic);
+    }
 private:
     struct Entry {
         std::shared_ptr<const PreparedEditorModel> current;
@@ -70,6 +76,7 @@ private:
     Renderer& renderer_;
     ResourceManager& resources_;
     std::filesystem::path root_;
+    MeshPaintResources meshPaint_;
     std::unordered_map<std::string,Entry> entries_;
     std::unordered_map<std::string,std::weak_ptr<const ModelAsset>> retiredPrimitiveModels_;
     // Shared by Scene/Game/shadow admission within a frame. Includes the last

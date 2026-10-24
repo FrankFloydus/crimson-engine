@@ -407,16 +407,27 @@ struct AssetPreviews::Impl {
         const auto sourceFile=[&](const std::string& source) {
             auto file=resolveAssetPath(root,source);locations.push_back({source,file});return file;
         };
-        const auto includeMaterial=[&](const std::string& source) {
-            if(source.empty())return;
-            const auto target=assets.references().resolveMaterial(source);
-            if(const auto material=assets.peekMaterial(target)) {
-                materialVersions.push_back({target,materialPreviewHash(*material)});
-                if(!isEngineAssetId(target))try{validationFiles.push_back(sourceFile(target));}catch(const std::exception&){}
-            }
-        };
         uint64_t sourceKey=streaming::detail::HashSeed; hash(sourceKey,PreviewVersion); hash(sourceKey,id.data(),id.size()); hash(sourceKey,renderer.shaderSignature());hash(sourceKey,assets.materialShaderRevision());
         hash(sourceKey,previewSize);
+        std::unordered_set<std::string> includedMaterials;
+        const auto includeMaterialTree=[&](auto&& self,const std::string& source)->void {
+            if(source.empty())return;
+            const auto target=assets.references().resolveMaterial(source);
+            if(target.empty()||!includedMaterials.insert(target).second)return;
+            if(const auto material=assets.findMaterial(target)) {
+                const auto fingerprint=materialPreviewHash(*material);
+                materialVersions.push_back({target,fingerprint});
+                hash(sourceKey,target.data(),target.size());hash(sourceKey,fingerprint);
+                if(!isEngineAssetId(target))try{const auto file=sourceFile(target);validationFiles.push_back(file);files.push_back(file);}catch(const std::exception&){}
+                visitMaterialTextures(material->surface,true,[&](const auto& image,MaterialTextureRole role) {
+                    const auto texture=assets.references().resolveTexture(image,role==MaterialTextureRole::Normal);
+                    hash(sourceKey,texture.data(),texture.size());
+                    if(!texture.empty()&&!isEngineAssetId(texture))files.push_back(sourceFile(texture));
+                });
+                for(const auto& child:materialGraphMaterialReferences(material->graph,true))self(self,child);
+            }
+        };
+        const auto includeMaterial=[&](const std::string& source){includeMaterialTree(includeMaterialTree,source);};
         const auto includeDecal=[&](const std::string& source) {
             const auto decal=assets.findDecal(source);if(!decal)return;
             const auto fingerprint=decalPreviewHash(*decal);hash(sourceKey,fingerprint);decalVersions.push_back({decal->id,fingerprint});
@@ -739,6 +750,8 @@ struct AssetPreviews::Impl {
             instances.back().actorOwner=model.actorOwner;
             instances.back().meshShading=model.meshShading;
             instances.back().pose=prepared.pose(model,ready->asset);
+            instances.back().meshPaint=ready->meshPaint;
+            instances.back().forceFullDetail|=!ready->meshPaint.empty();
         }
         if (thumbnailEnvironment!=bake->key) {
             if (!renderer.publishThumbnailEnvironment(*bake)) { entry.error=renderer.thumbnailStatus(); return; }

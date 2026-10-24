@@ -28,6 +28,14 @@ void materialDependencies(const std::filesystem::path& root,const MaterialAsset&
         const auto file=checkedManagedAssetPath(root,image);auto extension=file.extension().string();std::transform(extension.begin(),extension.end(),extension.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
         if(extension==".hdr")throw std::runtime_error("A material cannot use HDR images in material slots.");result.push_back(file);
     });
+    for(const auto& id:materialMaterialReferences(definition)) {
+        const auto target=policy.resolveMaterial(id);
+        const auto child=loadMaterialAsset(root,target);
+        if(!blendMaterialSourceCompatible(child)||child.id==definition.id)
+            throw std::runtime_error("Blend layers require a solid Lit replacement without tessellation.");
+        // Nested material references are rejected by compatibility, so this is bounded.
+        materialDependencies(root,child,policy,result);
+    }
 }
 std::shared_ptr<const MaterialAsset> decalMaterial(const std::filesystem::path& root,const DecalAsset& decal,const AssetReferenceManager& policy) {
     const auto id=policy.resolveDecalMaterial(decal.material.id);if(id.empty())return {};

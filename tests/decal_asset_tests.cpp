@@ -110,7 +110,7 @@ void sceneCapabilityHistoryAndMigration() {
     require(document.save("Decal scene"),document.status());const auto sceneId=document.assetId();const auto file=sceneAssetPath(p.root,sceneId);const auto bytes=read(file);
     const auto savedJson=Json::parse(bytes);const auto savedDecal=std::find_if(savedJson["entities"].begin(),savedJson["entities"].end(),[](const auto& entity){return entity.contains("decal");});
     require(savedDecal!=savedJson["entities"].end()&&!(*savedDecal)["decal"].contains("receivers")&&!(*savedDecal)["decal"]["seed"].contains("sourceKey"),"Current writer retained removed decal receiver policy.");
-    require(Json::parse(bytes).at("version")==24,"New decal capability did not use schema 24.");SceneDocument reopened(p.root);require(reopened.load(sceneId)&&!reopened.dirty()&&reopened.scene().find(decal)->decal==value,reopened.status());
+    require(Json::parse(bytes).at("version")==25,"New decal capability did not use schema 25.");SceneDocument reopened(p.root);require(reopened.load(sceneId)&&!reopened.dirty()&&reopened.scene().find(decal)->decal==value,reopened.status());
     document.select({receiver,decal},decal);require(document.duplicateSelection(),document.status());EntityId duplicateDecal{},duplicateReceiver{};
     for(const auto id:document.selection().ids){const auto record=document.scene().find(id);if(record->decal)duplicateDecal=id;if(record->model)duplicateReceiver=id;}
     require(duplicateDecal&&duplicateReceiver&&document.scene().find(duplicateDecal)->decal->seed.receiver==duplicateReceiver,"Duplicating receiver+decal lost internal occurrence references.");
@@ -124,7 +124,7 @@ void sceneCapabilityHistoryAndMigration() {
     const auto oldPolicyBytes=oldPolicy.dump(2)+"\n";writeFileAtomically(file,oldPolicyBytes);require(reopened.load(sceneId)&&!reopened.dirty()&&reopened.scene().find(decal)->decal==value&&read(file)==oldPolicyBytes,"Removed import scope affected generic receiver loading or rewrote scene bytes.");
     auto legacy=Json::parse(bytes);legacy["version"]=23;writeFileAtomically(file,legacy.dump(2)+"\n");const auto legacyBytes=read(file);
     require(reopened.load(sceneId)&&!reopened.dirty()&&!reopened.scene().find(decal)->decal&&read(file)==legacyBytes,"Old scene loading created a decal, dirtied data or rewrote its bytes.");
-    require(reopened.save()&&Json::parse(read(file)).at("version")==24,reopened.status());
+    require(reopened.save()&&Json::parse(read(file)).at("version")==25,reopened.status());
 }
 }
 int main() {

@@ -12,6 +12,7 @@
 #include "crimson-renderer/Environment.h"
 #include "resources/Paths.h"
 #include "tools/SceneDiagnostics.h"
+#include "tools/ScenePanels.h"
 #include "QuaderSceneIntegration.h"
 #include <crimson/renderer/core/Profiler.hpp>
 #include <imgui.h>
@@ -41,6 +42,10 @@ EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& as
     editor_.setDecalPatchQuery([this](EntityId id){return decals_.patch(id);});
     editor_.setDecalFrameQuery([this](EntityId id){return decals_.surfaceFrame(id);});
     editor_.setRagdollActiveQuery([this](EntityId id){return play_.ragdollActive(id);});
+    editor_.setVertexPaintTargetQuery([this](const SceneDocument& document,EntityId entity){return prepared_.vertexPaintTargets(document,entity);});
+    setMeshPaintSubdivisionQuery(document_,[this](const EntityRecord& record,std::uint32_t level,SceneMeshPaint& result,std::string& diagnostic) {
+        return prepared_.meshPaintSubdivision(record,level,result,diagnostic);
+    });
     play_.setRagdollDefinitions([&assets](const std::string& id){return assets.findRagdoll(id);},[&assets](const std::string& id){return assets.findModel(id);},[&assets](const std::string& id){return assets.findAnimation(id);});
     editor_.setQuaderBridge(&quader_);
     const NavigationAgentProfileQuery agentProfiles=[this,&assets](const std::string& id) {
@@ -241,7 +246,7 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
     }
     if(auto snapshot=environment_.snapshot()) if(snapshot.revision()!=environmentRevision_ && renderer.publishEnvironment(*snapshot)) environmentRevision_=snapshot.revision();
     }
-    { CRIMSON_PROFILE_ZONE("Asset preview preparation");previews_->pump(bgfxFrame,visiblePreviewIds_,editor_.thumbnailDemand()); }
+    if(!editor_.vertexPaintActive()) { CRIMSON_PROFILE_ZONE("Asset preview preparation");previews_->pump(bgfxFrame,visiblePreviewIds_,editor_.thumbnailDemand()); }
 }
 void EditorSession::cancelInteraction(Renderer& renderer) {
     cameraPilot_.cancelGesture(activeDocument(),settings_.camera);cameraGestureCancel_=false;
@@ -345,6 +350,9 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     }
     if(!play_.playing())editLights_.synchronize(document.documentGeneration());
     const auto lightPreview=play_.playing()?LightPreviewContext{}:editLights_.previewContext();
+    setMeshPaintSubdivisionQuery(document,[this](const EntityRecord& record,std::uint32_t level,SceneMeshPaint& result,std::string& diagnostic) {
+        return prepared_.meshPaintSubdivision(record,level,result,diagnostic);
+    });
     const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_,navigationProfileEditor_,collisionLayersEditor_,gameplayEffectEditor_,animationEditor_,decalEditor_,gameplay,captures,&ragdollEditor_,lightPreview);
     const auto sceneCamera=frame.viewportCamera.value_or(settings_.camera);
     if(frame.togglePlay)playActionPending_=play_.playing()?PlayAction::Stop:PlayAction::Start;
@@ -545,9 +553,15 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     };
     if(!play_.playing())navigationPreview_.update(document,[this](const std::string& id){return collisions_.query(id);},agentProfiles);
     const auto& renderScene=play_.playing()?play_.presentationScene():document.scene();
-    const MaterialEvaluationContext materialContext{play_.playing()?play_.tickCount()*PlaySession::FixedStep:materialGameSeconds_,materialRealSeconds_};
+    // A paint stroke reuses visible-surface tiles. Keep all edit-preview
+    // occluders at the displayed pose and material time until it completes.
+    const bool painting=!play_.playing()&&editor_.vertexPaintActive();
+    const auto editPreviewSeconds=painting?0.f:simulationSeconds;
+    const MaterialEvaluationContext materialContext=painting?displayedMaterialContext_:
+        MaterialEvaluationContext{play_.playing()?play_.tickCount()*PlaySession::FixedStep:materialGameSeconds_,materialRealSeconds_};
+    displayedMaterialContext_=materialContext;
     prepared_.setMaterialContext(materialContext);
-    if(!play_.playing())editLights_.advance(document.documentGeneration(),simulationSeconds);
+    if(!play_.playing())editLights_.advance(document.documentGeneration(),editPreviewSeconds);
     const auto lightSeconds=play_.playing()?std::optional{play_.lightPresentationSeconds()}:editLights_.sampleTime();
     auto extracted=extractScene(renderScene,agentProfiles,lightSeconds);
     auto decalScene=decals_.prepare(renderScene,extracted);
@@ -577,7 +591,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         }
     }
     if(play_.playing())play_.prepareRagdollPresentation(extracted);
-    else editAnimations_.advance(extracted,document.documentGeneration(),simulationSeconds,[&assets](const auto& id){return assets.findAnimation(id);});
+    else editAnimations_.advance(extracted,document.documentGeneration(),editPreviewSeconds,[&assets](const auto& id){return assets.findAnimation(id);});
     if(play_.playing()) {
         if(frame.resetRagdollEntity){play_.resetRagdoll(frame.resetRagdollEntity);for(auto& model:extracted.models)if(model.id==frame.resetRagdollEntity)model.physicsPose.reset();}
         if(frame.activateRagdollEntity)for(const auto& model:extracted.models)if(model.id==frame.activateRagdollEntity) {
@@ -595,7 +609,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     auto& sceneParticles=play_.playing()?play_.particles():particles_;
     if(!play_.playing() || frame.playParticleEntity)sceneParticles.reconcile(document.documentGeneration(),extracted.particles,[&](const std::string& id) {
         return ParticleDefinitionVersion{assets.findParticle(id),assets.particleRevision(id),assets.particleDiagnostic(id)};
-    },play_.playing()?0.f:simulationSeconds,frame.playParticleEntity);
+    },play_.playing()?0.f:editPreviewSeconds,frame.playParticleEntity);
     std::vector<RenderParticle> particlePackets;particlePackets.reserve(sceneParticles.presentation().size());
     std::vector<RenderParticleMaterial> particleMaterials;particleMaterials.push_back({});
     std::unordered_map<std::string,std::uint32_t> materialIndices;

@@ -47,6 +47,7 @@ struct QuaderSourceVertex {
     std::uint32_t uvInterpolationMode{};
 };
 struct QuaderSourceSurface { std::uint32_t material{UINT32_MAX},offset{},count{}; };
+struct QuaderSourceFace {std::array<std::uint32_t,4> vertices{};std::array<std::uint32_t,2> triangles{};std::uint32_t cornerCount{4};};
 enum class QuaderCollision { Disabled,StaticTriangles,Unsupported };
 struct QuaderSourceMesh {
     std::string name;
@@ -56,6 +57,7 @@ struct QuaderSourceMesh {
     std::vector<QuaderSourceVertex> vertices;
     std::vector<std::uint32_t> indices;
     std::vector<QuaderSourceSurface> surfaces;
+    std::vector<QuaderSourceFace> sourceFaces;
     QuaderCollision collision{};
     std::vector<Vec3> collisionPoints;
     std::string parentKey;

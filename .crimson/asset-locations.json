@@ -3519,6 +3519,7 @@
     "8daaa9a4-7782-5866-8ab7-a9933c029f8c": "Content/materials/model-9915c7e1bd9fe453167be9f2aa22c9744b5507ddf61f14584b85cf02ae4d8bf6-m1.crimson-material",
     "8dad872d-6345-5a8e-b882-c4a9896ea292": "Content/scenes/4096c04e03950d042e114923eda129e0.crimson-scene",
     "8dc47be0-ad98-5308-a479-a95816dc9509": ".crimson/cache/quader-imports/a8695214-0c58-5bed-bd3b-77a26ce5f828/baad3b95-6916-54f4-96ec-76fdfaf449e8/model.gltf",
+    "8dd19411-4fb7-4c72-92b6-413fda8a7aca": "Content/blend_paint_example/Blend Paint Example.crimson-scene",
     "8e3b8b9e-b467-5788-85ac-bd6c9475d2ce": "Content/models/quader-b942b30fad631bb98554caa36dcac451ce834dcae37181e550be0e4d31d4217e/model.gltf",
     "8e477512-903e-570c-bbf0-7a352d05ed29": "Content/Cylinder_002-4c080e21.crimson-model/manifest.json",
     "8e538a92-77b0-5148-bace-af2596372b2c": "Content/smoke_07-2.png",
@@ -3938,6 +3939,7 @@
     "c3267147-5e83-5775-8d24-f365d147189d": "Content/models/quader-85a6464cb863a0520ebf3c1267f87377e8452bf3875f9e022fcacc376cbff94a/buffers/0.bin",
     "c33a20cf-43cf-539b-9587-104ce515a445": ".crimson/cache/quader-imports/a8695214-0c58-5bed-bd3b-77a26ce5f828/2dc1c585-2a6b-578a-a2b9-308c5c5047ce/model.gltf",
     "c34d294a-6c73-53ed-8997-55b9dba00c73": "Content/textures/quader-0a96e2ed58a9f94af1a7d92c8db6dbdf169fc81c70da2c0177262fdba741f35e-3.png",
+    "c3744381-b311-4b32-a277-507ee54a5269": "Content/blend_paint_example/Blend Paint Example.crimson-material",
     "c375d696-3d89-5d2a-92d4-0a4fa1491310": "Content/tomb/bone+skull+pile+3d+model-7f410a07.crimson-model/buffers/0.bin",
     "c38a700d-0738-5f06-87b8-9aea05224805": "Content/Cylinder_001-0db90831.crimson-model/model.gltf",
     "c3a2d179-b6b6-5f83-88c4-07ce96e9abfa": "Content/Box-b49919e3.crimson-model/model.gltf",
@@ -4424,7 +4426,7 @@
     "ffc46144-abd2-5baa-89de-5119910fc776": "Content/models/quader-5c7c5db0c1fdb5bfef30408a8d0008a44c4f55510982773ce6b6e08899c87f07/buffers/0.bin",
     "ffe67bd8-acf6-5d5b-ac6b-4fd7b4804d60": "Content/Box_005 collision-5b635f0f.crimson-model/source.gltf"
   },
-  "revision": 431,
+  "revision": 432,
   "uuidReferences": true,
   "version": 1
 }

@@ -28,6 +28,15 @@ retains two vec4 values and the mode through managed glTF attributes
 the source project or a loaded reader. The former `_CRIMSON_CIRCULAR_COORD` and
 `_CRIMSON_CIRCULAR_COEFF` pair remains read compatibility only.
 
+The independent optional `quader_bridge_get_topology_api(1)` extension exposes
+known source quads as boundary-ordered vertex indices and their two triangle
+indices. Its table and returned ranges are validated separately from core ABI 7.
+The reader remaps triangle provenance after material bucketing. Crimson stores
+the resulting primitive-local faces in managed glTF `extras.crimsonSourceFaces`
+and its version-9 model cache, so logical quad subdivision survives reopening
+without the original project. Unknown faces remain triangles; vertex attribute
+splits that no longer share four render corners discard that quad provenance.
+
 To refresh from the authorized Quader workspace, configure its existing CMake source
 with a separate binary directory under Crimson's `build/quader-reader-current`,
 reusing its configured vcpkg dependency cache with manifest installation disabled.

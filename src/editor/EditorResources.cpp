@@ -20,6 +20,10 @@
 namespace crimson {
 namespace {
 using streaming::detail::hash;
+bool derivedGeometry(const std::string& source,const std::string& geometry) {
+    return geometry.starts_with("mesh-paint:") ||
+        (isBuiltinModel(source)&&!geometry.empty()&&!isBuiltinModel(geometry));
+}
 std::string materialPreparationKey(const std::string& id,std::span<const AssetRef<MaterialAsset>> overrides) {
     while(!overrides.empty()&&overrides.back().empty())overrides=overrides.first(overrides.size()-1);
     auto key=id+std::string(1,'\0');
@@ -138,7 +142,7 @@ struct Pins {
 };
 }
 EditorResources::EditorResources(AssetLibrary& assets,Renderer& renderer,ResourceManager& resources,std::filesystem::path root)
-    :assets_(assets),renderer_(renderer),resources_(resources),root_(std::move(root)) {}
+    :assets_(assets),renderer_(renderer),resources_(resources),root_(std::move(root)),meshPaint_(assets,resources) {}
 void EditorResources::beginFrame() {
     for(auto& [id,pose]:poses_)pose.wanted=false;
     framePins_.clear(); externalModels_.clear(); status_.clear();
@@ -146,6 +150,7 @@ void EditorResources::beginFrame() {
     for (auto& [id,entry]:entries_) { (void)id; entry.wanted=false; }
 }
 void EditorResources::endFrame() {
+    meshPaint_.collect();
     std::erase_if(poses_,[](const auto& item){return !item.second.wanted;});
     const auto now=std::chrono::steady_clock::now();
     auto live=externalModels_;
@@ -159,7 +164,7 @@ void EditorResources::endFrame() {
     std::erase_if(entries_,[&](const auto& pair) {
         const auto& entry=pair.second;
         if(entry.wanted)return false;
-        const bool variant=isBuiltinModel(entry.sourceId) && !entry.geometryAssetId.empty() && !isBuiltinModel(entry.geometryAssetId);
+        const bool variant=derivedGeometry(entry.sourceId,entry.geometryAssetId);
         if(variant)retiredPrimitiveModels_[entry.geometryAssetId]=entry.geometrySource;
         return variant || now-entry.used>resources_.config().idleGrace;
     });
@@ -211,8 +216,15 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
     // Geometry identity remains shared. Immutable binding packets are keyed by
     // the complete slot assignment so instances cannot overwrite each other.
     // Canonicalize trailing inherited slots; embedded separators retain slot order.
-    const auto asset=assets_.findModel(id,presentation?presentation->primitive:std::optional<PrimitiveMeshSettings>{});
-    const auto key=materialPreparationKey(asset?asset->id:id,materialOverrides);
+    auto asset=assets_.findModel(id,presentation?presentation->primitive:std::optional<PrimitiveMeshSettings>{});
+    const auto demandSource=asset;
+    const bool rigid=asset&&asset->skins.empty()&&asset->animations.empty()&&presentation&&presentation->animation.asset.empty()&&!presentation->physicsPose&&
+        std::none_of(asset->primitives.begin(),asset->primitives.end(),[](const auto& primitive){return primitive.hasSkinning||!primitive.morphTargets.empty();});
+    bool painted=rigid&&presentation->meshPaint.has_value();
+    if(rigid&&!painted)try {for(const auto& material:assets_.resolvedModelMaterials(*asset,materialOverrides))
+        painted|=material.graph&&materialOutputNode(*material.graph).output.shading==MaterialShading::BlendPbr;
+    } catch(const std::exception&) {/* Normal packet preparation retains its diagnostic below. */}
+    const auto key=materialPreparationKey((asset?asset->id:id)+(painted?":paint-occurrence:"+std::to_string(presentation->id):""),materialOverrides);
     auto& entry=entries_[key];entry.sourceId=id;entry.wanted=true; entry.used=std::chrono::steady_clock::now();
     entry.failed=false;
     const auto retain=[&](std::shared_ptr<const PreparedEditorModel> model) {
@@ -222,7 +234,16 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
     entry.diagnostic=assets_.modelDiagnostic(id);
     if (!asset) { entry.failed=!assets_.modelLoading(id); if (entry.diagnostic.empty()) entry.diagnostic=assets_.modelLoading(id) ? "Loading model..." : "Model is unavailable."; return retain(entry.current); }
     if (!entry.diagnostic.empty() && !assets_.modelLoading(id)) entry.failed=true;
-    const auto revision=std::max<uint64_t>(1,assets_.modelRevision(id));
+    auto revision=std::max<uint64_t>(1,assets_.modelRevision(id));
+    PreparedMeshPaintModel paint;
+    if(painted) {
+        paint=meshPaint_.prepare(*presentation,priority);
+        if(!paint.ready){entry.diagnostic=paint.diagnostic;entry.failed=paint.failed;return retain(entry.current);}
+        asset=paint.asset;revision=paint.revision;
+        if(!paint.diagnostic.empty())entry.diagnostic=paint.diagnostic;
+    }
+    if(entry.geometryAssetId!=asset->id&&derivedGeometry(entry.sourceId,entry.geometryAssetId))
+        retiredPrimitiveModels_[entry.geometryAssetId]=entry.geometrySource;
     entry.geometryAssetId=asset->id;
     entry.geometrySource=asset;
     try {
@@ -262,7 +283,10 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
         // Cached browser cards render at time zero; they do not inherit the live
         // world's animated mapping footprint when sharing this resource owner.
         const auto context=priority==ResourcePriority::Preview?MaterialEvaluationContext{}:materialContext_;
-        assets_.setTextureDemand(textureDemand(*asset,materials,world,camera,fov,height,shadowTexelWorld,context,presentedPose.get()),selected);
+        auto demandMaterials=materials;
+        for(auto& material:demandMaterials)if(material.graph&&materialOutputNode(*material.graph).output.shading==MaterialShading::BlendPbr)
+            material.graph=assets_.resolvedMaterialGraph(material.graph);
+        assets_.setTextureDemand(textureDemand(*demandSource,demandMaterials,world,camera,fov,height,shadowTexelWorld,context,presentedPose.get()),selected);
         auto textures=assets_.modelBindings(*asset,materials);
         for(const auto& binding:textures)if(binding.graphPending) {
             entry.diagnostic=binding.diagnostic;refined=false;
@@ -272,10 +296,12 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
         if (!assets_.modelBindingsReady(textures) || !coherent(assets_,materials,textures)) return retain(entry.current);
         if (std::any_of(textures.begin(),textures.end(),[](const auto& binding){return !binding.sourceReady;})) return retain(entry.current);
         refined&=std::all_of(textures.begin(),textures.end(),[](const auto& binding){return binding.complete;});
-        const auto value=preparedModelSignature(*asset,revision,materials,textures);
+        auto value=preparedModelSignature(*asset,revision,materials,textures);
+        if(painted){hash(value,paint.signature);for(const auto& binding:paint.bindings)if(binding.weights)hash(value,binding.weights->fingerprint);}
         if (entry.current && entry.current->signature==value && entry.current->refined==refined) return retain(entry.current);
         auto candidate=std::make_shared<PreparedEditorModel>(); candidate->asset=asset; candidate->revision=revision;
         candidate->materials=std::move(materials); candidate->textures=std::move(textures); candidate->signature=value; candidate->ready=true; candidate->refined=refined;
+        candidate->meshPaint=std::move(paint.bindings);
         auto pins=std::make_shared<Pins>(); pins->asset=asset;
         for (const auto& binding:candidate->textures) for (const auto& texture:binding.leases) if (texture) pins->textures.push_back(texture);
         candidate->pinned=std::move(pins); entry.current=std::move(candidate); return retain(entry.current);
@@ -406,6 +432,7 @@ std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(con
             instance.lightingScopes=model.lightingScopes;
             instance.lightingCategory=model.lightingCategory;instance.actorOwner=model.actorOwner;
             instance.meshShading=model.meshShading;
+            instance.meshPaint=packet->meshPaint;
             instance.pose=pose(model,packet->asset);
             result->instances.push_back(instance);
         }
@@ -422,8 +449,9 @@ void EditorResources::collectPrimitiveModels() {
     });
 }
 void EditorResources::clear() {
+    meshPaint_.clear();
     for(const auto& [key,entry]:entries_)
-        if(isBuiltinModel(entry.sourceId) && !entry.geometryAssetId.empty() && !isBuiltinModel(entry.geometryAssetId))
+        if(derivedGeometry(entry.sourceId,entry.geometryAssetId))
             retiredPrimitiveModels_[entry.geometryAssetId]=entry.geometrySource;
     entries_.clear();poses_.clear();displacementExtents_.clear();framePins_.clear();externalModels_.clear();status_.clear();
     collectPrimitiveModels();

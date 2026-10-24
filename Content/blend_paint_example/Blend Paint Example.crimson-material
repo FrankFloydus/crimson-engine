@@ -1,0 +1,143 @@
+{
+  "graph": {
+    "links": [
+      {
+        "fromNode": 2,
+        "fromPin": 37,
+        "id": 1,
+        "toNode": 1,
+        "toPin": 38
+      },
+      {
+        "fromNode": 3,
+        "fromPin": 37,
+        "id": 2,
+        "toNode": 1,
+        "toPin": 39
+      },
+      {
+        "fromNode": 4,
+        "fromPin": 37,
+        "id": 3,
+        "toNode": 1,
+        "toPin": 40
+      },
+      {
+        "fromNode": 5,
+        "fromPin": 37,
+        "id": 4,
+        "toNode": 1,
+        "toPin": 41
+      }
+    ],
+    "nextLinkId": 5,
+    "nextNodeId": 6,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5,
+          "attenuationColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "attenuationDistance": 1.0,
+          "baseColor": [
+            0.21404114365577698,
+            0.21404114365577698,
+            0.21404114365577698
+          ],
+          "blend": 0,
+          "decalColorEnabled": true,
+          "decalColorStrength": 1.0,
+          "decalMetallicEnabled": false,
+          "decalMetallicStrength": 1.0,
+          "decalNormalEnabled": false,
+          "decalNormalStrength": 1.0,
+          "decalRoughnessEnabled": false,
+          "decalRoughnessStrength": 1.0,
+          "doubleSided": false,
+          "emission": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "height": 0.5,
+          "ior": 1.5,
+          "metallic": 0.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "receiveFog": true,
+          "refraction": false,
+          "roughness": 1.0,
+          "shading": 3,
+          "specular": 0.5,
+          "tessellation": {
+            "amount": 0.10000000149011612,
+            "enabled": false,
+            "heightLod": 0.0,
+            "maxFactor": 8,
+            "midpoint": 0.5
+          },
+          "thickness": 0.0,
+          "transmission": 1.0
+        },
+        "position": [
+          480.0,
+          200.0
+        ]
+      },
+      {
+        "id": 2,
+        "kind": 53,
+        "material": "f37c79e5-2491-5de8-be53-f93c9ad627ca",
+        "name": "str_stoneflr3",
+        "position": [
+          180.0,
+          200.0
+        ]
+      },
+      {
+        "id": 3,
+        "kind": 53,
+        "material": "a98c9d63-efed-5f84-b13a-9273b13b1734",
+        "name": "str_stonebrk2",
+        "position": [
+          180.0,
+          350.0
+        ]
+      },
+      {
+        "id": 4,
+        "kind": 53,
+        "material": "80e5ff16-d4ec-5cd2-82d1-44533377a593",
+        "name": "str_metalflr3",
+        "position": [
+          180.0,
+          500.0
+        ]
+      },
+      {
+        "id": 5,
+        "kind": 53,
+        "material": "85a9cae6-eac4-529c-8c39-ac09f521b84c",
+        "name": "str_metalpan4",
+        "position": [
+          180.0,
+          650.0
+        ]
+      }
+    ],
+    "version": 19
+  },
+  "id": "c3744381-b311-4b32-a277-507ee54a5269",
+  "name": "Blend Paint Example",
+  "originModel": "",
+  "type": "crimson-material",
+  "version": 6
+}

@@ -33,6 +33,7 @@ const char* sceneComponentName(SceneComponentKind kind) {
     case SceneComponentKind::Camera:return "Camera";
     case SceneComponentKind::CameraFollow:return "Camera Follow";
     case SceneComponentKind::Model:return "Model";
+    case SceneComponentKind::Subdivision:return "Subdivision";
     case SceneComponentKind::Collider:return "Collision";
     case SceneComponentKind::Directional:return "Directional light";
     case SceneComponentKind::Point:return "Point light";
@@ -49,6 +50,7 @@ bool editableSceneComponent(SceneComponentKind kind) {
 bool addSceneComponent(SceneDocument& document,EntityId id,SceneComponentKind kind) {
     const auto record=document.scene().find(id);
     if(!record || !editableSceneComponent(kind) || hasSceneComponent(*record,kind))return false;
+    if(kind==SceneComponentKind::Subdivision&&!record->model)return false;
     if(kind==SceneComponentKind::CameraFollow) {
         const auto world=document.scene().worldTransform(id);if(!world)return false;
         auto basis=*world;basis.at(0,3)=basis.at(1,3)=basis.at(2,3)=0;
@@ -83,6 +85,7 @@ bool addSceneComponent(SceneDocument& document,EntityId id,SceneComponentKind ki
             const auto body=[&](std::uint32_t layer=CharacterCollisionLayer) {if(!entity.controller){entity.controller.emplace();entity.controller->collision.layers=layer;}};
             const auto movement=[&](std::uint32_t layer=CharacterCollisionLayer) {body(layer);if(!entity.movement)entity.movement.emplace();};
             switch(kind) {
+            case SceneComponentKind::Subdivision:entity.meshPaint.emplace();break;
             case SceneComponentKind::Actor:entity.actor.emplace();break;
             case SceneComponentKind::Tags:entity.tags.emplace();break;
             case SceneComponentKind::Effects:entity.effects.emplace();break;
@@ -117,6 +120,7 @@ bool removeSceneComponents(SceneDocument& document,std::span<const SceneComponen
     return document.edit(label,[&](auto& records,auto& properties) {
         for(auto& entity:records)if(const auto found=targets.find(entity.id);found!=targets.end()) {
             for(const auto kind:found->second)switch(kind) {
+            case SceneComponentKind::Subdivision:entity.meshPaint.reset();break;
             case SceneComponentKind::Actor:entity.actor.reset();entity.enemy.reset();break;
             case SceneComponentKind::Tags:entity.tags.reset();break;
             case SceneComponentKind::Effects:entity.effects.reset();break;

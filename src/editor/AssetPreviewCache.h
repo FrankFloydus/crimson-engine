@@ -8,7 +8,7 @@
 #include <vector>
 
 namespace crimson {
-inline constexpr unsigned AssetPreviewImageVersion=13,AssetPreviewIndexVersion=3;
+inline constexpr unsigned AssetPreviewImageVersion=14,AssetPreviewIndexVersion=4;
 struct PreviewMaterialFingerprint { std::string id; std::uint64_t fingerprint{}; };
 struct PreviewAnimationFingerprint { std::string id; std::uint64_t fingerprint{}; };
 struct PreviewDecalFingerprint { std::string id; std::uint64_t fingerprint{}; };

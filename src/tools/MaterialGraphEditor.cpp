@@ -188,6 +188,7 @@ ImVec4 pinColor(MaterialValueType type) {
     switch(type) {
     case MaterialValueType::Mapping:return {.3f,.8f,.72f,1};
     case MaterialValueType::Normal:return {.7f,.47f,.94f,1};
+    case MaterialValueType::Surface:return {.78f,.58f,.32f,1};
     case MaterialValueType::Vector2:return {.9f,.72f,.3f,1};
     case MaterialValueType::Color4:return {.37f,.48f,.98f,1};
     case MaterialValueType::Color:return {.27f,.64f,.94f,1};
@@ -196,7 +197,7 @@ ImVec4 pinColor(MaterialValueType type) {
 }
 std::vector<MaterialPinDefinition> visibleInputs(const MaterialGraph& graph,const MaterialNode& node,const MaterialOutputNode& output) {
     if(node.kind==MaterialNodeKind::Output) {
-        if(output.shading==MaterialShading::Decal)return materialNodeInputs(graph,node,output.shading,output.blend);
+        if(output.shading==MaterialShading::Decal||output.shading==MaterialShading::BlendPbr)return materialNodeInputs(graph,node,output.shading,output.blend);
         auto result=materialNodeInputs(graph,node,output.shading,output.blend,true);
         std::erase_if(result,[&](const auto& pin) {
             const bool retained=pin.pin==MaterialPin::Opacity||pin.pin==MaterialPin::OpacityMask||pin.pin==MaterialPin::Height||
@@ -544,7 +545,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         TexturePresentation sourceTexture;
         ed::BeginNode(s.node(node.id));
         ImGui::PushID(static_cast<int>(s.node(node.id).Get()));
-        const char* title=node.kind==MaterialNodeKind::Output?(output.shading==MaterialShading::Decal?"Decal Output":output.shading==MaterialShading::StandardPbr?"Lit PBR Output":"Unlit Output"):
+        const char* title=node.kind==MaterialNodeKind::Output?(output.shading==MaterialShading::BlendPbr?"Blend Output":output.shading==MaterialShading::Decal?"Decal Output":output.shading==MaterialShading::StandardPbr?"Lit PBR Output":"Unlit Output"):
             node.name.empty()?materialNodeKindName(node.kind):node.name.c_str();
         float width=std::clamp(ImGui::CalcTextSize(title).x+24,220.f,320.f);
         if(node.kind==MaterialNodeKind::Grunge)width=std::max(width,300.f);
@@ -562,6 +563,24 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         const auto rule=ImGui::GetCursorScreenPos();
         ImGui::GetWindowDrawList()->AddLine(rule,{rule.x+width,rule.y},ImGui::ColorConvertFloat4ToU32(nodeColor(node.kind)),3);
         ImGui::Dummy({width,1});
+        if(node.kind==MaterialNodeKind::MaterialReference) {
+            const auto source=assets.material?assets.material(node.material.id):TexturePresentation{};
+            const auto label=source.name.empty()?std::string("Choose material"):source.name;
+            const auto begin=ImGui::GetCursorScreenPos();
+            if(source.textureId)ImGui::Image(ImTextureRef(source.textureId),{48,48});
+            canvasLabel(label.c_str(),width);
+            if(ImGui::IsItemClicked()&&assets.chooseMaterial)assets.chooseMaterial(node.id);
+            if(editable&&ImGui::BeginDragDropTarget()) {
+                if(const auto* payload=ImGui::AcceptDragDropPayload("CC_MATERIAL_ASSET")) {
+                    const auto ids=texturePayload(*payload);
+                    if(ids.size()==1&&assets.validMaterial&&assets.validMaterial(ids.front())) {
+                        if(!document.edit("Assign blend material",[&](auto& definition){if(auto* n=findMaterialNode(definition.graph,node.id))n->material.id=ids.front();}))s.status=document.status();
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
+            (void)begin;
+        }
         if((assets.nodeImage||textureSource)&&node.kind!=MaterialNodeKind::Output&&node.kind!=MaterialNodeKind::Grunge&&
            node.kind!=MaterialNodeKind::Time&&node.kind!=MaterialNodeKind::ParticleColor&&!outputs.empty()) {
             auto pin=previewing?s.preview->pin:outputs.front().pin;

@@ -12,7 +12,7 @@ inline constexpr std::array EditableActorComponents{
     SceneComponentKind::Actor,SceneComponentKind::Controller,SceneComponentKind::Movement,
     SceneComponentKind::Navigation,SceneComponentKind::Enemy,SceneComponentKind::PlayerInput,
     SceneComponentKind::Camera,SceneComponentKind::CameraFollow,
-    SceneComponentKind::Tags,SceneComponentKind::Effects};
+    SceneComponentKind::Tags,SceneComponentKind::Effects,SceneComponentKind::Subdivision};
 // Role recipes prepend their protected starting effect once. Later authored
 // starting effects retain their application order.
 void initializePlayerEffects(EntityRecord&);

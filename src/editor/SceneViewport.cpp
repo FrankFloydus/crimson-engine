@@ -104,7 +104,8 @@ void SceneViewport::select(SceneDocument& document, EntityId id, bool toggle, bo
     if(selectViewportHit(document,id,toggle,append))++serial_;
 }
 void SceneViewport::cancel(SceneDocument& document, Renderer& renderer) {
-    waitForRelease_ = waitForRelease_ || transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active();
+    waitForRelease_ = waitForRelease_ || transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || vertexPaint_.active();
+    vertexPaint_.cancel(document,renderer);
     transformDrag_.cancel(document);
     colliderDrag_.cancel(document);
     volumeDrag_.cancel(document);
@@ -198,7 +199,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             const bool editorFocus = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
             if(transformDrag_.active() && (!transformDrag_.valid(document) || !editorFocus || ImGui::GetIO().AppFocusLost ||
                 blockKeys || keyboardBlocked || ImGui::IsKeyPressed(ImGuiKey_Escape,false)))cancel(document,renderer);
-            if (!keyboardBlocked && !blockKeys && !transformDrag_.active() && !document.transactionActive() && !materialDrop_.active() && !decalDrop_.active() &&
+            if (!vertexPaint_.enabled() && !keyboardBlocked && !blockKeys && !transformDrag_.active() && !document.transactionActive() && !materialDrop_.active() && !decalDrop_.active() &&
                 ImGui::GetDragDropPayload()==nullptr && (imageHovered || editorFocus)) {
                 if (ImGui::IsKeyPressed(ImGuiKey_T,false)) operation_ = ImGuizmo::TRANSLATE;
                 if (ImGui::IsKeyPressed(ImGuiKey_R,false)) operation_ = ImGuizmo::ROTATE;
@@ -213,7 +214,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 (pickSize_!=Vec2{size.x,size.y} || pickProjection_!=projection || pickView_!=view ||
                  intentGeneration_!=document.scene().generation() || intentRevision_!=document.scene().revision());
             if((materialDrop_.active() || !frame.materialDragId.empty()) && ImGui::IsKeyPressed(ImGuiKey_Escape,false))materialDropCanceled_=true;
-            const bool materialBlocked=blockKeys || keyboardBlocked || transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || document.transactionActive() || materialDropCanceled_;
+            const bool materialBlocked=vertexPaint_.enabled() || blockKeys || keyboardBlocked || transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || document.transactionActive() || materialDropCanceled_;
             if(materialDrop_.active() && (materialBlocked || materialContextChanged ||
                 (frame.materialDragId.empty() && !materialDrop_.delivered()))) {
                 materialDrop_.cancel();renderer.cancelPicking();++serial_;
@@ -246,7 +247,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 (pickSize_!=Vec2{size.x,size.y}||pickProjection_!=projection||pickView_!=view||
                  intentGeneration_!=document.scene().generation()||intentRevision_!=document.scene().revision());
             if((decalDrop_.active()||!frame.decalDragId.empty())&&ImGui::IsKeyPressed(ImGuiKey_Escape,false))decalDropCanceled_=true;
-            const bool decalBlocked=blockKeys||keyboardBlocked||transformDrag_.active()||colliderDrag_.active()||volumeDrag_.active()||
+            const bool decalBlocked=vertexPaint_.enabled()||blockKeys||keyboardBlocked||transformDrag_.active()||colliderDrag_.active()||volumeDrag_.active()||
                 materialDrop_.active()||document.transactionActive()||decalDropCanceled_;
             if(decalDrop_.active()&&(decalBlocked||decalContextChanged||
                 (frame.decalDragId.empty()&&!decalDrop_.delivered()&&!decalDrop_.awaitingClick()))) {
@@ -300,6 +301,15 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             const auto vp = projection*view;
             const Vec4 viewport{origin.x,origin.y,size.x,size.y};
             auto* draw = ImGui::GetWindowDrawList();
+            const auto mouse=ImGui::GetIO().MousePos;
+            const Vec2 paintPointer{(mouse.x-origin.x)/size.x*renderer.width(),(mouse.y-origin.y)/size.y*renderer.height()};
+            const bool paintPressed=imageHovered&&ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+            if(vertexPaint_.enabled()&&paintPressed&&!blockKeys&&!keyboardBlocked)ImGui::SetWindowFocus();
+            vertexPaint_.update(document,renderer,pendingPick,serial_,vp,renderer.width(),renderer.height(),paintPointer,imageHovered,
+                (editorFocus||paintPressed)&&!ImGui::GetIO().AppFocusLost,
+                blockKeys||keyboardBlocked||materialDrop_.active()||decalDrop_.active()||ImGui::GetDragDropPayload()!=nullptr,
+                paintPressed,ImGui::IsMouseDown(ImGuiMouseButton_Left),ImGui::IsKeyPressed(ImGuiKey_Escape,false));
+            frame.surfacePickActive|=vertexPaint_.active();
             draw->PushClipRect(origin,ImVec2(origin.x+size.x,origin.y+size.y),true);
             if (!frame.placementPreviewIds.empty()) {
                 auto label=assets.displayName(frame.placementPreviewIds.front());
@@ -313,13 +323,13 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             draw->ChannelsSetCurrent(1);
             bool overGizmo = false;
             const auto volumeHandles=drawNavigationVolumeGizmo(*draw,document,volumeDrag_,vp,viewport,
-                imageHovered && !waitForRelease_ && !blockKeys && !keyboardBlocked && !transformDrag_.active() && !colliderDrag_.active() && !materialDrop_.active() && !decalDrop_.active() &&
+                !vertexPaint_.enabled() && imageHovered && !waitForRelease_ && !blockKeys && !keyboardBlocked && !transformDrag_.active() && !colliderDrag_.active() && !materialDrop_.active() && !decalDrop_.active() &&
                 !frame.materialAssignment && ImGui::GetDragDropPayload()==nullptr && (!document.transactionActive() || volumeDrag_.active()),
                 editorFocus,blockKeys || keyboardBlocked || ImGui::IsKeyPressed(ImGuiKey_Escape,false));
             if(volumeHandles.started || volumeHandles.canceled) {renderer.cancelPicking();pickIntent_=false;++serial_;}
             if(volumeHandles.canceled)waitForRelease_=true;
             const auto colliderHandles=drawColliderGizmo(*draw,document,colliderDrag_,vp,viewport,showCollisions,
-                imageHovered && !waitForRelease_ && !blockKeys && !keyboardBlocked && !transformDrag_.active() && !volumeDrag_.active() && !volumeHandles.hovered && !materialDrop_.active() && !decalDrop_.active() &&
+                !vertexPaint_.enabled() && imageHovered && !waitForRelease_ && !blockKeys && !keyboardBlocked && !transformDrag_.active() && !volumeDrag_.active() && !volumeHandles.hovered && !materialDrop_.active() && !decalDrop_.active() &&
                 !frame.materialAssignment && ImGui::GetDragDropPayload()==nullptr && (!document.transactionActive() || colliderDrag_.active()),
                 editorFocus,blockKeys || keyboardBlocked || ImGui::IsKeyPressed(ImGuiKey_Escape,false));
             if(colliderHandles.started || colliderHandles.canceled) {renderer.cancelPicking();pickIntent_=false;++serial_;}
@@ -327,7 +337,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             overGizmo=colliderHandles.hovered || volumeHandles.hovered;
             std::vector<EntityId> visibleSelection;
             for(const auto id:document.selection().ids)if(document.scene().isVisible(id))visibleSelection.push_back(id);
-            const auto transformRoots=showTransformGizmo && !visibleSelection.empty()?document.scene().topmost(visibleSelection):std::vector<EntityId>{};
+            const auto transformRoots=showTransformGizmo && !vertexPaint_.enabled() && !visibleSelection.empty()?document.scene().topmost(visibleSelection):std::vector<EntityId>{};
             const bool transformVisible=showTransformGizmo && !transformRoots.empty();
             if (!transformVisible && transformDrag_.active()) cancel(document,renderer);
             // ImGuizmo's enabled/using state is global. An independent document
@@ -467,8 +477,9 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 }
             }
             draw->ChannelsMerge();
+            vertexPaint_.drawCursor(*draw,frame.viewport,paintPointer,renderer.width(),renderer.height());
             draw->PopClipRect();
-            if (imageHovered && !blockKeys && !overGizmo && !transformDrag_.active() && !colliderDrag_.active() && !volumeDrag_.active() && !waitForRelease_ && !materialDrop_.active() && !decalDrop_.active() && !frame.materialAssignment && !document.transactionActive() &&
+            if (!vertexPaint_.enabled() && imageHovered && !blockKeys && !overGizmo && !transformDrag_.active() && !colliderDrag_.active() && !volumeDrag_.active() && !waitForRelease_ && !materialDrop_.active() && !decalDrop_.active() && !frame.materialAssignment && !document.transactionActive() &&
                 ImGui::GetDragDropPayload() == nullptr && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 ImGui::SetWindowFocus();
                 if (iconHit) { renderer.cancelPicking(); select(document,iconHit,ImGui::GetIO().KeyCtrl,ImGui::GetIO().KeyShift); }
@@ -485,12 +496,12 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                     pickIntent_=renderer.requestPick({intentGeneration_,intentRevision_,intentSerial_,pickX_,pickY_,0,PickMode::Selection});
                 }
             }
-            frame.viewport.inputBlocked |= transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || materialDrop_.active() || decalDrop_.active() || frame.materialAssignment.has_value() || frame.decalPlacement.has_value() ||
+            frame.viewport.inputBlocked |= vertexPaint_.active() || (vertexPaint_.enabled()&&imageHovered&&ImGui::IsMouseDown(ImGuiMouseButton_Left)) || transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || materialDrop_.active() || decalDrop_.active() || frame.materialAssignment.has_value() || frame.decalPlacement.has_value() ||
                 (overGizmo && !blockKeys) || (document.transactionActive() && !cameraGestureActive) || ImGui::GetDragDropPayload() != nullptr;
         }
     }
     ImGui::End();
-    if((transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active()) && (frame.viewport.width<=0 || frame.viewport.height<=0))cancel(document,renderer);
+    if((vertexPaint_.active() || transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active()) && (frame.viewport.width<=0 || frame.viewport.height<=0))cancel(document,renderer);
     if(materialDrop_.active() && (frame.viewport.width<=0 || frame.viewport.height<=0)) {
         materialDrop_.cancel();renderer.cancelPicking();++serial_;
     }

@@ -324,6 +324,8 @@ std::vector<std::filesystem::path> MaterialGraphPrograms::sourceDependencies(boo
         const auto vs=shaderDependencies(impl_->config,variant.vertexName);
         result.insert(result.end(),fragment.begin(),fragment.end());result.insert(result.end(),vs.begin(),vs.end());
     }
+    const auto paint=shaderDependencies(impl_->config,"vs_model_paint");
+    result.insert(result.end(),paint.begin(),paint.end());
     std::sort(result.begin(),result.end());result.erase(std::unique(result.begin(),result.end()),result.end());
     epoch=(*impl_->sourceEpoch);files=result;return result;
 }

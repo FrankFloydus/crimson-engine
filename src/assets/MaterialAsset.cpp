@@ -61,7 +61,7 @@ ModelSampler readSampler(const Json& j) {
     return {static_cast<ModelWrap>(u),static_cast<ModelWrap>(v),static_cast<ModelFilter>(min),static_cast<ModelFilter>(mag)};
 }
 const char* shadingName(MaterialShading shading) {
-    switch(shading){case MaterialShading::StandardPbr:return "standard-pbr";case MaterialShading::Unlit:return "unlit";case MaterialShading::Decal:return "decal";}
+    switch(shading){case MaterialShading::StandardPbr:return "standard-pbr";case MaterialShading::Unlit:return "unlit";case MaterialShading::Decal:return "decal";case MaterialShading::BlendPbr:return "blend-pbr";}
     throw std::runtime_error("Unsupported material shading mode.");
 }
 const char* blendName(MaterialBlend blend) {
@@ -69,6 +69,7 @@ const char* blendName(MaterialBlend blend) {
     throw std::runtime_error("Unsupported material blend mode.");
 }
 MaterialShading readShading(const std::string& value) {
+    if(value=="blend-pbr")return MaterialShading::BlendPbr;
     if(value=="standard-pbr")return MaterialShading::StandardPbr;if(value=="unlit")return MaterialShading::Unlit;if(value=="decal")return MaterialShading::Decal;
     throw std::runtime_error("Unsupported material shading mode.");
 }
@@ -105,6 +106,7 @@ void canonicalizeMaterialAsset(MaterialAsset& material) {
     validateMaterialGraph(material.graph);
     material.id=canonicalAssetId(material.id);material.originModel=canonicalAssetId(material.originModel);
     for(auto& node:material.graph.nodes)if(node.kind==MaterialNodeKind::Texture2D||node.kind==MaterialNodeKind::ImageInput)node.texture.image.id=canonicalAssetId(node.texture.image.id);
+    for(auto& node:material.graph.nodes)if(node.kind==MaterialNodeKind::MaterialReference)node.material.id=canonicalAssetId(node.material.id);
     const auto& output=materialOutputNode(material.graph).output;material.shading=output.shading;material.blend=output.blend;
     material.surface=materialGraphLegacySurface(material.graph,material.name);
 }
@@ -114,6 +116,30 @@ std::vector<std::string> materialTextureReferences(const MaterialAsset& material
     for(const auto* slot:{&material.surface.baseColorTexture,&material.surface.metallicRoughnessTexture,&material.surface.normalTexture,&material.surface.occlusionTexture,&material.surface.emissiveTexture})
         if(!slot->image.empty()&&std::find(result.begin(),result.end(),slot->image.id)==result.end())result.push_back(slot->image.id);
     return result;
+}
+std::vector<std::string> materialMaterialReferences(const MaterialAsset& material) {
+    return materialGraphMaterialReferences(material.graph);
+}
+bool blendMaterialSourceCompatible(const MaterialAsset& material) {
+    try {
+        const auto graph=material.graph.empty()?materialGraphFromLegacy(material.surface,material.shading,material.blend):material.graph;
+        validateMaterialGraph(graph);const auto& output=materialOutputNode(graph).output;
+        return output.shading==MaterialShading::StandardPbr&&output.blend==MaterialBlend::Opaque&&!output.tessellation.enabled&&
+            std::none_of(graph.nodes.begin(),graph.nodes.end(),[](const auto& node){return node.kind==MaterialNodeKind::MaterialReference;});
+    } catch(const std::exception&) {return false;}
+}
+void initializeBlendMaterialGraph(MaterialGraph& graph) {
+    const auto output=materialOutputNode(graph).id;
+    auto& settings=materialOutputNode(graph).output;settings.shading=MaterialShading::BlendPbr;
+    settings.blend=MaterialBlend::Opaque;settings.tessellation.enabled=false;settings.refraction=false;
+    const std::array<MaterialPin,4> pins{MaterialPin::Base,MaterialPin::Red,MaterialPin::Green,MaterialPin::Blue};
+    const std::array<const char*,4> names{"Base","Red","Green","Blue"};
+    const auto position=materialOutputNode(graph).position;
+    for(std::size_t layer=0;layer<pins.size();++layer)if(!materialInputLink(graph,output,pins[layer])) {
+        auto& node=addMaterialNode(graph,MaterialNodeKind::MaterialReference,{position[0]-300,position[1]+float(layer)*150});
+        node.material.id=DefaultMaterialId;node.name=names[layer];const auto id=node.id;
+        connectMaterialNodes(graph,id,MaterialPin::Surface,output,pins[layer]);
+    }
 }
 MaterialAsset defaultMaterialAsset() {
     MaterialAsset m; m.id=DefaultMaterialId;m.name="Default material";m.surface.name=m.name;
@@ -139,7 +165,7 @@ MaterialAsset defaultParticleMaterialAsset() {
     canonicalizeMaterialAsset(material);return material;
 }
 bool particleMaterialCompatible(const MaterialAsset& material) {
-    return modelMaterialCompatible(material);
+    return (material.graph.empty()?material.shading:materialOutputNode(material.graph).output.shading)!=MaterialShading::BlendPbr&&modelMaterialCompatible(material);
 }
 bool modelMaterialCompatible(const MaterialAsset& material) {
     try {
@@ -157,7 +183,18 @@ bool decalMaterialCompatible(const MaterialAsset& material) {
 
 void validateMaterialAsset(const MaterialAsset& a) {
     if(a.id.empty()||a.name.empty()||a.name.size()>1024)throw std::runtime_error("Material contains invalid identity or name.");
-    if(!a.graph.empty()){validateMaterialGraph(a.graph);return;}
+    if(!a.graph.empty()){
+        validateMaterialGraph(a.graph);
+        for(const auto& id:materialMaterialReferences(a)) {
+            if(canonicalAssetId(id)==canonicalAssetId(a.id))throw std::runtime_error("A material cannot reference itself.");
+            if(!isAssetUuid(id)) {
+                const auto relative=path(id);
+                if(relative.has_root_path()||relative.parent_path()!=std::filesystem::path("assets/materials")||relative.extension()!=".crimson-material")
+                    throw std::runtime_error("Invalid material layer reference.");
+            }
+        }
+        return;
+    }
     (void)shadingName(a.shading);(void)blendName(a.blend);
     const auto& m=a.surface;
     if(a.id.empty()||a.name.empty()||a.name.size()>1024||!math::finite(m.baseColor)||!math::finite(m.emissive)||

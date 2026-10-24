@@ -2,12 +2,13 @@
 #include "decals/DecalModelSurface.h"
 #include "resources/ResourceManager.h"
 #include "scene/SceneExtraction.h"
+#include "MeshPaintResources.h"
 #include <crimson/renderer/forward/DecalRenderTypes.h>
 #include <unordered_map>
 #include <optional>
 namespace crimson {
 class AssetLibrary;
-struct DecalSourceResult {std::shared_ptr<const decals::ModelSurface> surface;bool current{};uint64_t revision{},fingerprint{};std::string diagnostic;bool failed{};};
+struct DecalSourceResult {std::shared_ptr<const decals::ModelSurface> surface;bool current{};uint64_t revision{},fingerprint{};std::string diagnostic;bool failed{};std::shared_ptr<const ModelAsset> model;};
 struct DecalPlacementResult {SceneDecalSeed seed;Mat4 frame{};bool ready{},failed{};std::string diagnostic;};
 struct DecalPreparedScene {std::vector<RenderDecal> decals;std::vector<EntityId> receivers;bool ready{true},refined{true};std::string status;};
 class DecalResources {
@@ -26,6 +27,7 @@ private:
     struct SourceEntry {ResourceHandle<decals::ModelSurface> resource;uint64_t revision{},fingerprint{};std::chrono::steady_clock::time_point used;bool repairRequested{};};
     struct PatchEntry {ResourceHandle<decals::DecalPatch> resource;uint64_t signature{},publishedRevision{},publishedBindings{};std::shared_ptr<const DecalPatchData> render;std::optional<Mat4> surfaceFrame;std::chrono::steady_clock::time_point used;std::string status;bool current{};};
     AssetLibrary&assets_;ResourceManager&resources_;
+    MeshPaintResources meshPaint_;
     std::unordered_map<std::string,SourceEntry>sources_;
     std::unordered_map<uint64_t,PatchEntry>patches_;
     void append(DecalPreparedScene&,const Scene&,const ExtractedScene&,const ExtractedDecal&,ResourcePriority);

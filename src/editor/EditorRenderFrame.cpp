@@ -53,6 +53,7 @@ void appendModel(PreparedRenderView& view,ViewPins& pins,const ExtractedModel& m
     view.instances.back().lightingCategory=model.lightingCategory;
     view.instances.back().actorOwner=model.actorOwner;
     view.instances.back().meshShading=model.meshShading;
+    view.instances.back().meshPaint=prepared->meshPaint;
     view.instances.back().pose=resources.pose(model,prepared->asset);
     includeMeshPopulation(view,*prepared,view.instances.back());
     pins.models.push_back(std::move(prepared));

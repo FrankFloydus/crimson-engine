@@ -38,6 +38,7 @@ public:
     AntiAliasing antiAliasing() const { return preferences_.values().antiAliasing; }
     std::uint16_t pointShadowResolution() const { return static_cast<std::uint16_t>(preferences_.values().pointShadowResolution); }
     std::uint32_t thumbnailDemand() const { return browser_.thumbnailDemand(); }
+    bool vertexPaintActive() const { return viewport_.vertexPaintActive(); }
     const PanelVisibility& panels() const { return panels_; }
     void setPanels(const PanelVisibility& panels) { panels_=panels; }
     const OverlayVisibility& overlays() const { return overlays_; }
@@ -47,7 +48,7 @@ public:
     }
     bool needsAuthoringDocument() const { return deferred_!=Pending::None || !deferredDeletion_.empty(); }
     bool playTransitionBlocked() const {
-        return opening_ || deletion_ || pending_!=Pending::None || needsAuthoringDocument() ||
+        return viewport_.vertexPaintActive() || opening_ || deletion_ || pending_!=Pending::None || needsAuthoringDocument() ||
             dirtyPopup_ || savePopup_ || deletePopup_ || saveConflictPopup_ || externalPopup_ || openingPopup_;
     }
     void showGame() { panels_.game=true; }
@@ -55,6 +56,7 @@ public:
     void notifyExternalSceneChange(SceneSnapshot snapshot) { externalScene_=std::move(snapshot); }
     void setParticleBoundsQuery(ParticleBoundsQuery query) { viewport_.setParticleBoundsQuery(std::move(query)); }
     void setCollisionMeshQuery(CollisionMeshQuery query) { viewport_.setCollisionMeshQuery(std::move(query)); }
+    void setVertexPaintTargetQuery(VertexPaintTargetQuery query){viewport_.setVertexPaintTargetQuery(std::move(query));}
     void setQuaderBridge(QuaderBridge* bridge){quader_=bridge;}
     void setAgentProfileQuery(NavigationAgentProfileQuery query) { viewport_.setAgentProfileQuery(std::move(query)); }
     void setNavigationBuildStatus(std::function<std::string(const std::string&)> query) { navigationBuildStatus_=std::move(query); }

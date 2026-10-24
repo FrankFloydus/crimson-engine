@@ -123,6 +123,10 @@ struct PanelsState {
     ImGuiID lightActiveInput{};
     std::string materialDiagnostic;
     std::string ragdollDiagnostic;
+    MeshPaintSubdivisionQuery subdivisionQuery;
+    std::string subdivisionDiagnostic;
+    std::optional<std::pair<EntityId,std::uint32_t>> pendingSubdivision;
+    std::uint64_t pendingSubdivisionRevision{};
     SceneOutlinerColorPopupState outlinerColor;
     std::unordered_map<EntityId,CameraAuthoringControlsState> cameraControls;
     std::vector<CameraTemplate> cameraTemplates;
@@ -1575,6 +1579,7 @@ void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEd
     ImGui::End();
 }
 
+void setMeshPaintSubdivisionQuery(SceneDocument& document,MeshPaintSubdivisionQuery query) {stateFor(document).subdivisionQuery=std::move(query);}
 void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits,
                         std::uint64_t* playParticle,std::string* openParticle,QuaderBridge* quader,std::string* openMaterial,const NavigationInspectorContext& navigation,const std::array<std::string,32>* collisionLayerNames,const GameplayInspectorContext& gameplay,std::string* openAnimation,const DecalInspectorContext& decals,const RagdollInspectorContext& ragdolls,const LightPreviewContext& lights) {
     auto& state=stateFor(document);
@@ -1656,7 +1661,34 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                 else if((state.active>=Edit::PointEnabled && state.active<=Edit::PointAttenuation) ||
                         (state.active>=Edit::PointReceivers && state.active<=Edit::PointCasters) || lightExtendedEdit(state.active))finishEdit(document,state,state.active);
             }
+            if(section==SceneComponentKind::Subdivision&&record.meshPaint&&componentHeader(state,record,SceneComponentKind::Subdivision)) {
+                if(state.pendingSubdivision&&(state.pendingSubdivision->first!=record.id||state.pendingSubdivisionRevision!=document.scene().revision()))state.pendingSubdivision.reset();
+                if(ImGui::IsKeyPressed(ImGuiKey_Escape,false)||ImGui::GetIO().AppFocusLost)state.pendingSubdivision.reset();
+                int level=static_cast<int>(state.pendingSubdivision?state.pendingSubdivision->second:record.meshPaint->subdivisionLevel);
+                if(resettableProperty(level,0,[&]{return ImGui::Combo("Level",&level,"0\0 1\0 2\0 3\0 4\0 5\0");})) {
+                    finishScenePanelEdit(document);state.pendingSubdivision=std::pair{record.id,static_cast<std::uint32_t>(level)};state.pendingSubdivisionRevision=document.scene().revision();
+                }
+                if(state.pendingSubdivision&&!document.transactionActive()) {
+                    SceneMeshPaint replacement;
+                    if(state.subdivisionQuery&&state.subdivisionQuery(record,state.pendingSubdivision->second,replacement,state.subdivisionDiagnostic)) {
+                        document.edit("Change mesh subdivision",changeEntity(record.id,[replacement](auto& entity){entity.meshPaint=replacement;}));state.pendingSubdivision.reset();
+                    } else if(state.subdivisionDiagnostic.empty())state.subdivisionDiagnostic="Preparing subdivision geometry.";
+                }
+                if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("%s",state.subdivisionDiagnostic.empty()?"Quad subdivision for vertex painting.":state.subdivisionDiagnostic.c_str());
+                ImGui::BeginDisabled(record.meshPaint->draws.empty());
+                if(ImGui::Button("Reset Paint")) {finishScenePanelEdit(document);state.pendingSubdivision.reset();document.edit("Reset vertex paint",changeEntity(record.id,[](auto& entity){entity.meshPaint->draws.clear();}));state.subdivisionDiagnostic.clear();}
+                ImGui::EndDisabled();
+            }
             if (section==SceneComponentKind::Model && record.model && componentHeader(state,record,SceneComponentKind::Model)) {
+                if(!record.meshPaint) {
+                    const auto source=assets.findModel(record.model->id,record.primitive);
+                    const bool supported=source&&source->skins.empty()&&source->animations.empty()&&record.modelAnimation.asset.empty()&&record.modelRagdoll.asset.empty()&&
+                        std::none_of(source->primitives.begin(),source->primitives.end(),[](const auto& primitive){return primitive.hasSkinning||!primitive.morphTargets.empty();});
+                    ImGui::BeginDisabled(!supported);
+                    if(ImGui::Button("Add Subdivision")){finishScenePanelEdit(document);addSceneComponent(document,record.id,SceneComponentKind::Subdivision);}
+                    ImGui::EndDisabled();
+                    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled|ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Add subdivision to a rigid static mesh.");
+                }
                 if(isBuiltinModel(record.model->id)) {
                     static_assert(static_cast<unsigned>(Edit::PrimitiveRings)-static_cast<unsigned>(Edit::PrimitiveSizeX)==static_cast<unsigned>(PrimitiveMeshControl::Rings));
                     const auto property=[](PrimitiveMeshControl control){return static_cast<Edit>(static_cast<unsigned>(Edit::PrimitiveSizeX)+static_cast<unsigned>(control));};

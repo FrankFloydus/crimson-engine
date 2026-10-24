@@ -58,6 +58,10 @@ ModelLod writeLevel(const std::filesystem::path& file,const ModelPrimitive& prim
         const std::uint8_t flags=(target.positions.empty()?0:1)|(target.normals.empty()?0:2)|(target.tangents.empty()?0:4);detail::append(bytes,flags);
         for(const auto* values:{&target.positions,&target.normals,&target.tangents})detail::appendBytes(bytes,values->data(),values->size()*sizeof(Vec3));
     }
+    detail::append(bytes,static_cast<std::uint32_t>(primitive.sourceFaces.size()));
+    for(const auto& face:primitive.sourceFaces) {
+        detail::append(bytes,face.cornerCount);detail::append(bytes,face.vertices);detail::append(bytes,face.triangles);
+    }
     detail::writeCacheFileAtomically(file,bytes);
     return {file,key,vertices,indices,error};
 }
@@ -158,7 +162,17 @@ std::shared_ptr<const ModelGeometryLevel> loadModelLod(const ModelLod& info,std:
             ++attribute;
         }
     }
-    if(bytesLeft())throw std::runtime_error("Model LOD cache has trailing deformation data.");
+    const auto faceCount=detail::read<std::uint32_t>(input);
+    if(faceCount>indices/3||std::uint64_t(faceCount)*25>bytesLeft())throw std::runtime_error("Model source face count is invalid.");
+    result->geometry.sourceFaces.resize(faceCount);
+    for(auto& face:result->geometry.sourceFaces) {
+        face.cornerCount=detail::read<std::uint8_t>(input);face.vertices=detail::read<std::array<std::uint32_t,4>>(input);
+        face.triangles=detail::read<std::array<std::uint32_t,2>>(input);
+        if(face.cornerCount!=3&&face.cornerCount!=4)throw std::runtime_error("Invalid model source face.");
+        for(unsigned i=0;i<face.cornerCount;++i)if(face.vertices[i]>=vertices)throw std::runtime_error("Model source face vertex is invalid.");
+        if(face.triangles[0]>=indices/3||(face.cornerCount==4&&face.triangles[1]>=indices/3))throw std::runtime_error("Model source face triangle is invalid.");
+    }
+    if(bytesLeft())throw std::runtime_error("Model LOD cache has trailing geometry data.");
     input.close();
     validate(result->geometry);
     if (model_primitive_content_key(result->geometry)!=info.key) throw std::runtime_error("Model LOD cache checksum mismatch.");

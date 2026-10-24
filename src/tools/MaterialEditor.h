@@ -61,6 +61,6 @@ private:
     void publish(AssetLibrary&);
     bool reconcileReferences(AssetLibrary&,bool force=false);
     void modals(AssetLibrary&);
-    void properties(AssetLibrary&);
+    void properties(AssetLibrary&,Renderer&);
 };
 }

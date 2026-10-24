@@ -15,6 +15,7 @@ class MaterialDocument {
 public:
     using Mutation = std::function<void(MaterialAsset&)>;
     using TextureReferenceResolver = std::function<std::string(const std::string&,MaterialTextureRole)>;
+    using MaterialReferenceResolver = std::function<std::string(const std::string&)>;
     static constexpr size_t MaximumHistoryEntries = 256;
     explicit MaterialDocument(std::filesystem::path projectRoot);
     bool isOpen() const { return open_; }
@@ -28,10 +29,11 @@ public:
     bool dirty() const;
     bool editable() const;
     std::vector<std::string> historicalTextureReferences() const;
+    std::vector<std::string> historicalMaterialReferences() const;
     // Reconcile project deletion policy across every retained version without
     // changing history/dirty tokens or publishing an active gesture's values.
     // Returns true on success (including no changes), false with status on failure.
-    bool reconcileTextureReferences(const TextureReferenceResolver&);
+    bool reconcileTextureReferences(const TextureReferenceResolver&,const MaterialReferenceResolver& = {});
     bool transactionActive() const { return transaction_.has_value(); }
     bool canUndo() const { return cursor_ != 0 && !transaction_; }
     bool canRedo() const { return cursor_ < history_.size() && !transaction_; }

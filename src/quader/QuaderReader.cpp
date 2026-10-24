@@ -43,7 +43,7 @@ void result(int success,const QuaderBridgeError& error) {
     throw std::runtime_error(end==std::begin(error.message)?"Quader reader failed.":std::string(std::begin(error.message),end));
 }
 struct Library {
-    HMODULE module{};const QuaderBridgeApi* api{};const QuaderBridgeUvInterpolationApi* uvApi{};
+    HMODULE module{};const QuaderBridgeApi* api{};const QuaderBridgeUvInterpolationApi* uvApi{};const QuaderBridgeTopologyApi* topologyApi{};
     Library() {
         std::wstring executable(32768,L'\0');const auto length=GetModuleFileNameW(nullptr,executable.data(),static_cast<DWORD>(executable.size()));
         require(length>0&&length<executable.size(),"Cannot locate Crimson's Quader reader payload.");executable.resize(length);
@@ -64,6 +64,12 @@ struct Library {
         if(uvApi&&(uvApi->abi_version!=QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION||
             uvApi->struct_size<sizeof(QuaderBridgeUvInterpolationApi)||!uvApi->mesh_uv_interpolation_view)) {
             FreeLibrary(module);module=nullptr;throw std::runtime_error("Quader reader returned an incompatible UV interpolation extension.");
+        }
+        const auto getTopology=reinterpret_cast<decltype(&quader_bridge_get_topology_api)>(GetProcAddress(module,"quader_bridge_get_topology_api"));
+        topologyApi=getTopology?getTopology(QUADER_BRIDGE_TOPOLOGY_ABI_VERSION):nullptr;
+        if(topologyApi&&(topologyApi->abi_version!=QUADER_BRIDGE_TOPOLOGY_ABI_VERSION||
+            topologyApi->struct_size<sizeof(QuaderBridgeTopologyApi)||!topologyApi->mesh_topology_view)) {
+            FreeLibrary(module);module=nullptr;throw std::runtime_error("Quader reader returned an incompatible topology extension.");
         }
     }
     ~Library(){if(module)FreeLibrary(module);}
@@ -156,6 +162,18 @@ std::shared_ptr<QuaderSourceScene> readQuaderScene(const std::filesystem::path& 
         require(totalVertices<=16000000&&totalIndices<=48000000&&totalCollision<=48000000,"Quader scene exceeds bridge geometry limits.");
         require(entities.emplace(value.display_entity,value.geometry_entity,value.definition_entity).second,"Quader scene contains duplicate mesh occurrence identities.");
         QuaderSourceMesh mesh;mesh.name=string(value.name);mesh.displayEntity=value.display_entity;mesh.geometryEntity=value.geometry_entity;mesh.definitionEntity=value.definition_entity;
+        if(source->library->topologyApi) {
+            QuaderBridgeTopologyView topology{};result(source->library->topologyApi->mesh_topology_view(source->handle,i,&topology,&error),error);
+            require(topology.face_count<=value.index_count/3&&(!topology.face_count||topology.faces),"Invalid Quader topology data.");
+            for(std::uint32_t face=0;face<topology.face_count;++face) {
+                const auto& input=topology.faces[face];QuaderSourceFace output;output.cornerCount=input.corner_count;
+                require(output.cornerCount==3||output.cornerCount==4,"Unsupported Quader source polygon.");
+                std::copy_n(input.vertices,4,output.vertices.begin());std::copy_n(input.triangles,2,output.triangles.begin());
+                for(unsigned corner=0;corner<output.cornerCount;++corner)require(output.vertices[corner]<value.vertex_count,"Invalid Quader source polygon vertex.");
+                require(output.triangles[0]<value.index_count/3&&(output.cornerCount==3||output.triangles[1]<value.index_count/3),"Invalid Quader source polygon triangle.");
+                mesh.sourceFaces.push_back(output);
+            }
+        }
         mesh.transform=matrix(value.transform);mesh.visible=value.visible!=0;require(value.collision_status<=2,"Unknown Quader collision status.");mesh.collision=static_cast<QuaderCollision>(value.collision_status);
         require(value.collision_point_count%3==0&&(mesh.collision==QuaderCollision::StaticTriangles||value.collision_point_count==0),"Invalid Quader collision triangles.");
         mesh.vertices.reserve(value.vertex_count);for(std::uint32_t v=0;v<value.vertex_count;++v){

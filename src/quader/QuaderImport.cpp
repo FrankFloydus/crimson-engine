@@ -397,7 +397,7 @@ struct Preparation {
         for(auto& [key,candidates]:packages){(void)key;std::sort(candidates.begin(),candidates.end(),[](const auto& a,const auto& b){return a.id<b.id;});}
     }
     std::string package(const std::string& name,const std::string& owner,const std::vector<QuaderSourceVertex>& vertices,const std::vector<std::uint32_t>& indices,
-        const std::vector<QuaderSourceSurface>& surfaces,const std::vector<std::string>& materialIds){
+        const std::vector<QuaderSourceSurface>& surfaces,const std::vector<std::string>& materialIds,const std::vector<QuaderSourceFace>& sourceFaces={}){
         if(indices.empty())return {};require(!vertices.empty()&&indices.size()%3==0,"Quader mesh does not contain valid triangles.");
         std::string buffer;Json views=Json::array(),accessors=Json::array();const auto append=[&](const void* data,std::size_t count){const auto offset=buffer.size();buffer.append(static_cast<const char*>(data),count);return offset;};
         Vec3 minimum{std::numeric_limits<float>::max(),std::numeric_limits<float>::max(),std::numeric_limits<float>::max()},maximum{-minimum[0],-minimum[1],-minimum[2]};
@@ -434,7 +434,14 @@ struct Preparation {
             const auto index=accessor(indices.data()+surface.offset,surface.count*sizeof(std::uint32_t),surface.count,"SCALAR",5125,34963);
             Json attributes{{"POSITION",position},{"NORMAL",normal},{"TEXCOORD_0",uv}};
             if(interpolated){attributes["_CRIMSON_UV_INTERPOLATION_COORD"]=*interpolationCoordinate;attributes["_CRIMSON_UV_INTERPOLATION_COEFF"]=*interpolationCoefficient;attributes["_CRIMSON_UV_INTERPOLATION_MODE"]=*interpolationMode;}
-            primitives.push_back({{"attributes",std::move(attributes)},{"indices",index},{"material",slot},{"mode",4}});}
+            Json faces=Json::array();
+            for(const auto& face:sourceFaces)if(face.triangles[0]>=surface.offset/3&&face.triangles[0]<(surface.offset+surface.count)/3&&
+                (face.cornerCount==3||(face.triangles[1]>=surface.offset/3&&face.triangles[1]<(surface.offset+surface.count)/3))) {
+                faces.push_back({{"vertices",face.vertices},{"triangles",{face.triangles[0]-surface.offset/3,face.cornerCount==4?face.triangles[1]-surface.offset/3:0}},{"cornerCount",face.cornerCount}});
+            }
+            Json primitive{{"attributes",std::move(attributes)},{"indices",index},{"material",slot},{"mode",4}};
+            if(!faces.empty())primitive["extras"]["crimsonSourceFaces"]=std::move(faces);
+            primitives.push_back(std::move(primitive));}
         if(primitives.empty())return {};
         // The ABI 6 provenance token participates in the established geometry
         // hash. ABI 7 adds hierarchy only; keep identical render data reusable.
@@ -544,7 +551,7 @@ QuaderImportResult prepareQuaderImport(const QuaderSourceScene& scene,const Quad
         std::vector<QuaderSourceSurface> surfaces=source.surfaces;if(surfaces.empty()&&!source.indices.empty())surfaces.push_back({UINT32_MAX,0,static_cast<std::uint32_t>(source.indices.size())});
         for(const auto& surface:surfaces){require(surface.count%3==0&&std::uint64_t(surface.offset)+surface.count<=source.indices.size(),"Invalid Quader surface indices.");
             for(std::uint32_t i=0;i<surface.count;i+=3){const auto a=source.indices[surface.offset+i],b=source.indices[surface.offset+i+1],c=source.indices[surface.offset+i+2];require(a<source.vertices.size()&&b<source.vertices.size()&&c<source.vertices.size(),"Invalid Quader vertex index.");triangle(source.vertices[a].position,source.vertices[b].position,source.vertices[c].position,options.scale,mesh.local);}}
-        mesh.modelId=context.package(source.name,meshOwner(source),source.vertices,source.indices,surfaces,materialIds);
+        mesh.modelId=context.package(source.name,meshOwner(source),source.vertices,source.indices,surfaces,materialIds,source.sourceFaces);
         if(source.collision==QuaderCollision::Unsupported)++out.skippedCollisions;
         if(source.collision==QuaderCollision::StaticTriangles&&!source.collisionPoints.empty()){
             require(source.collisionPoints.size()%3==0,"Invalid Quader static collision triangles.");std::vector<Vec3> positions;std::vector<std::uint32_t> indices;positions.reserve(source.collisionPoints.size());indices.reserve(source.collisionPoints.size());

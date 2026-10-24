@@ -5,6 +5,7 @@
 #include "resources/AssetId.h"
 #include "crimson-renderer/MaterialGraphShader.h"
 #include "vs_model.h"
+#include "vs_model_paint.h"
 #include "vs_pick.h"
 #include "vs_point_shadow.h"
 #include "vs_directional_shadow.h"
@@ -18,7 +19,8 @@
 
 namespace crimson {
 namespace {
-std::span<const std::uint8_t> embeddedVertex(MaterialGraphPass pass) {
+std::span<const std::uint8_t> embeddedVertex(MaterialGraphPass pass,const std::string& name) {
+    if(name=="vs_model_paint")return cc_vs_model_paint;
     switch(pass){
     case MaterialGraphPass::Decal:return cc_vs_decal;
     case MaterialGraphPass::Model:case MaterialGraphPass::ModelTransmission:case MaterialGraphPass::ModelReflection:return cc_vs_model;
@@ -56,7 +58,9 @@ ProjectMaterialCacheReport prepareProjectMaterialCache(const std::filesystem::pa
     std::map<std::string,MaterialGraphShader> graphs;
     for(const auto& id:ids) {
         ++report.materials;
-        try {auto material=loadMaterialAsset(project,id);auto shader=generateMaterialGraphShader(material);graphs.try_emplace(shader.topologyKey,std::move(shader));}
+        try {auto material=loadMaterialAsset(project,id);
+            auto sources=resolveMaterialSources(material,[&](const auto& source){return std::make_shared<const MaterialAsset>(loadMaterialAsset(project,source));});
+            auto shader=generateMaterialGraphShader(material,sources);graphs.try_emplace(shader.topologyKey,std::move(shader));}
         catch(const std::exception& error){++report.failed;report.diagnostics.push_back(id+": "+error.what());}
     }
     struct Stage {ShaderBinary binary;bool cached{};};
@@ -88,8 +92,8 @@ ProjectMaterialCacheReport prepareProjectMaterialCache(const std::filesystem::pa
                 Stage* domain=variant.tessellation?&loadGenerated(domainRecipe):nullptr;
                 std::string diagnostic;
                 const auto preflight=[&] {
-                    return preflightGeneratedShaderPair(vertex.binary.bytes,fragment.binary.bytes,embeddedVertex(variant.pass),variant.manifest,diagnostic)&&
-                        (!domain||preflightGeneratedTessellationDomain(domain->binary.bytes,embeddedVertex(variant.pass),variant.domainManifest,diagnostic));
+                    return preflightGeneratedShaderPair(vertex.binary.bytes,fragment.binary.bytes,embeddedVertex(variant.pass,variant.vertexName),variant.manifest,diagnostic)&&
+                        (!domain||preflightGeneratedTessellationDomain(domain->binary.bytes,embeddedVertex(variant.pass,variant.vertexName),variant.domainManifest,diagnostic));
                 };
                 if(!preflight()) {
                     // The disk envelope is only a quick cache check. Repair a

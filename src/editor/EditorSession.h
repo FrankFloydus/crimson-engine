@@ -102,6 +102,7 @@ private:
     CollisionOverlays collisionOverlays_;
     QuaderBridge quader_;
     double materialGameSeconds_{},materialRealSeconds_{};
+    MaterialEvaluationContext displayedMaterialContext_{};
     std::chrono::steady_clock::time_point materialClockStart_{std::chrono::steady_clock::now()};
     std::unique_ptr<AssetPreviews> previews_;
     ResourceHandle<PreparedEnvironment> environment_;

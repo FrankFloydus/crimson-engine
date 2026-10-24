@@ -58,7 +58,7 @@ void persistenceHistoryAndIsolation(){
     require(document.begin("Cancel light")&&document.update([](auto& records,auto&){for(auto& record:records)if(record.point){record.point->temperatureKelvin=1000;record.point->flicker.enabled=false;}}),document.status());
     document.cancel();require(sameEntity(changedPoint,*document.scene().find(point)),"Canceled light gesture changed saved settings.");
     require(document.save(),document.status());const auto file=project.root/document.assetId();const auto bytes=read(file);
-    require(Json::parse(bytes).at("version")==24,"Optional light authoring unnecessarily bumped scene version.");
+    require(Json::parse(bytes).at("version")==25,"Optional light authoring did not retain the current scene version.");
     SceneDocument loaded(project.root);require(loaded.load(document.assetId())&&!loaded.dirty()&&read(file)==bytes,"Loading light settings wrote or dirtied a scene.");
     require(sameEntity(changedPoint,*loaded.scene().find(point))&&sameEntity(changedSun,*loaded.scene().find(sun)),"Not all light properties round-tripped.");
     loaded.select({point},point);require(loaded.duplicateSelection(),loaded.status());const auto copy=loaded.scene().find(loaded.selection().primary);

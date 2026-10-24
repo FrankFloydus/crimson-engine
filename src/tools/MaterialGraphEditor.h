@@ -30,6 +30,9 @@ public:
         std::function<void(MaterialNodeId)> choose;
         std::function<TexturePresentation(const MaterialNode&)> generatedTexture;
         std::function<TexturePresentation(MaterialGraphPreviewTarget,unsigned)> nodeImage;
+        std::function<TexturePresentation(const std::string&)> material;
+        std::function<bool(const std::string&)> validMaterial;
+        std::function<void(MaterialNodeId)> chooseMaterial;
     };
     // Last submitted presentation, in screen coordinates. This is transient UI
     // geometry for diagnostics and headless interaction checks, never asset data.

@@ -340,6 +340,26 @@ typedef struct QuaderBridgeUvInterpolationApi {
 QUADER_BRIDGE_EXPORT const QuaderBridgeUvInterpolationApi *
 quader_bridge_get_uv_interpolation_api(uint32_t requested_abi_version);
 
+/* Optional source-face provenance, independent of core and UV extension ABIs. */
+#define QUADER_BRIDGE_TOPOLOGY_ABI_VERSION 1u
+typedef struct QuaderBridgeSourceFace {
+  uint32_t vertices[4];
+  uint32_t triangles[2]; /* Triangle numbers in mesh_view's final index order. */
+  uint32_t corner_count;
+} QuaderBridgeSourceFace;
+typedef struct QuaderBridgeTopologyView {
+  const QuaderBridgeSourceFace *faces;
+  uint32_t face_count;
+} QuaderBridgeTopologyView;
+typedef struct QuaderBridgeTopologyApi {
+  uint32_t abi_version;
+  uint32_t struct_size;
+  int (*mesh_topology_view)(const QuaderBridgeScene *,uint32_t,
+                            QuaderBridgeTopologyView *,QuaderBridgeError *);
+} QuaderBridgeTopologyApi;
+QUADER_BRIDGE_EXPORT const QuaderBridgeTopologyApi *
+quader_bridge_get_topology_api(uint32_t requested_abi_version);
+
 #ifdef __cplusplus
 }
 #endif

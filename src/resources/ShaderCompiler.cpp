@@ -43,6 +43,7 @@ const std::map<std::string,std::string> varying{
     {"fs_model_reflection","model.varying.def.sc"},{"fs_pbr_reflection","varying.def.sc"},{"fs_particle_reflection","particle.varying.def.sc"},
     {"vs_particle","particle.varying.def.sc"},{"fs_particle","particle.varying.def.sc"},
     {"vs_pbr","varying.def.sc"},{"fs_pbr","varying.def.sc"},{"vs_model","model.varying.def.sc"},{"fs_model","model.varying.def.sc"},
+    {"vs_model_paint","model_paint.varying.def.sc"},
     {"vs_model_instanced","model_instanced.varying.def.sc"},{"vs_pick_instanced","model_instanced.varying.def.sc"},
     {"fs_pick_instanced","model_instanced.varying.def.sc"},{"vs_point_shadow_instanced","model_instanced.varying.def.sc"},
     {"vs_directional_shadow_instanced","model_instanced.varying.def.sc"},

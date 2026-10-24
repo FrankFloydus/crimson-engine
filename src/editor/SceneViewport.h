@@ -9,6 +9,7 @@
 #include "ViewportTransformGesture.h"
 #include "ViewportRotationSnap.h"
 #include "runtime/TraceVisualization.h"
+#include "tools/VertexPaintTool.h"
 #include <span>
 #include <optional>
 #include <vector>
@@ -22,7 +23,12 @@ public:
                      bool showCollisions=true, bool showTransformGizmo=true, bool allowCameraNavigation=true,
                      bool cameraGestureActive=false, bool preserveCameraLens=false);
     void cancel(SceneDocument&, Renderer&);
-    bool interacting() const { return transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || materialDrop_.active() || decalDrop_.active(); }
+    bool interacting() const { return transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || materialDrop_.active() || decalDrop_.active() || vertexPaint_.active(); }
+    void setVertexPaintTargetQuery(VertexPaintTargetQuery query){vertexPaint_.setTargetQuery(std::move(query));}
+    bool vertexPaintEnabled() const {return vertexPaint_.enabled();}
+    bool vertexPaintActive() const {return vertexPaint_.active();}
+    void setVertexPaintEnabled(bool enabled,SceneDocument& document,Renderer& renderer){cancel(document,renderer);vertexPaint_.setEnabled(enabled,document,renderer);}
+    void drawVertexPaintControls(SceneDocument& document,Renderer& renderer){vertexPaint_.drawControls(document,renderer);}
     void beginDecalPlacement(EntityId entity) { decalDrop_.beginReplace(entity);decalPlacementJustArmed_=true; }
     void focus(Camera&, const SceneDocument&, const AssetLibrary&, float aspect, bool preserveLens=false);
     void drawDecalPlacementPlane(const Mat4&,const Camera&,bgfx::TextureHandle,const Vec4&);
@@ -49,6 +55,7 @@ private:
     ColliderGizmoDrag colliderDrag_;
     NavigationVolumeGizmoDrag volumeDrag_;
     ViewportTransformGesture transformDrag_;
+    VertexPaintTool vertexPaint_;
     bool materialDropCanceled_{};
     bool decalDropCanceled_{};
     bool decalPlacementJustArmed_{};

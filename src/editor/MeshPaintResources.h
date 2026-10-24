@@ -1,0 +1,42 @@
+#pragma once
+#include "VertexPaintGesture.h"
+#include "resources/ResourceManager.h"
+#include <crimson/renderer/forward/ForwardTypes.hpp>
+#include <chrono>
+#include <unordered_map>
+
+namespace crimson {
+class AssetLibrary;
+struct ExtractedModel;
+struct MeshPaintPreparedDraw {
+    std::uint32_t draw{},sourcePrimitive{},primitive{};
+    std::shared_ptr<const MeshPaintGeometry> geometry;
+    std::shared_ptr<const MeshPaintPayload> weights;
+    bool compatible{true};
+};
+struct PreparedMeshPaintModel {
+    std::shared_ptr<const ModelAsset> asset;
+    std::vector<MeshPaintPreparedDraw> draws;
+    std::vector<RenderMeshPaintBinding> bindings;
+    std::uint64_t revision{},signature{};
+    bool ready{},failed{};
+    std::string diagnostic;
+};
+class MeshPaintResources {
+public:
+    MeshPaintResources(AssetLibrary&,ResourceManager&);
+    PreparedMeshPaintModel prepare(const EntityRecord&,ResourcePriority=ResourcePriority::Visible);
+    PreparedMeshPaintModel prepare(const ExtractedModel&,ResourcePriority=ResourcePriority::Visible);
+    VertexPaintTargets targets(const SceneDocument&,EntityId);
+    bool subdivision(const EntityRecord&,std::uint32_t level,SceneMeshPaint&,std::string& diagnostic);
+    std::string status(EntityId) const;
+    void collect();
+    void clear();
+private:
+    struct Entry {ResourceHandle<ModelAsset> resource;std::chrono::steady_clock::time_point used;EntityId entity{};bool repairRequested{};};
+    AssetLibrary& assets_;ResourceManager& resources_;
+    std::unordered_map<std::string,Entry> geometry_,resampling_;
+    std::unordered_map<EntityId,std::string> statuses_;
+    ResourceHandle<ModelAsset> request(const EntityRecord&,std::uint32_t,ResourcePriority,bool resample,std::string&);
+};
+}

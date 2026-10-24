@@ -105,7 +105,7 @@ bool MaterialEditor::reconcileReferences(AssetLibrary& assets,bool force) {
     if(!document_.reconcileTextureReferences([&](const std::string& id,MaterialTextureRole role) {
         if(!policy.deleted(id))return id;
         return policy.resolveTexture(id,role==MaterialTextureRole::Normal);
-    })) {message_=document_.status();return false;}
+    },[&](const std::string& id){return policy.deleted(id)?policy.resolveMaterial(id):id;})) {message_=document_.status();return false;}
     referenceRevision_=policy.revision();referenceDocumentId_=document_.assetId();
     referenceMaterialRevision_=document_.revision();return true;
 }
@@ -113,7 +113,8 @@ void MaterialEditor::publish(AssetLibrary& assets) {
     if(!document_.isOpen()) return;
     if(!reconcileReferences(assets))return;
     auto textures=materialGraphTextureReferences(document_.definition().graph);
-    assets.setMaterialDocumentReferences(std::move(textures),document_.historicalTextureReferences());
+    assets.setMaterialDocumentReferences(std::move(textures),document_.historicalTextureReferences(),
+        materialMaterialReferences(document_.definition()),document_.historicalMaterialReferences());
     if(publishedRevision_!=document_.revision() || publishedId_!=document_.assetId()) {
         if(!isEngineAssetId(document_.assetId()))assets.publishMaterial(document_.committed());
         publishedRevision_=document_.revision();publishedId_=document_.assetId();
@@ -205,7 +206,7 @@ void MaterialEditor::modals(AssetLibrary& assets) {
         ImGui::EndPopup();
     }
 }
-void MaterialEditor::properties(AssetLibrary& assets) {
+void MaterialEditor::properties(AssetLibrary& assets,Renderer& renderer) {
     if(document_.definition().graph.empty())return;
     const bool editable=document_.editable();
     if(!editable)ImGui::TextDisabled("Read-only");
@@ -251,12 +252,14 @@ void MaterialEditor::properties(AssetLibrary& assets) {
     const auto node=*findMaterialNode(document_.definition().graph,selected);
     if(node.kind==MaterialNodeKind::Output) {
         if(ImGui::TreeNodeEx("Material",ImGuiTreeNodeFlags_DefaultOpen|ImGuiTreeNodeFlags_SpanAvailWidth)) {
-            control("Change shader model",[defaults](auto& n) {
-                int model=static_cast<int>(n.output.shading);
-                const bool changed=resettableProperty(model,static_cast<int>(defaults.output.shading),[&]{return ImGui::Combo("Shader Model",&model,"Lit (PBR)\0Unlit\0Decal\0");});
-                if(changed)n.output.shading=static_cast<MaterialShading>(model);
-                return changed;
-            });
+            int model=static_cast<int>(materialOutputNode(document_.definition().graph).output.shading);
+            ImGui::BeginDisabled(!editable);
+            const bool changedModel=resettableProperty(model,static_cast<int>(defaults.output.shading),[&]{return ImGui::Combo("Shader Model",&model,"Lit (PBR)\0Unlit\0Decal\0Blend Shader\0");});
+            ImGui::EndDisabled();
+            if(changedModel&&editable&&!canceled) {finish();document_.edit("Change shader model",[&](auto& asset){
+                materialOutputNode(asset.graph).output.shading=static_cast<MaterialShading>(model);
+                if(static_cast<MaterialShading>(model)==MaterialShading::BlendPbr)initializeBlendMaterialGraph(asset.graph);
+            });}
             if(materialOutputNode(document_.definition().graph).output.shading==MaterialShading::Decal) {
                 control("Toggle decal color",[defaults](auto& n){return resettableProperty(n.output.decalColorEnabled,defaults.output.decalColorEnabled,[&]{return ImGui::Checkbox("Affect Color",&n.output.decalColorEnabled);});});
                 control("Toggle decal normal",[defaults](auto& n){return resettableProperty(n.output.decalNormalEnabled,defaults.output.decalNormalEnabled,[&]{return ImGui::Checkbox("Affect Normal",&n.output.decalNormalEnabled);});});
@@ -264,6 +267,7 @@ void MaterialEditor::properties(AssetLibrary& assets) {
                 control("Toggle decal metallic",[defaults](auto& n){return resettableProperty(n.output.decalMetallicEnabled,defaults.output.decalMetallicEnabled,[&]{return ImGui::Checkbox("Affect Metallic",&n.output.decalMetallicEnabled);});});
             } else {
             control("Change material blending",[defaults](auto& n) {
+                if(n.output.shading==MaterialShading::BlendPbr)return false;
                 int blend=static_cast<int>(n.output.blend);
                 const bool changed=resettableProperty(blend,static_cast<int>(defaults.output.blend),[&]{return ImGui::Combo("Blend Mode",&blend,"Opaque\0Masked\0Translucent\0Additive\0");});
                 if(changed)n.output.blend=static_cast<MaterialBlend>(blend);return changed;
@@ -276,6 +280,7 @@ void MaterialEditor::properties(AssetLibrary& assets) {
             if(materialOutputNode(document_.definition().graph).output.shading==MaterialShading::StandardPbr)
                 control("Change occlusion strength",[defaults](auto& n){return resettableProperty(n.output.occlusionStrength,defaults.output.occlusionStrength,[&]{return ImGui::SliderFloat("AO strength",&n.output.occlusionStrength,0,1,"%.3f");});});
             const auto& currentOutput=materialOutputNode(document_.definition().graph).output;
+            if(currentOutput.shading!=MaterialShading::BlendPbr) {
             ImGui::BeginDisabled(currentOutput.shading!=MaterialShading::StandardPbr||currentOutput.blend!=MaterialBlend::Alpha);
             control("Toggle material refraction",[defaults](auto& n){return resettableProperty(n.output.refraction,defaults.output.refraction,[&]{return ImGui::Checkbox("Refraction",&n.output.refraction);});});
             ImGui::EndDisabled();
@@ -300,9 +305,10 @@ void MaterialEditor::properties(AssetLibrary& assets) {
                 }
             }
             }
+            }
             ImGui::TreePop();
         }
-        if(ImGui::TreeNodeEx("Default inputs",ImGuiTreeNodeFlags_SpanAvailWidth)) {
+        if(node.output.shading!=MaterialShading::BlendPbr&&ImGui::TreeNodeEx("Default inputs",ImGuiTreeNodeFlags_SpanAvailWidth)) {
             const auto disconnected=[&](MaterialPin pin){return !materialInputLink(document_.definition().graph,selected,pin);};
             if(disconnected(MaterialPin::BaseColor))hdr(node.output.shading==MaterialShading::Unlit?"Emissive Color":node.output.shading==MaterialShading::Decal?"Color":"Base Color","Change default base color",true);
             if(materialOutputNode(document_.definition().graph).output.shading==MaterialShading::Decal) {
@@ -518,6 +524,43 @@ void MaterialEditor::properties(AssetLibrary& assets) {
             }
         }
         if(node.kind==MaterialNodeKind::Color || node.kind==MaterialNodeKind::ImageInput)hdr(node.kind==MaterialNodeKind::ImageInput?"Constant fallback":"Constant","Change color",false);
+        if(node.kind==MaterialNodeKind::MaterialReference) {
+            ImGui::SeparatorText("Material");
+            const auto assign=[&](const std::string& id) {
+                if(!id.empty()) {const auto source=assets.findMaterial(id);
+                    if(id==document_.assetId()||!source||!blendMaterialSourceCompatible(*source)) {message_="Choose a solid Lit material without tessellation.";return;}}
+                finish();if(!document_.edit("Assign blend material",[&](auto& asset){if(auto* n=findMaterialNode(asset.graph,selected))n->material.id=id;}))message_=document_.status();
+                else message_.clear();
+            };
+            ImGui::BeginDisabled(!editable);
+            const auto reference=assets.findMaterial(node.material.id);
+            if(const auto thumbnail=renderer.thumbnailTexture(node.material.id);bgfx::isValid(thumbnail)) {
+                ImGui::Image(ImTextureRef(ImGuiBgfx::textureId(thumbnail)),{ImGui::GetFrameHeight()*2,ImGui::GetFrameHeight()*2});
+            }
+            const auto label=node.material.empty()?std::string("Base fallback"):reference?assets.displayName(node.material.id):"Missing: "+assets.displayName(node.material.id);
+            if(ImGui::BeginCombo("Source",label.c_str())) {
+                static ImGuiTextFilter filter;if(ImGui::IsWindowAppearing())filter.Clear();filter.Draw("Search");
+                ImGui::BeginChild("Blend material choices",{320,ImGui::GetFontSize()*12});
+                for(const auto& entry:assets.catalog())if(entry.kind==AssetKind::Material&&entry.id!=document_.assetId()) {
+                    const auto source=assets.findMaterial(entry.id);if(!source||!blendMaterialSourceCompatible(*source))continue;
+                    const auto name=assets.displayName(entry.id);if(!filter.PassFilter(name.c_str()))continue;
+                    ImGui::PushID(entry.id.c_str());if(ImGui::Selectable(name.c_str(),entry.id==node.material.id)){assign(entry.id);ImGui::CloseCurrentPopup();}ImGui::PopID();
+                }
+                ImGui::EndChild();ImGui::EndCombo();
+            }
+            if(ImGui::BeginDragDropTarget()) {
+                if(const auto* payload=ImGui::AcceptDragDropPayload("CC_MATERIAL_ASSET")) {
+                    const auto* bytes=static_cast<const char*>(payload->Data);
+                    if(payload->DataSize>1&&bytes&&bytes[payload->DataSize-1]=='\0'&&std::find(bytes,bytes+payload->DataSize-1,'\0')==bytes+payload->DataSize-1)
+                        assign(std::string(bytes,static_cast<std::size_t>(payload->DataSize-1)));
+                    else message_="The material payload is invalid.";
+                }
+                ImGui::EndDragDropTarget();
+            }
+            ImGui::SameLine();if(ImGui::SmallButton("x##Blend material"))assign({});
+            ImGui::EndDisabled();
+            ImGui::BeginDisabled(!reference);if(ImGui::Button("Open Material"))requestOpen(node.material.id,assets);ImGui::EndDisabled();
+        }
         if(node.kind==MaterialNodeKind::Texture2D || node.kind==MaterialNodeKind::ImageInput) {
             {
                 ImGui::SeparatorText("Texture");
@@ -662,11 +705,17 @@ void MaterialEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManage
             if(ImGui::IsItemActive())previewHeight_+=ImGui::GetIO().MouseDelta.y;
             const auto splitMinimum=ImGui::GetItemRectMin(),splitMaximum=ImGui::GetItemRectMax();
             ImGui::GetWindowDrawList()->AddLine({splitMinimum.x,(splitMinimum.y+splitMaximum.y)*.5f},{splitMaximum.x,(splitMinimum.y+splitMaximum.y)*.5f},ImGui::GetColorU32(ImGuiCol_Border));
-            ImGui::BeginChild("Material properties",{0,0});properties(assets);ImGui::EndChild();
+            ImGui::BeginChild("Material properties",{0,0});properties(assets,renderer);ImGui::EndChild();
             ImGui::EndChild();
             ImGui::TableNextColumn();
             ImGui::BeginChild("Material graph workspace",{0,0});
             MaterialGraphEditor::Assets graphAssets;
+            graphAssets.material=[&](const std::string& id) {
+                MaterialGraphEditor::TexturePresentation result;result.name=id.empty()?"Base fallback":assets.displayName(id);
+                result.available=bool(assets.findMaterial(id));const auto image=renderer.thumbnailTexture(id);
+                if(bgfx::isValid(image))result.textureId=ImGuiBgfx::textureId(image);return result;
+            };
+            graphAssets.validMaterial=[&](const std::string& id){const auto source=assets.findMaterial(id);return id!=document_.assetId()&&source&&blendMaterialSourceCompatible(*source);};
             graphAssets.describe=[&](const std::string& id) {
                 MaterialGraphEditor::TexturePresentation result;
                 result.name=id.empty()?"None":assets.displayName(id);
@@ -706,13 +755,25 @@ void MaterialEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManage
             };
             bool openTexturePicker=false;
             graphAssets.choose=[&](MaterialNodeId node){texturePickerNode_=node;openTexturePicker=true;};
+            graphAssets.chooseMaterial=graphAssets.choose;
             graph_.draw(document_,graphAssets);
             static ImGuiTextFilter graphTextureFilter;
             if(openTexturePicker){graphTextureFilter.Clear();ImGui::OpenPopup("Graph texture picker");}
             if(ImGui::BeginPopup("Graph texture picker")) {
                 const auto* textureNode=findMaterialNode(document_.definition().graph,texturePickerNode_);
-                if(!textureNode || (textureNode->kind!=MaterialNodeKind::Texture2D && textureNode->kind!=MaterialNodeKind::ImageInput) || !document_.editable())ImGui::CloseCurrentPopup();
+                if(!textureNode || (textureNode->kind!=MaterialNodeKind::Texture2D && textureNode->kind!=MaterialNodeKind::ImageInput&&textureNode->kind!=MaterialNodeKind::MaterialReference) || !document_.editable())ImGui::CloseCurrentPopup();
                 else {
+                    if(textureNode->kind==MaterialNodeKind::MaterialReference) {
+                        graphTextureFilter.Draw("Search materials");
+                        for(const auto& entry:assets.catalog())if(entry.kind==AssetKind::Material&&graphAssets.validMaterial(entry.id)) {
+                            const auto name=assets.displayName(entry.id);if(!graphTextureFilter.PassFilter(name.c_str()))continue;
+                            if(ImGui::Selectable(name.c_str(),entry.id==textureNode->material.id)) {
+                                const auto id=entry.id;finishInteraction();
+                                if(!document_.edit("Assign blend material",[&](auto& asset){if(auto* n=findMaterialNode(asset.graph,texturePickerNode_))n->material.id=id;}))message_=document_.status();
+                                ImGui::CloseCurrentPopup();
+                            }
+                        }
+                    } else {
                     const auto selectedImage=textureNode->texture.image.id;
                     const auto assign=[&](const std::string& id) {
                         finishInteraction();
@@ -722,6 +783,7 @@ void MaterialEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManage
                         ImGui::CloseCurrentPopup();
                     };
                     drawTextureAssetChoices(assets,graphTextureFilter,selectedImage,assign);
+                    }
                 }
                 ImGui::EndPopup();
             }

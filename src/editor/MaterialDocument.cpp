@@ -51,7 +51,15 @@ std::vector<std::string> MaterialDocument::historicalTextureReferences() const {
     for(const auto& command:history_){append(command.before);append(command.after);}
     return result;
 }
-bool MaterialDocument::reconcileTextureReferences(const TextureReferenceResolver& resolve) {
+std::vector<std::string> MaterialDocument::historicalMaterialReferences() const {
+    std::vector<std::string> result;
+    const auto append=[&](const MaterialAsset& material) {
+        for(const auto& id:materialMaterialReferences(material))if(std::find(result.begin(),result.end(),id)==result.end())result.push_back(id);
+    };
+    append(saved_);if(transaction_)append(transaction_->before);
+    for(const auto& command:history_){append(command.before);append(command.after);}return result;
+}
+bool MaterialDocument::reconcileTextureReferences(const TextureReferenceResolver& resolve,const MaterialReferenceResolver& resolveMaterial) {
     if(!open_)return true;
     try {
         auto working=working_,saved=saved_;
@@ -62,6 +70,10 @@ bool MaterialDocument::reconcileTextureReferences(const TextureReferenceResolver
             for(auto& node:material.graph.nodes)if((node.kind==MaterialNodeKind::Texture2D||node.kind==MaterialNodeKind::ImageInput) && !node.texture.image.empty()) {
                 auto replacement=resolve(node.texture.image.id,node.texture.role);
                 if(replacement!=node.texture.image.id){node.texture.image.id=std::move(replacement);changed=true;}
+            }
+            if(resolveMaterial)for(auto& node:material.graph.nodes)if(node.kind==MaterialNodeKind::MaterialReference&&!node.material.empty()) {
+                auto replacement=resolveMaterial(node.material.id);
+                if(replacement!=node.material.id){node.material.id=std::move(replacement);changed=true;}
             }
             if(changed){canonicalizeMaterialAsset(material);validateMaterialAsset(material);}
             return changed;

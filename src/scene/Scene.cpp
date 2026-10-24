@@ -91,6 +91,7 @@ bool hasSceneComponent(const EntityRecord& record,SceneComponentKind kind) {
     case SceneComponentKind::Camera:return record.camera.has_value();
     case SceneComponentKind::CameraFollow:return record.cameraFollow.has_value();
     case SceneComponentKind::Model:return record.model.has_value();
+    case SceneComponentKind::Subdivision:return record.meshPaint.has_value();
     case SceneComponentKind::Collider:return record.collider.has_value();
     case SceneComponentKind::Directional:return record.directional.has_value();
     case SceneComponentKind::Point:return record.point.has_value();
@@ -124,7 +125,7 @@ bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
         a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows && a.lightingScopes==b.lightingScopes &&
         a.quader==b.quader && a.quaderGenerated==b.quaderGenerated &&
         a.modelAnimation==b.modelAnimation && a.modelRagdoll==b.modelRagdoll && a.visible==b.visible && a.receiveDecals==b.receiveDecals &&
-        a.outlinerStyle==b.outlinerStyle && a.meshShading==b.meshShading && a.primitive==b.primitive;
+        a.outlinerStyle==b.outlinerStyle && a.meshShading==b.meshShading && a.primitive==b.primitive && a.meshPaint==b.meshPaint;
 }
 bool sameProperties(const SceneProperties& a, const SceneProperties& b) {
     return a.activeEnvironment == b.activeEnvironment && a.activeCamera==b.activeCamera && a.playerCharacter==b.playerCharacter;
@@ -158,6 +159,7 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
         record.modelRagdoll=model->ragdoll;
         record.meshShading=model->meshShading;
         record.primitive=model->primitive;
+        record.meshPaint=model->meshPaint;
     }
     if (const auto* particle = registry_.try_get<ParticleReference>(entity)) record.particle = particle->assetId;
     if (const auto* decal = registry_.try_get<SceneDecal>(entity)) record.decal = *decal;
@@ -261,6 +263,7 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
     if (records.size() > 100000) throw std::runtime_error("Scene exceeds the 100000 entity limit.");
     std::unordered_map<EntityId,EntityId> parents;
     size_t directionalCount{}, pointCount{},navigationVolumeCount{};
+    std::uint64_t scenePaintVertices{};
     for (const auto& record : records) {
         if (!record.id || !parents.emplace(record.id,record.parent).second)
             throw std::runtime_error("Scene has a zero or duplicate entity ID.");
@@ -272,6 +275,21 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             throw std::runtime_error("Model asset reference must be a nonempty project-relative path.");
         if(record.primitive && (!record.model || !validPrimitiveMeshSettings(record.model->id,*record.primitive)))
             throw std::runtime_error("Primitive geometry requires a built-in mesh, finite dimensions from 0.001 to 100000 meters, sides from 3 to 256 and rings from 2 to 256.");
+        if(record.meshPaint) {
+            const auto& paint=*record.meshPaint;
+            if(!record.model||paint.subdivisionLevel>MaximumMeshPaintLevel||paint.recipeVersion!=MeshPaintRecipeVersion)
+                throw std::runtime_error("Subdivision requires a model, a supported recipe and Level from 0 to 5.");
+            std::unordered_set<std::uint64_t> bindings;std::uint64_t entityVertices{};
+            for(const auto& draw:paint.draws) {
+                if(draw.level>MaximumMeshPaintLevel||!draw.sourceSignature||!draw.weights||!validMeshPaintPayload(*draw.weights)||
+                    !bindings.insert((std::uint64_t(draw.draw)<<32)|draw.primitive).second)
+                    throw std::runtime_error("Invalid or duplicate vertex paint draw binding.");
+                entityVertices+=draw.weights->vertexCount;
+            }
+            if(entityVertices>MaximumMeshPaintVertices)throw std::runtime_error("Entity paint exceeds 262144 vertices.");
+            scenePaintVertices+=entityVertices;
+            if(scenePaintVertices>MaximumScenePaintVertices)throw std::runtime_error("Scene paint exceeds its 8M vertex storage budget.");
+        }
         if (!record.model && (!record.castShadows || !record.receiveShadows))
             throw std::runtime_error("Model shadow settings require a model entity.");
         if(!validMeshShading(record.meshShading))
@@ -547,7 +565,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         candidate.emplace<Visibility>(entity,record.visible,record.visible,false);
         candidate.emplace<VisualSettings>(entity,record.receiveDecals);
         candidate.emplace<OutlinerStyle>(entity,record.outlinerStyle);
-        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation,record.meshShading,record.primitive,record.modelRagdoll);
+        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation,record.meshShading,record.primitive,record.modelRagdoll,record.meshPaint);
         if (record.particle) candidate.emplace<ParticleReference>(entity,*record.particle);
         if (record.decal) candidate.emplace<SceneDecal>(entity,*record.decal);
         if (record.directional) candidate.emplace<SceneDirectionalLight>(entity,*record.directional);

@@ -643,7 +643,7 @@ void environmentsAndMigration() {
     require(migrated.records.size()==snapshot.records.size()+1 && readText(project.root/oldId)==contents,"Legacy migration rewrote its source.");
     SceneDocument opened(project.root); require(opened.load(oldId),opened.status());
     require(!opened.dirty() && resolveEnvironment(opened.scene()).exposure==1.7f,"Legacy migration lost settings or marked an equivalent load dirty.");
-    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==24,"Explicit save did not write scene version 24.");
+    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==25,"Explicit save did not write scene version 25.");
 }
 void environmentGlowHistoryAndMigration() {
     TempProject project;SceneDocument document(project.root);
@@ -696,7 +696,7 @@ void environmentGlowHistoryAndMigration() {
         readText(project.root/oldGlowAsset)==oldGlowText,"Legacy Glow migration lost its authored tuning or rewrote/marked the scene dirty.");
     require(reopened.save(),reopened.status());
     const auto converted=Json::parse(readText(project.root/oldGlowAsset));
-    require(converted.at("version")==24,"Glow introduced an unnecessary scene version change.");
+    require(converted.at("version")==25,"Glow introduced an unnecessary scene version change.");
     const auto roundTrip=readSceneSnapshot(project.root,oldGlowAsset);
     for(const auto& entity:roundTrip.records)if(entity.environment)
         require(entity.environment->environment==migrated,"Explicit save reapplied the old Glow conversion.");
@@ -875,7 +875,7 @@ void glowSingleEffectMigration() {
         "Two-effect migration rewrote the authored scene or changed its dirty state.");
     require(reopened.save(),reopened.status());
     const auto after=Json::parse(readText(project.root/document.assetId()));
-    require(after.at("version")==24 && readSceneSnapshot(project.root,document.assetId()).records.front().environment->environment==resolved,
+    require(after.at("version")==25 && readSceneSnapshot(project.root,document.assetId()).records.front().environment->environment==resolved,
         "Saving consolidated Glow changed the scene schema or reapplied migration.");
 }
 void glowBlendModeStorageAndHistory() {
@@ -969,7 +969,7 @@ void environmentModesPersistenceAndValidation() {
             rejects([&]{auto json=environmentSettingsJson(environment);json["fog"][field]=invalidValue;(void)readEnvironmentSettings(json);});
     require(document.save("Environment modes"),document.status());
     const auto saved=readText(project.root/document.assetId());
-    require(Json::parse(saved).at("version")==24,"Environment writer did not use scene v24.");
+    require(Json::parse(saved).at("version")==25,"Environment writer did not use scene v25.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
     require(!reopened.dirty() && sameEnvironment(resolveEnvironment(reopened.scene()),*edited.environment),"Environment settings did not survive reopening.");
     SceneDocument play(project.root);require(play.resetTransientFrom(document),play.status());
@@ -1220,7 +1220,7 @@ void lightIndirectEnergyStorageAndHistory() {
         if(record.point)record.point->indirectEnergy=0;if(record.directional)record.directional->indirectEnergy=8;}}),document.status());
     document.cancel();sameRecords(edited,document.scene().records());
     require(document.save("Light GI energy"),document.status());const auto savedText=readText(project.root/document.assetId());const auto saved=Json::parse(savedText);
-    require(saved.at("version")==24,"Per-light GI energy unnecessarily changed the scene format version.");
+    require(saved.at("version")==25,"Per-light GI energy unnecessarily changed the scene format version.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId())&&!reopened.dirty(),reopened.status());sameRecords(edited,reopened.scene().records());
     for(const auto& record:saved["entities"]) {
         if(record.contains("point"))require(record["point"].at("indirectEnergy")==2.5f,"Point GI energy was not persisted.");
@@ -1295,7 +1295,7 @@ void environmentToneMappingParametersStorageAndHistory() {
     require(document.scene().properties().activeEnvironment==id&&document.scene().find(document.selection().primary)->environment->environment==settings,
         "Environment duplication lost curve parameters or changed active Environment selection.");
     require(document.save("Tone mapping controls"),document.status());const auto saved=Json::parse(readText(project.root/document.assetId()));
-    require(saved.at("version")==24,"Tone mapping controls unnecessarily changed the scene format version.");
+    require(saved.at("version")==25,"Tone mapping controls unnecessarily changed the scene format version.");
     auto missing=saved;for(auto& record:missing["entities"])if(record.contains("environment"))record["environment"]["environment"].erase("toneMappingParameters");
     const auto missingId="assets/scenes/tone-parameters-missing.crimson-scene";const auto missingText=missing.dump();writeText(project.root/missingId,missingText);
     SceneDocument reopened(project.root);require(reopened.load(missingId),reopened.status());
@@ -1366,7 +1366,7 @@ void environmentPostProcessingStorageAndHistory() {
     document.select({id});require(document.duplicateSelection(),document.status());
     require(document.scene().find(document.selection().primary)->environment->environment==settings,"Environment duplication lost presentation effects.");
     require(document.save("Post processing"),document.status());const auto saved=Json::parse(readText(project.root/document.assetId()));
-    require(saved.at("version")==24,"Optional post-processing changed the scene schema.");
+    require(saved.at("version")==25,"Optional post-processing changed the scene schema.");
     auto missing=saved;for(auto& record:missing["entities"])if(record.contains("environment"))for(const auto* effect:{"pixelization","dither","posterization","vignette"})
         record["environment"]["environment"].erase(effect);
     const auto missingId="assets/scenes/post-processing-missing.crimson-scene";const auto missingText=missing.dump();writeText(project.root/missingId,missingText);
@@ -1461,7 +1461,7 @@ void environmentSpecularAaStorageAndHistory() {
         record.environment->environment.specularAA=false;}),document.status());
     document.cancel();require(resolveEnvironment(document.scene()).environment.specularAA,"Cancel changed the committed Specular AA toggle.");
     require(document.save("Specular quality"),document.status());const auto saved=Json::parse(readText(project.root/document.assetId()));
-    require(saved.at("version")==24,"Optional Specular AA changed the scene schema.");
+    require(saved.at("version")==25,"Optional Specular AA changed the scene schema.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId())&&!reopened.dirty()&&
         resolveEnvironment(reopened.scene()).environment.specularAA,"Specular AA Save/reopen lost its value or dirtied the scene.");
     document.select({id});require(document.duplicateSelection(),document.status());
@@ -1495,7 +1495,7 @@ void environmentSsrStorageAndHistory() {
         record.environment->environment.ssr.strength=.1f;}),document.status());
     document.cancel();require(sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),"Canceled SSR gesture changed committed tuning.");
     require(document.save("Reflections"),document.status());const auto savedText=readText(project.root/document.assetId());const auto saved=Json::parse(savedText);
-    require(saved.at("version")==24,"Optional SSR tuning changed the scene schema.");
+    require(saved.at("version")==25,"Optional SSR tuning changed the scene schema.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId())&&!reopened.dirty()&&
         sameEnvironment(resolveEnvironment(reopened.scene()),*edited.environment),"SSR Save/reopen changed tuning or dirty state.");
     document.select({id});require(document.duplicateSelection(),document.status());
@@ -1660,7 +1660,7 @@ void particleReferencesAndPersistence() {
     invalid.particle=AssetRef<ParticleEffectAsset>{"assets/particles/../bad.crimson-particle"};
     require(!document.updateEntity(particle,invalid),"Particle traversal was accepted.");
     require(document.save("Particles"),document.status());const auto savedId=document.assetId();
-    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==24,"Particle scene writer did not use version 24.");
+    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==25,"Particle scene writer did not use version 25.");
     SceneDocument reopened(project.root);require(reopened.load(savedId),reopened.status());sameRecords(document.scene().records(),reopened.scene().records());
     require(!reopened.dirty() && reopened.scene().find(particle)->particle->id==effect,"Missing particle asset prevented clean scene reopening.");
     auto cleared=*reopened.scene().find(particle);cleared.particle=AssetRef<ParticleEffectAsset>{};
@@ -1672,7 +1672,7 @@ void particleReferencesAndPersistence() {
     const auto oldBytes=readText(project.root/legacy);SceneDocument old(project.root);require(old.load(legacy),old.status());
     require(!old.dirty() && readText(project.root/legacy)==oldBytes,"Version-two load rewrote its source or became dirty.");
     for(const auto& record:old.scene().records())require(!record.particle,"Version-two migration invented a particle component.");
-    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==24,"Explicit version-two save did not migrate to version twenty-four.");
+    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==25,"Explicit version-two save did not migrate to the current scene version.");
 }
 void externalSceneChanges() {
     TempProject project; SceneDocument document(project.root);

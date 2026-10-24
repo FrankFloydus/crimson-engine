@@ -9,7 +9,7 @@ namespace crimson {
 inline std::uint8_t materialGraphRequiredUvs(const MaterialGraph& graph) {
     const auto& output=materialOutputNode(graph).output;
     std::uint8_t required{};
-    std::array<MaterialNodeId,MaterialGraph::MaximumNodes> visited{};
+    std::vector<MaterialNodeId> visited(graph.nodes.size());
     std::size_t count{};
     const auto demandMapping=[&](const MaterialUvMapping& mapping) {
         if(mapping.mode==MaterialUvMode::UV0)required|=1;

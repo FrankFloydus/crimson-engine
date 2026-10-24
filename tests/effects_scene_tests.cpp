@@ -45,7 +45,7 @@ void recipesAndMembership() {
         e.effects->starting==std::vector{AssetRef<GameplayEffectAsset>{EnemyStartingEffectId}},"Role recipes did not reference their protected starting effects.");
     require(document.gameplayEffect(PlayerStartingEffectId)&&document.gameplayEffect(EnemyStartingEffectId),"New scenes cannot resolve protected role effects without an asset callback.");
     const auto json=Json::parse(serializeSceneSnapshot({{},"Membership",{p,e},{}}));
-    require(json["version"]==24&&!json["entities"][0].contains("attributes")&&json["entities"][0]["effects"]["starting"].size()==1,"Schema24 retained authored membership or omitted ordered references.");
+    require(json["version"]==25&&!json["entities"][0].contains("attributes")&&json["entities"][0]["effects"]["starting"].size()==1,"Schema25 retained authored membership or omitted ordered references.");
 }
 void deterministicReadAndCurrentSubsets() {
     Project project;const std::string id="assets/scenes/legacy.crimson-scene";const auto bytes=legacy().dump(2);writeFileAtomically(project.root/id,bytes);
@@ -116,7 +116,7 @@ void historyPlayAndPersistence() {
     require(removeSceneComponent(document,17,SceneComponentKind::Effects),document.status());const auto refs=document.historicalGameplayEffectReferences();
     require(std::find(refs.begin(),refs.end(),effect->id)!=refs.end()&&document.undo(),"Historical references omitted a removed effect.");
     require(document.save("Materialized conversion"),document.status());const auto file=sceneAssetPath(project.root,document.assetId());
-    require(Json::parse(read(file))["version"]==24&&loadGameplayEffectAsset(project.root,effect->id)==*effect&&!document.gameplayEffect(effect->id),"Scene save did not materialize its pending definition and retire staged resolution.");
+    require(Json::parse(read(file))["version"]==25&&loadGameplayEffectAsset(project.root,effect->id)==*effect&&!document.gameplayEffect(effect->id),"Scene save did not materialize its pending definition and retire staged resolution.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId())&&!reopened.dirty()&&reopened.scene().find(copy)->effects==repeated.effects&&reopened.stagedGameplayEffects().empty(),"Current scene reopened with a second conversion or lost application order.");
     require(reopened.save("Materialized copy",true),reopened.status());SceneDocument copied(project.root);
     require(copied.load(reopened.assetId())&&copied.scene().find(17)->effects==repeated.effects,"Save As changed references or duplicated migrated definitions.");

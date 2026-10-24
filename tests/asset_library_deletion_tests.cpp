@@ -1321,7 +1321,7 @@ void gameplayEffectDeletion() {
     SceneDocument active(p.root);const auto actor=active.createEnemy("Saved effect owner");auto value=*active.scene().find(actor);
     value.effects->starting=refs({first->id,middle->id,first->id,replacement->id});require(active.updateEntity(actor,value)&&active.save("Effect owners"),active.status());
     const auto currentFormat=nlohmann::json::parse(read(sceneAssetPath(p.root,active.assetId())));
-    require(currentFormat.at("version")==24&&std::none_of(currentFormat.at("entities").begin(),currentFormat.at("entities").end(),[](const auto& entity){return entity.contains("attributes");}),
+    require(currentFormat.at("version")==25&&std::none_of(currentFormat.at("entities").begin(),currentFormat.at("entities").end(),[](const auto& entity){return entity.contains("attributes");}),
         "Current scene wrote an authored attribute membership/value table.");
     SceneDocument other(p.root);const auto otherActor=other.createEnemy("Other owner");value=*other.scene().find(otherActor);
     value.effects->starting=refs({first->id,first->id});require(other.updateEntity(otherActor,value)&&other.save("Other effects"),other.status());

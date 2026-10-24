@@ -94,6 +94,40 @@ EntityId parseId(const Json& value) {
         throw std::runtime_error("Scene has an invalid entity ID.");
     return result;
 }
+std::string paintBase64(std::span<const std::uint8_t> bytes) {
+    constexpr char alphabet[]="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;out.reserve((bytes.size()+2)/3*4);
+    for(std::size_t i=0;i<bytes.size();i+=3){const unsigned a=bytes[i],b=i+1<bytes.size()?bytes[i+1]:0,c=i+2<bytes.size()?bytes[i+2]:0;
+        out+=alphabet[a>>2];out+=alphabet[((a&3)<<4)|(b>>4)];out+=i+1<bytes.size()?alphabet[((b&15)<<2)|(c>>6)]:'=';out+=i+2<bytes.size()?alphabet[c&63]:'=';}
+    return out;
+}
+std::vector<std::uint8_t> readPaintBase64(const Json& json,std::uint32_t count) {
+    if(!json.is_string()||count>MaximumMeshPaintVertices)throw std::runtime_error("Invalid paint encoding or vertex budget.");
+    const auto& value=json.get_ref<const std::string&>();const auto expected=std::size_t(count)*3;
+    if(value.size()!=(expected+2)/3*4)throw std::runtime_error("Paint data length does not match its vertex count.");
+    const auto digit=[](char c)->int {if(c>='A'&&c<='Z')return c-'A';if(c>='a'&&c<='z')return c-'a'+26;if(c>='0'&&c<='9')return c-'0'+52;return c=='+'?62:c=='/'?63:-1;};
+    std::vector<std::uint8_t> bytes;bytes.reserve(expected);
+    for(std::size_t i=0;i<value.size();i+=4){const int a=digit(value[i]),b=digit(value[i+1]),c=digit(value[i+2]),d=digit(value[i+3]);
+        // RGB records always contain a multiple of three bytes; padding is invalid.
+        if(a<0||b<0||c<0||d<0)throw std::runtime_error("Paint data must use canonical RGB8 base64.");
+        bytes.push_back(static_cast<std::uint8_t>((a<<2)|(b>>4)));bytes.push_back(static_cast<std::uint8_t>((b<<4)|(c>>2)));bytes.push_back(static_cast<std::uint8_t>((c<<6)|d));}
+    return bytes;
+}
+SceneMeshPaint readMeshPaint(const Json& json) {
+    if(!json.is_object())throw std::runtime_error("Mesh paint must be an object.");
+    SceneMeshPaint paint;paint.recipeVersion=readCollisionBits(json.at("recipe"));paint.subdivisionLevel=readCollisionBits(json.at("level"));
+    if(paint.recipeVersion!=MeshPaintRecipeVersion||paint.subdivisionLevel>MaximumMeshPaintLevel)throw std::runtime_error("Unsupported mesh paint recipe or subdivision level.");
+    const auto& draws=json.at("draws");if(!draws.is_array()||draws.size()>MaximumMeshPaintVertices)throw std::runtime_error("Invalid paint draw table.");
+    std::uint64_t total{};
+    for(const auto& source:draws){SceneMeshPaintDraw draw;draw.draw=readCollisionBits(source.at("draw"));draw.primitive=readCollisionBits(source.at("primitive"));draw.level=readCollisionBits(source.at("level"));draw.sourceSignature=parseId(source.at("source"));
+        const auto count=readCollisionBits(source.at("vertices"));total+=count;if(!count||total>MaximumMeshPaintVertices)throw std::runtime_error("Entity paint exceeds its vertex budget.");
+        draw.weights=makeMeshPaintPayload(count,readPaintBase64(source.at("rgb8"),count));paint.draws.push_back(std::move(draw));}
+    return paint;
+}
+Json meshPaintJson(const SceneMeshPaint& paint) {
+    Json draws=Json::array();for(const auto& draw:paint.draws)draws.push_back({{"draw",draw.draw},{"primitive",draw.primitive},{"level",draw.level},{"source",hexId(draw.sourceSignature)},{"vertices",draw.weights->vertexCount},{"rgb8",paintBase64(meshPaintBytes(*draw.weights))}});
+    return {{"recipe",paint.recipeVersion},{"level",paint.subdivisionLevel},{"draws",std::move(draws)}};
+}
 SceneDecal readDecal(const Json& json) {
     SceneDecal decal;decal.asset=json.at("asset").get<AssetRef<DecalAsset>>();
     const auto& seed=json.at("seed");decal.seed.receiver=parseId(seed.at("receiver"));
@@ -348,7 +382,7 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
     const auto contents=readText(path);
     const Json json=Json::parse(contents);
     const auto version=json.at("version").get<int>();
-    if ((version<1 || version>24) || json.at("type") != "crimson-scene")
+    if ((version<1 || version>25) || json.at("type") != "crimson-scene")
         throw std::runtime_error("Unsupported scene file type or version.");
     SceneSnapshot result; result.fingerprint=fingerprint(contents);
     std::unordered_map<EntityId,AttributeSeeds> legacyAttributes;
@@ -385,6 +419,7 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
         record.local = entity.at("local").get<Mat4>();
         if(version>=14)record.visible=entity.value("visible",true);
         if (entity.contains("model")) record.model=entity.at("model").get<AssetRef<ModelAsset>>();
+        if(version>=25&&entity.contains("meshPaint"))record.meshPaint=readMeshPaint(entity.at("meshPaint"));
         if(entity.contains("primitive")) {
             const auto& source=entity.at("primitive");
             if(!source.is_object() || !record.model || !isBuiltinModel(record.model->id))
@@ -839,6 +874,7 @@ Json writeScene(const SceneSnapshot& snapshot) {
 
         if (record.model) {
             entity["model"] = *record.model;
+            if(record.meshPaint)entity["meshPaint"]=meshPaintJson(*record.meshPaint);
             if(record.primitive) {
                 const auto& primitive=*record.primitive;
                 const auto base=canonicalAssetId(record.model->id);
@@ -899,7 +935,7 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if(record.quaderGenerated) {const auto& q=*record.quaderGenerated;entity["quaderGenerated"]={{"owner",hexId(q.owner)},{"sourceKey",q.sourceKey}};}
         entities.push_back(std::move(entity));
     }
-    Json result{{"version",24},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
+    Json result{{"version",25},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
         {"settings",{{"activeEnvironment",hexId(snapshot.properties.activeEnvironment)},
             {"activeCamera",hexId(snapshot.properties.activeCamera)},{"playerCharacter",hexId(snapshot.properties.playerCharacter)}}}};
     if(isAssetUuid(snapshot.id))result["id"]=snapshot.id;
@@ -921,8 +957,8 @@ enum EntityField : uint64_t {
     OutlinerStyleField=1ull<<28,NavigationVolumeField=1ull<<29,EnemyField=1ull<<30,
     // Bit31 was authored Attributes; it is permanently reserved.
     TagsField=1ull<<32,EffectsField=1ull<<33,MeshShadingField=1ull<<34,PrimitiveMeshField=1ull<<35,DecalField=1ull<<36,ReceiveDecalsField=1ull<<37,
-    ModelRagdollField=1ull<<38,
-    AllEntityFields=((1ull<<39)-1)&~(1ull<<31)
+    ModelRagdollField=1ull<<38,MeshPaintField=1ull<<39,
+    AllEntityFields=((1ull<<40)-1)&~(1ull<<31)
 };
 enum PropertyField : uint32_t { ActiveEnvironment=1u<<0,ActiveCamera=1u<<1,PlayerCharacter=1u<<2 };
 template<class T> bool equalLight(const std::optional<T>& a,const std::optional<T>& b) {
@@ -944,6 +980,7 @@ uint64_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.modelRagdoll!=b.modelRagdoll)fields|=ModelRagdollField;
     if(a.meshShading!=b.meshShading)fields|=MeshShadingField;
     if(a.primitive!=b.primitive)fields|=PrimitiveMeshField;
+    if(a.meshPaint!=b.meshPaint)fields|=MeshPaintField;
     if(a.decal!=b.decal)fields|=DecalField;if(a.receiveDecals!=b.receiveDecals)fields|=ReceiveDecalsField;
     if(a.visible!=b.visible)fields|=VisibleField;
     if(a.movement!=b.movement)fields|=MotorField;
@@ -973,6 +1010,7 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint64_t fields)
     if(fields&ModelRagdollField)target.modelRagdoll=source.modelRagdoll;
     if(fields&MeshShadingField)target.meshShading=source.meshShading;
     if(fields&PrimitiveMeshField)target.primitive=source.primitive;
+    if(fields&MeshPaintField)target.meshPaint=source.meshPaint;
     if(fields&DecalField)target.decal=source.decal;if(fields&ReceiveDecalsField)target.receiveDecals=source.receiveDecals;
     if(fields&VisibleField)target.visible=source.visible;
     if(fields&MotorField)target.movement=source.movement;
@@ -1204,6 +1242,14 @@ void UndoRedoManager::push(SceneCommand command) {
     commands_.push_back(std::move(command));
     state_ = commands_.back().afterState;
     if (commands_.size() > MaximumEntries) commands_.erase(commands_.begin());
+    // Account shared immutable pages once, even when unchanged payloads appear
+    // in many transform commands. Remove whole old commands under pressure.
+    std::unordered_map<const MeshPaintPage*,std::size_t> references;
+    const auto pages=[&](const SceneCommand& entry,const auto& visit){for(const auto& change:entry.entities)for(const auto* record:{&change.before,&change.after})if(*record&&(*record)->meshPaint)for(const auto& draw:(*record)->meshPaint->draws)if(draw.weights)for(const auto& page:draw.weights->pages)if(page)visit(page.get());};
+    for(const auto& entry:commands_)pages(entry,[&](const auto* page){++references[page];});
+    constexpr std::size_t paintHistoryBytes=128ull*1024*1024;
+    std::size_t first=0;while(commands_.size()-first>1&&references.size()*sizeof(MeshPaintPage)>paintHistoryBytes){pages(commands_[first++],[&](const auto* page){const auto found=references.find(page);if(--found->second==0)references.erase(found);});}
+    if(first)commands_.erase(commands_.begin(),commands_.begin()+static_cast<std::ptrdiff_t>(first));
     cursor_ = commands_.size();
 }
 
@@ -1644,6 +1690,7 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
                 record.outlinerStyle=previous->outlinerStyle;
                 preserveAuthoredActorComponents(record,*previous);
                 if(record.model && previous->model) {
+                    record.meshPaint=previous->meshPaint;
                     record.lightingScopes=previous->lightingScopes;
                     record.meshShading=previous->meshShading;
                     if(remapMaterials)record.modelMaterials=remapMaterials(*previous,record);

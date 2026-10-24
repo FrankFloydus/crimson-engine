@@ -7,6 +7,7 @@
 #include "ContentStorage.h"
 #include "resources/AssetId.h"
 #include "MaterialAsset.h"
+#include <crimson/renderer/forward/MaterialGraphShader.h>
 #include "ParticleAsset.h"
 #include "DecalAsset.h"
 #include "NavigationAgentProfile.h"
@@ -90,6 +91,7 @@ public:
     std::shared_ptr<const ModelAsset> findModel(const std::string& id,const std::optional<PrimitiveMeshSettings>& primitive={}) const;
     std::shared_ptr<const MaterialAsset> findMaterial(const std::string& id) const;
     std::uint64_t materialRevision(const std::string& id) const;
+    std::shared_ptr<const MaterialGraph> resolvedMaterialGraph(const std::shared_ptr<const MaterialGraph>& graph) const {return graphCache(graph).resolved;}
     std::string materialDiagnostic(const std::string& id) const;
     std::shared_ptr<const PreparedParticleMaterial> preparedParticleMaterial(const std::string& id) const;
     ModelMaterialTextures materialPreviewBindings(const MaterialAsset& material,std::uint32_t textureEdge=512) const;
@@ -115,9 +117,11 @@ public:
         if(active!=particleDocumentReferences_||history!=particleDocumentHistory_)++catalogRevision_;
         particleDocumentReferences_=std::move(active);particleDocumentHistory_=std::move(history);
     }
-    void setMaterialDocumentReferences(std::vector<std::string> active,std::vector<std::string> history) {
-        if(active!=materialDocumentReferences_||history!=materialDocumentHistory_)++catalogRevision_;
+    void setMaterialDocumentReferences(std::vector<std::string> active,std::vector<std::string> history,
+        std::vector<std::string> materials={},std::vector<std::string> materialHistory={}) {
+        if(active!=materialDocumentReferences_||history!=materialDocumentHistory_||materials!=blendDocumentReferences_||materialHistory!=blendDocumentHistory_)++catalogRevision_;
         materialDocumentReferences_=std::move(active);materialDocumentHistory_=std::move(history);
+        blendDocumentReferences_=std::move(materials);blendDocumentHistory_=std::move(materialHistory);
     }
     const std::filesystem::path& projectRoot() const { return projectRoot_; }
     std::shared_ptr<const DecalAsset> findDecal(const std::string& id) const;
@@ -288,6 +292,7 @@ private:
     std::uint64_t nextMaterialRevision_{1};
     std::string materialDocumentId_;
     std::vector<std::string> particleDocumentReferences_,particleDocumentHistory_,materialDocumentReferences_,materialDocumentHistory_;
+    std::vector<std::string> blendDocumentReferences_,blendDocumentHistory_;
     ResourceManager* resources_{};
     std::unique_ptr<AsyncImports> asyncImports_;
     std::unique_ptr<TextureStreamer> textureStreamer_;
@@ -363,6 +368,10 @@ private:
         std::unordered_map<std::string,std::uint64_t>&,CachedImageRequestInfo* = nullptr,bool allowStart=true) const;
     struct GraphShaderCache {
         std::weak_ptr<const MaterialGraph> source;
+        MaterialGraphSourceSet sources;
+        std::vector<std::pair<std::string,std::uint64_t>> sourceRevisions;
+        std::shared_ptr<const MaterialGraph> resolved;
+        std::uint64_t dependencySignature{};
         std::shared_ptr<const MaterialGraphShader> shader;
         std::optional<std::uint8_t> requiredUvs;
         bool fixedSurfaceChecked{};

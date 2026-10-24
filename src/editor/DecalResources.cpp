@@ -2,6 +2,7 @@
 #include "decals/DecalResolve.h"
 #include "decals/DecalCache.h"
 #include "assets/AssetLibrary.h"
+#include "assets/MaterialGraph.h"
 #include "resources/StreamingModel.h"
 #include <algorithm>
 #include <cstring>
@@ -33,13 +34,18 @@ std::shared_ptr<const DecalPatchData> renderPatch(const decals::DecalPatch&cpu,u
     }return result;
 }
 }
-DecalResources::DecalResources(AssetLibrary&assets,ResourceManager&resources):assets_(assets),resources_(resources){}
+DecalResources::DecalResources(AssetLibrary&assets,ResourceManager&resources):assets_(assets),resources_(resources),meshPaint_(assets,resources){}
 DecalSourceResult DecalResources::modelSurface(const ExtractedModel&m,ResourcePriority priority){
-    DecalSourceResult result;if(assets_.references().resolve(m.assetId).empty()){result.failed=true;result.diagnostic="Missing surface model.";return result;}const auto model=assets_.findModel(m.assetId,m.primitive);
+    DecalSourceResult result;if(assets_.references().resolve(m.assetId).empty()){result.failed=true;result.diagnostic="Missing surface model.";return result;}auto model=assets_.findModel(m.assetId,m.primitive);
     result.diagnostic=assets_.modelDiagnostic(m.assetId);
     if(!model||assets_.modelLoading(m.assetId)||!result.diagnostic.empty()){result.failed=!result.diagnostic.empty();if(result.diagnostic.empty())result.diagnostic="Preparing surface geometry.";return result;}
     result.revision=std::max<uint64_t>(1,assets_.modelRevision(m.assetId));
     result.fingerprint=model->stream?model->stream->key:assets_.modelFingerprint(m.assetId);Hash identity;identity.add(model->id);identity.add(result.fingerprint);
+    bool painted=m.meshPaint.has_value();
+    try{if(!painted)for(const auto& material:assets_.resolvedModelMaterials(*model,m.materialOverrides))if(material.graph&&materialOutputNode(*material.graph).output.shading==MaterialShading::BlendPbr){painted=true;break;}}
+    catch(const std::exception& error){result.failed=true;result.diagnostic=error.what();return result;}
+    if(painted){const auto prepared=meshPaint_.prepare(m,priority);if(!prepared.ready){result.failed=prepared.failed;result.diagnostic=prepared.diagnostic;return result;}model=prepared.asset;result.revision=prepared.revision;result.fingerprint=prepared.signature;identity=Hash{};identity.add(model->id);identity.add(result.fingerprint);}
+    result.model=model;
     // The stream key covers original primitive attributes. Draw occurrence
     // transforms are separate metadata and must also invalidate the source.
     for(const auto&draw:model->draws){identity.add(draw.primitive);identity.add(draw.transform);}result.fingerprint=identity.value;
@@ -72,7 +78,7 @@ DecalPlacementResult DecalResources::resolvePlacement(const Scene&scene,uint64_t
     if(!found->animation.asset.empty())return fail("Animated decal receivers are unsupported.");
     const auto source=modelSurface(*found,ResourcePriority::Placement);if(revision&&source.revision&&revision!=source.revision)return fail("Surface changed; place the decal again.");
     if(!source.current){result.diagnostic=source.diagnostic;result.failed=source.failed;return result;}
-    const auto model=assets_.peekModel(found->assetId,found->primitive);if(!model)return fail("Missing surface.");
+    const auto model=source.model;if(!model)return fail("Missing surface.");
     try{std::string reason;if(!eligibleDraw(*source.surface,draw,primitive,eligibleSlots(assets_,*found,*model,&reason))){result.failed=true;result.diagnostic=reason.empty()?"Unsupported receiver material.":std::move(reason);return result;}}catch(const std::exception&e){result.failed=true;result.diagnostic=e.what();return result;}
     const auto hit=decals::resolveModelSurfaceHit(*source.surface,entity,found->world,draw,primitive,point);
     if(!hit.hit)return fail(hit.status==decals::SurfaceHitStatus::Ambiguous?"Ambiguous surface.":"Visible surface no longer matches its source.");
@@ -107,6 +113,7 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
         std::vector<bool>slots;try{slots=eligibleSlots(assets_,m,*model,&unsupported);}catch(const std::exception&e){unsupported=e.what();continue;}
         if(std::none_of(slots.begin(),slots.end(),[](bool value){return value;}))continue;
         const auto source=modelSurface(m,priority);if(!source.current){if(source.failed){unsupported=source.diagnostic;continue;}pending(source.diagnostic);return;}
+        if(source.model)try{slots=eligibleSlots(assets_,m,*source.model,&unsupported);}catch(const std::exception& e){unsupported=e.what();continue;}
         signature.add(m.id);signature.add(m.world);signature.add(source.fingerprint);signature.add(m.meshShading);for(bool eligible:slots)signature.add(eligible);
         revisions.emplace(m.id,source.revision);bindings.add(m.id);bindings.add(source.revision);
         candidates.push_back({source.surface,m.world,m.id,source.revision,std::move(slots)});out.receivers.push_back(m.id);
@@ -167,6 +174,6 @@ DecalPreparedScene DecalResources::prepareTransient(const Scene&scene,const Extr
 std::string DecalResources::status(EntityId id)const{const auto it=patches_.find(id);return it==patches_.end()?std::string{}:it->second.status;}
 std::shared_ptr<const DecalPatchData> DecalResources::patch(EntityId id)const{const auto it=patches_.find(id);return it==patches_.end()||!it->second.current?nullptr:it->second.render;}
 std::optional<Mat4> DecalResources::surfaceFrame(EntityId id)const{const auto it=patches_.find(id);return it==patches_.end()?std::nullopt:it->second.surfaceFrame;}
-void DecalResources::collect(){const auto now=std::chrono::steady_clock::now();const auto grace=resources_.config().idleGrace;std::erase_if(sources_,[&](const auto&entry){return now-entry.second.used>grace;});std::erase_if(patches_,[&](const auto&entry){return now-entry.second.used>grace;});}
-void DecalResources::clear(){patches_.clear();sources_.clear();}
+void DecalResources::collect(){meshPaint_.collect();const auto now=std::chrono::steady_clock::now();const auto grace=resources_.config().idleGrace;std::erase_if(sources_,[&](const auto&entry){return now-entry.second.used>grace;});std::erase_if(patches_,[&](const auto&entry){return now-entry.second.used>grace;});}
+void DecalResources::clear(){patches_.clear();sources_.clear();meshPaint_.clear();}
 }

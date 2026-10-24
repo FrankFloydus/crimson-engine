@@ -23,7 +23,7 @@ bool receiverMaterialEligible(const ModelMaterial&m,std::string* diagnostic){
     if(m.graph&&!m.graph->empty()){
         const auto found=std::find_if(m.graph->nodes.begin(),m.graph->nodes.end(),[](const auto&node){return node.kind==MaterialNodeKind::Output;});
         if(found==m.graph->nodes.end())return reject("Invalid receiver material output.");const auto&output=found->output;
-        if(output.shading!=MaterialShading::StandardPbr)return reject("Unlit receivers are unsupported.");
+        if(!materialShadingLit(output.shading))return reject("Unlit receivers are unsupported.");
         if(output.blend!=MaterialBlend::Opaque&&output.blend!=MaterialBlend::Mask)return reject("Transparent receivers are unsupported.");
         if(output.tessellation.enabled)return reject("Displaced receivers are unsupported.");
         if(output.opacity<1)return reject("Partially faded receivers are unsupported.");

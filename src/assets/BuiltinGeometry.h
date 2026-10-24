@@ -50,7 +50,9 @@ inline std::shared_ptr<const ModelAsset> create(const std::string& id,const Prim
                 vertex.normal=face.normal; vertex.tangent={face.u[0],face.u[1],face.u[2],1};
                 vertex.uv0=vertex.uv1={u,v}; primitive.vertices.push_back(vertex);
             }
+            const auto triangle=static_cast<std::uint32_t>(primitive.indices.size()/3);
             primitive.indices.insert(primitive.indices.end(),{firstVertex,firstVertex+1,firstVertex+2,firstVertex+1,firstVertex+3,firstVertex+2});
+            primitive.sourceFaces.push_back({{firstVertex,firstVertex+1,firstVertex+3,firstVertex+2},{triangle,triangle+1},4});
         }
     } else if(base==BuiltinSphereModelId) {
         const auto sectors=settings.sides,rings=settings.rings;
@@ -72,9 +74,11 @@ inline std::shared_ptr<const ModelAsset> create(const std::string& id,const Prim
         }
         for(std::uint32_t row=0;row<rings;++row)for(std::uint32_t col=0;col<sectors;++col) {
             const auto a=row*(sectors+1)+col,b=(row+1)*(sectors+1)+col;
+            const auto triangle=static_cast<std::uint32_t>(primitive.indices.size()/3);
             // Each pole has one triangle per sector, without collapsed faces.
             if(row>0)primitive.indices.insert(primitive.indices.end(),{a,a+1,b});
             if(row<rings-1)primitive.indices.insert(primitive.indices.end(),{a+1,b+1,b});
+            if(row>0&&row<rings-1)primitive.sourceFaces.push_back({{a,a+1,b+1,b},{triangle,triangle+1},4});
         }
     } else {
         const auto sides=settings.sides;
@@ -90,7 +94,9 @@ inline std::shared_ptr<const ModelAsset> create(const std::string& id,const Prim
         }
         for(std::uint32_t col=0;col<sides;++col) {
             const auto a=col,b=sides+1+col;
+            const auto triangle=static_cast<std::uint32_t>(primitive.indices.size()/3);
             primitive.indices.insert(primitive.indices.end(),{a,a+1,b,a+1,b+1,b});
+            primitive.sourceFaces.push_back({{a,a+1,b+1,b},{triangle,triangle+1},4});
         }
         // Separate cap vertices preserve the hard rim and planar UV basis.
         for(const float sign:{1.f,-1.f}) {

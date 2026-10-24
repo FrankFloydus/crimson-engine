@@ -13,6 +13,11 @@ class SceneDocument;
 class AssetLibrary;
 namespace shared { class Renderer; } using Renderer=shared::Renderer;
 class QuaderBridge;
+struct EntityRecord;
+struct SceneMeshPaint;
+using MeshPaintSubdivisionQuery=std::function<bool(const EntityRecord&,std::uint32_t,SceneMeshPaint&,std::string&)>;
+// The resource owner prepares/resamples immutable geometry off the UI path.
+void setMeshPaintSubdivisionQuery(SceneDocument&,MeshPaintSubdivisionQuery);
 struct NavigationInspectorContext {
     std::string* previewProfile{};
     std::string* openProfile{};

@@ -1564,9 +1564,9 @@ ModelMaterialTextures AssetLibrary::graphMaterialBindings(const std::shared_ptr<
         if(cached.fixedSurface)return materialBindings(*cached.fixedSurface,textureEdge,priority);
     }
     if(!cached.shader) {
-        MaterialAsset source;source.id=DefaultMaterialId;source.name="Material graph";source.graph=*graph;
+        MaterialAsset source;source.id=derivedAssetId(DefaultMaterialId,"runtime-graph");source.name="Material graph";source.graph=*graph;
         canonicalizeMaterialAsset(source);
-        cached.shader=std::make_shared<MaterialGraphShader>(generateMaterialGraphShader(source));
+        cached.shader=std::make_shared<MaterialGraphShader>(generateMaterialGraphShader(source,cached.sources));
     }
     return preparedGraphBindings(*graphPrograms_,*cached.shader,*graph,textureEdge,priority);
 }
@@ -1578,14 +1578,28 @@ bool AssetLibrary::materialCompatible(const std::shared_ptr<const MaterialAsset>
     materialCompatibility_[material.get()]={material,compatible};return compatible;
 }
 AssetLibrary::GraphShaderCache& AssetLibrary::graphCache(const std::shared_ptr<const MaterialGraph>& graph) const {
+    MaterialGraphSourceSet sources;
+    std::vector<std::pair<std::string,std::uint64_t>> revisions;
+    for(const auto& id:materialGraphMaterialReferences(*graph,true)) {
+        const auto source=findMaterial(id);
+        if(!source)throw std::runtime_error("Blend source material is unavailable: "+id);
+        if(!blendMaterialSourceCompatible(*source))throw std::runtime_error("Blend layers require solid Lit materials without tessellation: "+source->name);
+        sources.push_back(source);revisions.emplace_back(source->id,materialRevision(id));
+    }
     auto found=graphShaderCache_.find(graph.get());
-    if(found!=graphShaderCache_.end()&&!found->second.source.expired())return found->second;
+    if(found!=graphShaderCache_.end()&&!found->second.source.expired()&&found->second.sourceRevisions==revisions)return found->second;
     if(graphShaderCache_.size()>128)std::erase_if(graphShaderCache_,[](const auto& entry){return entry.second.source.expired();});
-    auto& cached=graphShaderCache_[graph.get()];cached={};cached.source=graph;return cached;
+    GraphShaderCache next;next.source=graph;next.sources=std::move(sources);next.sourceRevisions=std::move(revisions);
+    if(!next.sources.empty()||materialOutputNode(*graph).output.shading==MaterialShading::BlendPbr) {
+        MaterialAsset parent;parent.id=derivedAssetId(DefaultMaterialId,"runtime-graph");parent.graph=*graph;
+        const auto resolved=resolveMaterialGraphSourcesData(parent,next.sources,material_graph_image_policy());
+        next.resolved=resolved.graph;next.dependencySignature=resolved.dependencySignature;
+    } else next.resolved=graph;
+    auto& cached=graphShaderCache_[graph.get()];cached=std::move(next);return cached;
 }
 std::uint8_t AssetLibrary::requiredGraphUvs(const std::shared_ptr<const MaterialGraph>& graph) const {
     auto& cached=graphCache(graph);
-    if(!cached.requiredUvs)cached.requiredUvs=materialGraphRequiredUvs(*graph);
+    if(!cached.requiredUvs)cached.requiredUvs=materialGraphRequiredUvs(*cached.resolved);
     return *cached.requiredUvs;
 }
 
@@ -1627,6 +1641,7 @@ ModelMaterialTextures AssetLibrary::preparedGraphBindings(MaterialGraphPrograms&
     streaming::detail::hash(packet->signature,packet->tessellation.maxFactor);
     streaming::detail::hash(packet->signature,packet->tessellation.heightLod);
     streaming::detail::hash(packet->signature,generated.runtimeDefinitionSignature);
+    streaming::detail::hash(packet->signature,generated.dependencySignature);
     std::unordered_map<std::string,std::uint64_t> sourceVersions;
     for(auto& binding:packet->sources) {
         const auto& sampler=binding.sampler;const auto slot=binding.slot;
@@ -2044,7 +2059,16 @@ std::unique_ptr<MaterialGraphPrograms> AssetLibrary::createMaterialNodePreviewPr
     return graphPrograms_?graphPrograms_->createSibling():nullptr;
 }
 ModelMaterialTextures AssetLibrary::materialNodePreviewBindings(MaterialGraphPrograms& owner,const MaterialAsset& material,MaterialGraphPreviewTarget target,std::uint32_t textureEdge) const {
-    return preparedGraphBindings(owner,generateMaterialGraphPreviewShader(material,target),material.graph,std::max(1u,textureEdge),ResourcePriority::Selected);
+    auto preview=material;
+    if(const auto* node=findMaterialNode(preview.graph,target.node);node&&node->kind==MaterialNodeKind::MaterialReference&&target.pin==MaterialPin::Surface) {
+        const auto root=materialOutputNode(preview.graph).id;
+        auto& output=materialOutputNode(preview.graph).output;
+        output.shading=MaterialShading::BlendPbr;output.blend=MaterialBlend::Opaque;output.tessellation.enabled=false;output.refraction=false;
+        std::erase_if(preview.graph.links,[&](const auto& link){return link.toNode==root;});
+        preview.graph.links.push_back({preview.graph.nextLinkId++,target.node,root,MaterialPin::Surface,MaterialPin::Base});
+    }
+    const auto sources=resolveMaterialSources(preview,[&](const auto& id){return findMaterial(id);});
+    return preparedGraphBindings(owner,generateMaterialGraphPreviewShader(material,target,sources),material.graph,std::max(1u,textureEdge),ResourcePriority::Selected);
 }
 
 void AssetLibrary::loadMaterial(Material& material) {
@@ -2284,6 +2308,8 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
         visitMaterialTextures(material->surface,false,[&](const auto& id,MaterialTextureRole role){
             usages.push_back({id,material->id,material->name,role==MaterialTextureRole::Normal?"Normal texture":"Graph texture",false,false,!usableMaterials.contains(material->id)});
         });
+        for(const auto& id:materialMaterialReferences(*material))
+            usages.push_back({id,material->id,material->name,"Blend material layer",false,false,!usableMaterials.contains(material->id)});
     }
     for(const auto& entry:catalog_)if(entry.kind==AssetKind::Particle){const auto effect=loadParticleAsset(projectRoot_,entry.id);
         if(!effect.emitter.material.empty()&&!isEngineAssetId(effect.emitter.material.id))usages.push_back({effect.emitter.material.id,effect.id,effect.name,"Particle material"});}
@@ -2309,6 +2335,8 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     for(const auto& id:particleDocumentReferences_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,particleDocumentId_,"Open particle effect","Particle material",true,false});
     for(const auto& id:particleDocumentHistory_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,particleDocumentId_,"Open particle effect","Particle material undo / redo history",true,true});
     for(const auto& id:materialDocumentReferences_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,materialDocumentId_,"Open material","Material texture",true,false});
+    for(const auto& id:blendDocumentReferences_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,materialDocumentId_,"Open material","Blend material layer",true,false});
+    for(const auto& id:blendDocumentHistory_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,materialDocumentId_,"Open material","Blend layer undo / redo history",true,true});
     for(const auto& id:materialDocumentHistory_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,materialDocumentId_,"Open material","Material texture undo / redo history",true,true});
     // Inspect lightweight material metadata for every package, including models
     // never opened in the viewport. Authored usage cannot depend on residency.
@@ -2599,6 +2627,14 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
                 const auto replacement=nextReferences.resolveTexture(id,role==MaterialTextureRole::Normal);
                 changed|=replacement!=id;return replacement;
             });
+            for(auto& node:material.graph.nodes)if(node.kind==MaterialNodeKind::MaterialReference&&!node.material.empty()&&
+                deletedIds.contains(references_.resolve(node.material.id))) {
+                const auto replacement=nextReferences.resolveMaterial(node.material.id);
+                const auto definition=findMaterial(replacement);
+                if(!definition||!blendMaterialSourceCompatible(*definition)||definition->id==material.id)
+                    throw std::runtime_error("Blend layers require a solid Lit replacement without tessellation.");
+                changed|=node.material.id!=replacement;node.material.id=replacement;
+            }
             if(changed)canonicalizeMaterialAsset(material);
             if(changed){changes.push_back({entry.id,serializeMaterialAsset(material)});
                 if(entry.id!=materialDocumentId_){auto definition=std::make_shared<MaterialAsset>(std::move(material));preparedAuthoredMaterials[entry.id]={definition,preparedMaterialRevision++,{}};

@@ -60,6 +60,7 @@ struct MeshStorage final {
   std::vector<QuaderBridgeUvInterpolationVertex> uv_interpolation;
   std::vector<uint32_t> indices;
   std::vector<QuaderBridgeSurface> surfaces;
+  std::vector<QuaderBridgeSourceFace> source_faces;
   uint32_t collision_status = QUADER_BRIDGE_COLLISION_DISABLED;
   std::shared_ptr<const std::vector<QuaderBridgeCollisionPoint>> collision_points;
 };
@@ -465,6 +466,7 @@ void build_mesh_snapshot(QuaderBridgeScene &target) {
     const std::vector<MeshPrimitiveSpan> spans = normalized_mesh_primitive_spans(exported);
     std::unordered_map<uint32_t, std::size_t> surface_by_material;
     std::vector<std::vector<uint32_t>> surface_indices;
+    std::vector<std::vector<uint32_t>> surface_triangle_sources;
     for (const MeshPrimitiveSpan &span : spans) {
       require(span.index_count % 3u == 0u,
               "Source material surface does not contain complete triangles.");
@@ -474,9 +476,12 @@ void build_mesh_snapshot(QuaderBridgeScene &target) {
       auto [found, inserted] = surface_by_material.emplace(material, surface_indices.size());
       if (inserted) {
         surface_indices.emplace_back();
+        surface_triangle_sources.emplace_back();
         mesh.surfaces.push_back({.material_index = material});
       }
       std::vector<uint32_t> &indices = surface_indices[found->second];
+      for(uint32_t offset=0;offset<span.index_count;offset+=3)
+        surface_triangle_sources[found->second].push_back((span.index_offset+offset)/3u);
       for (uint32_t offset = 0u; offset < span.index_count; ++offset) {
         const uint32_t index = geometry.indices[span.index_offset + offset];
         require(index < geometry.vertices.size(), "Source mesh index is out of bounds.");
@@ -484,11 +489,23 @@ void build_mesh_snapshot(QuaderBridgeScene &target) {
       }
     }
     mesh.indices.reserve(geometry.indices.size());
+    std::vector<uint32_t> triangle_remap(geometry.indices.size()/3u,UINT32_MAX);
     for (std::size_t index = 0u; index < mesh.surfaces.size(); ++index) {
       mesh.surfaces[index].index_offset = count32(mesh.indices.size());
       mesh.surfaces[index].index_count = count32(surface_indices[index].size());
+      for(std::size_t triangle=0;triangle<surface_triangle_sources[index].size();++triangle)
+        triangle_remap[surface_triangle_sources[index][triangle]]=mesh.surfaces[index].index_offset/3u+count32(triangle);
       mesh.indices.insert(mesh.indices.end(), surface_indices[index].begin(),
                           surface_indices[index].end());
+    }
+    for(const auto& primitive:geometry.primitives)if(primitive.index_count==6u&&
+        std::uint64_t(primitive.index_offset)+6u<=geometry.indices.size()) {
+      const auto corners=quad_interpolation_corners(std::span(geometry.indices).subspan(primitive.index_offset,6u).first<6>());
+      if(!corners)continue;
+      const auto first=triangle_remap[primitive.index_offset/3u],second=triangle_remap[primitive.index_offset/3u+1u];
+      if(first==UINT32_MAX||second==UINT32_MAX)continue;
+      mesh.source_faces.push_back({.vertices={(*corners)[0],(*corners)[1],(*corners)[2],(*corners)[3]},
+          .triangles={first,second},.corner_count=4u});
     }
     target.meshes.push_back(std::move(mesh));
   }
@@ -1091,4 +1108,20 @@ extern "C" QUADER_BRIDGE_EXPORT const QuaderBridgeUvInterpolationApi *
 quader_bridge_get_uv_interpolation_api(uint32_t requested_abi_version) {
   return requested_abi_version == QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION
              ? &kUvInterpolationApi : nullptr;
+}
+
+extern "C" QUADER_BRIDGE_EXPORT const QuaderBridgeTopologyApi *
+quader_bridge_get_topology_api(uint32_t requested_abi_version) {
+  static constexpr QuaderBridgeTopologyApi api{
+    .abi_version=QUADER_BRIDGE_TOPOLOGY_ABI_VERSION,.struct_size=sizeof(QuaderBridgeTopologyApi),
+    .mesh_topology_view=[](const QuaderBridgeScene* scene,uint32_t index,QuaderBridgeTopologyView* out,QuaderBridgeError* error)->int {
+      try {
+        require(scene&&out&&index<scene->meshes.size(),"Invalid mesh topology request.");
+        const auto& faces=scene->meshes[index].source_faces;
+        out->faces=faces.empty()?nullptr:faces.data();out->face_count=count32(faces.size());return 1;
+      } catch(const std::exception& exception) {
+        if(error){const auto text=std::string(exception.what());std::strncpy(error->message,text.c_str(),sizeof(error->message)-1);error->message[sizeof(error->message)-1]='\0';}return 0;
+      }
+    }};
+  return requested_abi_version==QUADER_BRIDGE_TOPOLOGY_ABI_VERSION?&api:nullptr;
 }

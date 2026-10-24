@@ -323,6 +323,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
                               const LightPreviewContext& lights) {
     documentReplaced_=false;
     editingAssets_=&assets;
+    if(document.transient()&&viewport_.vertexPaintEnabled())viewport_.setVertexPaintEnabled(false,document,renderer);
     if(!document.transient() && deferred_!=Pending::None) {
         const auto operation=deferred_;const auto asset=std::move(deferredAsset_);deferred_=Pending::None;
         request(operation,asset,document,settings.camera,renderer);
@@ -359,7 +360,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
         else if(particles.focused())commandTarget_=CommandTarget::Particle;
         else if(const auto* focused=ImGui::GetCurrentContext()->NavWindow) {
             const std::string_view name=focused->RootWindow->Name;
-            if(name=="Viewport" || name=="Outliner" || name=="Inspector")commandTarget_=CommandTarget::Scene;
+            if(name=="Viewport" || name=="Outliner" || name=="Inspector" || name=="Vertex Paint Tool")commandTarget_=CommandTarget::Scene;
             else if(name=="Game")commandTarget_=CommandTarget::Game;
             else if(commandTarget_==CommandTarget::Game)commandTarget_=CommandTarget::Scene;
         } else if(commandTarget_==CommandTarget::Game)commandTarget_=CommandTarget::Scene;
@@ -446,6 +447,13 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
             if (ImGui::MenuItem("Preferences...")) preferences_.open();
             ImGui::EndMenu();
         }
+        if(ImGui::BeginMenu("Tools")) {
+            if(ImGui::MenuItem("Vertex Paint Tool",nullptr,viewport_.vertexPaintEnabled(),!document.transient()&&!opening_&&!deletion_&&pending_==Pending::None)) {
+                finishScenePanelEdit(document);
+                viewport_.setVertexPaintEnabled(!viewport_.vertexPaintEnabled(),document,renderer);
+            }
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("View")) {
             ImGui::MenuItem("Outliner",nullptr,&panels_.outliner);
             ImGui::MenuItem("Inspector",nullptr,&panels_.inspector);
@@ -509,7 +517,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
             ImGui::PopClipRect();
         }
         ImGui::SameLine(playPosition);
-        ImGui::BeginDisabled(document.transactionActive() || opening_ || deletion_ || pending_!=Pending::None || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup));
+        ImGui::BeginDisabled(viewport_.vertexPaintActive() || document.transactionActive() || opening_ || deletion_ || pending_!=Pending::None || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup));
         if(ImGui::Button(playLabel))togglePlay=true;
         ImGui::EndDisabled();
         ImGui::EndMainMenuBar();
@@ -519,6 +527,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     if (resetLayout) { ImGui::DockBuilderRemoveNode(ImGui::GetID("CrimsonDockSpace")); panels_={}; }
     layout();
     preferences_.draw(renderer.graphicsBackend());
+    viewport_.drawVertexPaintControls(document,renderer);
     const auto* context=ImGui::GetCurrentContext();
     const auto preferencesWindow=[&](const ImGuiWindow* window) {
         return preferences_.isOpen() && window && std::string_view(window->RootWindow->Name)=="Preferences";

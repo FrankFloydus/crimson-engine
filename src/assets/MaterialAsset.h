@@ -26,6 +26,9 @@ ModelMaterial materialGraphLegacySurface(const MaterialGraph&,const std::string&
 // them. The caller must also match a normal map's UV to the primitive tangent UV.
 std::optional<ModelMaterial> materialGraphFixedSurface(const MaterialGraph&);
 std::vector<std::string> materialTextureReferences(const MaterialAsset&);
+std::vector<std::string> materialMaterialReferences(const MaterialAsset&);
+bool blendMaterialSourceCompatible(const MaterialAsset&);
+void initializeBlendMaterialGraph(MaterialGraph&);
 
 std::string importedMaterialId(const std::string& modelId, std::size_t index);
 MaterialAsset defaultMaterialAsset();

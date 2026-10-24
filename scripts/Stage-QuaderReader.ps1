@@ -45,9 +45,14 @@ if ($headerText -notmatch '#define QUADER_BRIDGE_ABI_VERSION ([0-9]+)u') { throw
 $abi = [int]$Matches[1]
 if ($headerText -notmatch '#define QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION ([0-9]+)u') { throw 'Cannot identify the reader UV interpolation extension version.' }
 $uvInterpolationAbi = [int]$Matches[1]
+$topologyAbi = 0
+if ($headerText -match '#define QUADER_BRIDGE_TOPOLOGY_ABI_VERSION ([0-9]+)u') { $topologyAbi = [int]$Matches[1] }
 $readerExports = & $dumpbinPath /NOLOGO /EXPORTS $sourceReader
 if ($LASTEXITCODE -ne 0 -or -not ($readerExports -match '\bquader_bridge_get_uv_interpolation_api\b')) {
     throw 'The reader DLL is missing its declared UV interpolation extension export.'
+}
+if ($topologyAbi -gt 0 -and -not ($readerExports -match '\bquader_bridge_get_topology_api\b')) {
+    throw 'The reader DLL is missing its declared source topology extension export.'
 }
 $manifestText = [IO.File]::ReadAllText((Join-Path $nativeRoot 'src/io/project/project_manifest.hpp'))
 if ($manifestText -notmatch 'kQuaderProjectManifestVersion = ([0-9]+)u') { throw 'Cannot identify the supported project manifest version.' }
@@ -163,6 +168,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Cannot fingerprint the native worktree changes
 $provenance = [ordered]@{
     reader_abi = $abi
     uv_interpolation_abi = $uvInterpolationAbi
+    topology_abi = $topologyAbi
     supported_project_manifest_version = $manifestVersion
     supported_scene_schema_version = $sceneSchemaVersion
     configuration = 'Release'

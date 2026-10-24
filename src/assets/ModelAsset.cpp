@@ -657,6 +657,8 @@ void geometry(const GltfSource& data,const aiScene& imported,ModelAsset& asset) 
                 for(std::size_t i=2;i<input.size();++i){uint32_t a=mode==6?input[0]:input[i-2],b=input[i-1],c=input[i];if(mode==5&&(i&1))std::swap(a,b);if(a!=b&&b!=c&&a!=c)p.indices.insert(p.indices.end(),{a,b,c});}
                 check(!p.indices.empty(),"primitive has no nondegenerate triangles");}
             const bool needTangents=!material.triplanar && !material.normalTexture.image.empty() && !tangents;
+            std::vector<std::uint32_t> sourceFaceIndices;
+            if(source.contains("extras")&&source["extras"].contains("crimsonSourceFaces"))sourceFaceIndices=p.indices;
             if(uvInterpolationCoordinates)for(std::size_t triangle=0;triangle<p.indices.size();triangle+=3){
                 const auto& a=p.vertices[p.indices[triangle]];const auto& b=p.vertices[p.indices[triangle+1]];const auto& c=p.vertices[p.indices[triangle+2]];
                 check(a.uvInterpolationMode==b.uvInterpolationMode&&a.uvInterpolationMode==c.uvInterpolationMode&&
@@ -741,6 +743,37 @@ void geometry(const GltfSource& data,const aiScene& imported,ModelAsset& asset) 
             for(std::size_t vertex=0;vertex<p.skinWeights.size();++vertex)for(std::size_t influence=0;influence<MaximumModelJointInfluences;++influence) {
                 const auto& weights=p.skinWeights[vertex];if(weights.weights[influence]<=0)continue;const auto joint=std::size_t(weights.joints[influence]);
                 if(p.skinJointBounds.size()<=joint)p.skinJointBounds.resize(joint+1);math::include(p.skinJointBounds[joint],p.vertices[vertex].position);
+            }
+            if(!sourceFaceIndices.empty()) {
+                const auto& faces=source["extras"]["crimsonSourceFaces"];
+                check(faces.is_array()&&faces.size()<=p.indices.size()/3,"invalid source face provenance");
+                std::vector<bool> owned(p.indices.size()/3);
+                for(const auto& encoded:faces) {
+                    ModelSourceFace face;const auto count=encoded.at("cornerCount").get<unsigned>();
+                    check(count==3||count==4,"unsupported source face corner count");face.cornerCount=static_cast<std::uint8_t>(count);
+                    const auto corners=encoded.at("vertices").get<std::array<std::uint32_t,4>>();
+                    face.triangles=encoded.at("triangles").get<std::array<std::uint32_t,2>>();
+                    for(unsigned triangle=0;triangle<(count==4?2u:1u);++triangle) {
+                        check(face.triangles[triangle]<owned.size()&&!owned[face.triangles[triangle]],"overlapping source face provenance");owned[face.triangles[triangle]]=true;
+                    }
+                    for(unsigned corner=0;corner<count;++corner) {
+                        bool found=false;
+                        for(unsigned triangle=0;triangle<(count==4?2u:1u)&&!found;++triangle)for(unsigned at=0;at<3;++at) {
+                            const auto offset=std::size_t(face.triangles[triangle])*3+at;
+                            if(sourceFaceIndices[offset]==corners[corner]){face.vertices[corner]=p.indices[offset];found=true;break;}
+                        }
+                        check(found,"source face corner is not part of its triangles");
+                    }
+                    // Attribute generation can split one source corner into
+                    // multiple render vertices. Preserve the quad only when
+                    // both triangles still share its four render corners.
+                    bool coherent=true;
+                    for(unsigned triangle=0;triangle<(count==4?2u:1u);++triangle)for(unsigned at=0;at<3;++at) {
+                        const auto vertex=p.indices[std::size_t(face.triangles[triangle])*3+at];
+                        if(std::find(face.vertices.begin(),face.vertices.begin()+count,vertex)==face.vertices.begin()+count)coherent=false;
+                    }
+                    if(coherent)p.sourceFaces.push_back(face);
+                }
             }
             p.sourceVertexCount=p.vertices.size();p.sourceIndexCount=p.indices.size();
             modelMesh.primitives.push_back(static_cast<uint32_t>(asset.primitives.size())); asset.primitives.push_back(std::move(p));

@@ -5,6 +5,7 @@
 #include "SceneComponentKind.h"
 #include "SceneDecal.h"
 #include "PrimitiveMesh.h"
+#include <crimson/renderer/forward/MeshPaint.h>
 #include "LightAuthoring.h"
 #include "crimson-renderer/RenderTypes.h"
 #include <crimson/renderer/forward/MeshShading.h>
@@ -49,6 +50,19 @@ struct SceneModelRagdoll {
     bool startSimulated{};
     bool operator==(const SceneModelRagdoll&) const = default;
 };
+struct SceneMeshPaintDraw {
+    std::uint32_t draw{},primitive{},level{};
+    std::uint64_t sourceSignature{};
+    std::shared_ptr<const MeshPaintPayload> weights;
+    bool operator==(const SceneMeshPaintDraw& other) const {
+        return draw==other.draw&&primitive==other.primitive&&level==other.level&&sourceSignature==other.sourceSignature&&sameMeshPaintPayload(weights,other.weights);
+    }
+};
+struct SceneMeshPaint {
+    std::uint32_t subdivisionLevel{},recipeVersion{MeshPaintRecipeVersion};
+    std::vector<SceneMeshPaintDraw> draws;
+    bool operator==(const SceneMeshPaint&) const = default;
+};
 struct ModelReference {
     AssetRef<ModelAsset> assetId;
     ModelMaterialOverrides materials;
@@ -58,6 +72,7 @@ struct ModelReference {
     MeshShading meshShading{MeshShading::UseMeshNormals};
     std::optional<PrimitiveMeshSettings> primitive;
     SceneModelRagdoll ragdoll;
+    std::optional<SceneMeshPaint> meshPaint;
 };
 // Authored identity only. Playback is transient and reconciled by document
 // generation plus persistent EntityId, never by an EnTT handle.
@@ -249,6 +264,7 @@ struct EntityRecord {
     std::optional<SceneDecal> decal;
     bool receiveDecals{true}; // Per entity, including future visual capabilities.
     SceneModelRagdoll modelRagdoll;
+    std::optional<SceneMeshPaint> meshPaint;
 };
 bool hasSceneComponent(const EntityRecord&,SceneComponentKind);
 std::vector<SceneComponentKind> sceneComponents(const EntityRecord&);

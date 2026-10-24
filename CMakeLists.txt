@@ -100,6 +100,7 @@ target_link_libraries(crimson-scene PUBLIC crimson-math crimson-camera crimson-s
 target_compile_definitions(crimson-scene PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-scene PRIVATE /W4 /permissive- /utf-8)
 target_sources(crimson-scene PRIVATE src/assets/RagdollAsset.cpp src/scene/LightAuthoring.cpp src/runtime/SceneLights.cpp)
+target_sources(crimson-scene PRIVATE src/editor/VertexPaintGesture.cpp)
 
 add_library(crimson-materials src/assets/MaterialGraph.cpp src/assets/GrungeGenerator.cpp src/assets/MaterialAsset.cpp src/editor/MaterialDocument.cpp src/editor/MaterialGraphActions.cpp src/assets/DecalAsset.cpp src/editor/DecalDocument.cpp)
 target_include_directories(crimson-materials PUBLIC src)
@@ -208,7 +209,7 @@ target_compile_definitions(crimson-quader PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-quader PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(crimson-quader PUBLIC crimson-scene crimson-materials crimson-resources PRIVATE crimson-storage nlohmann_json::nlohmann_json bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng)
 
-add_library(crimson-decal-resources src/editor/DecalResources.cpp)
+add_library(crimson-decal-resources src/editor/DecalResources.cpp src/editor/MeshPaintResources.cpp)
 target_include_directories(crimson-decal-resources PUBLIC src)
 target_link_libraries(crimson-decal-resources PUBLIC crimson-decals crimson-scene crimson-materials crimson-resources PRIVATE Crimson::Renderer)
 target_compile_definitions(crimson-decal-resources PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -262,6 +263,7 @@ add_executable(crimson-renderer WIN32
     src/tools/SceneOutlinerColor.cpp
     src/tools/ColliderInspector.cpp
     src/tools/PrimitiveMeshInspector.cpp
+    src/tools/VertexPaintTool.cpp
     src/tools/AssetBrowser.cpp
     src/tools/AssetBrowserPaths.cpp
     src/tools/ParticleEditor.cpp
@@ -783,6 +785,7 @@ if(BUILD_TESTING)
     add_executable(material_graph_shader_tests tests/material_graph_shader_tests.cpp)
     target_link_libraries(material_graph_shader_tests PRIVATE crimson-material-shaders)
     target_compile_options(material_graph_shader_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME material_graph_lowering_core COMMAND material_graph_shader_tests)
     add_test(NAME material_graph_shader_core COMMAND material_graph_shader_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
     # The full historical matrix includes 46 SSR receiver requests as well
     # as image previews, coverage, transmission and native domain stages.
@@ -831,6 +834,22 @@ if(BUILD_TESTING)
     target_compile_options(scene_tests PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(scene_tests PRIVATE crimson-scene crimson-materials)
     add_test(NAME scene_core COMMAND scene_tests)
+    add_executable(mesh_paint_tests tests/mesh_paint_tests.cpp)
+    target_link_libraries(mesh_paint_tests PRIVATE Crimson::Support)
+    target_compile_options(mesh_paint_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME mesh_paint_core COMMAND mesh_paint_tests)
+    add_executable(mesh_paint_scene_tests tests/mesh_paint_scene_tests.cpp)
+    target_link_libraries(mesh_paint_scene_tests PRIVATE crimson-scene)
+    target_compile_options(mesh_paint_scene_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME mesh_paint_scene_core COMMAND mesh_paint_scene_tests)
+    add_executable(vertex_paint_gesture_tests tests/vertex_paint_gesture_tests.cpp)
+    target_link_libraries(vertex_paint_gesture_tests PRIVATE crimson-scene)
+    target_compile_options(vertex_paint_gesture_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME vertex_paint_gesture_core COMMAND vertex_paint_gesture_tests)
+    add_executable(blend_material_host_tests tests/blend_material_host_tests.cpp)
+    target_link_libraries(blend_material_host_tests PRIVATE crimson-material-shaders)
+    target_compile_options(blend_material_host_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME blend_material_host_core COMMAND blend_material_host_tests)
     add_executable(light_authoring_tests tests/light_authoring_tests.cpp)
     target_link_libraries(light_authoring_tests PRIVATE crimson-scene)
     target_compile_options(light_authoring_tests PRIVATE /W4 /permissive- /utf-8)
@@ -1016,6 +1035,21 @@ if(BUILD_TESTING)
     add_test(NAME material_height_render_dx11_core COMMAND material_height_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}" --artifacts "${CMAKE_BINARY_DIR}/diagnostics/material-height-dx11")
     set_tests_properties(material_height_render_core material_height_render_dx11_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 360)
     set_tests_properties(material_height_render_dx11_core PROPERTIES ENVIRONMENT "CRIMSON_TEST_RENDERER=dx11")
+
+    add_executable(blend_material_render_tests tests/blend_material_render_tests.cpp
+        src/crimson-renderer/RendererHost.cpp
+        src/crimson-renderer/Environment.cpp src/crimson-renderer/ImGuiBgfx.cpp
+        src/crimson-renderer/PlatformSurface.cpp
+        src/resources/TextureStreamer.cpp src/resources/ShaderReloadSession.cpp
+        "${CC_SHADER_BASELINE_HEADER}" ${CC_SHADER_HEADERS})
+    target_include_directories(blend_material_render_tests PRIVATE src tests "${CC_GENERATED_DIR}")
+    target_compile_definitions(blend_material_render_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(blend_material_render_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(blend_material_render_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
+    add_test(NAME blend_material_render_core COMMAND blend_material_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}" "${CMAKE_BINARY_DIR}/diagnostics/blend-material")
+    add_test(NAME blend_material_render_dx11_core COMMAND blend_material_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}" "${CMAKE_BINARY_DIR}/diagnostics/blend-material-dx11")
+    set_tests_properties(blend_material_render_core blend_material_render_dx11_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 360)
+    set_tests_properties(blend_material_render_dx11_core PROPERTIES ENVIRONMENT "CRIMSON_TEST_RENDERER=dx11")
 
     add_executable(directional_shadow_quality_tests tests/directional_shadow_quality_tests.cpp
         src/crimson-renderer/RendererHost.cpp
@@ -1354,7 +1388,7 @@ if(BUILD_TESTING)
     target_link_libraries(ssgi_scene_motion_capture PRIVATE crimson-quader crimson-material-gpu crimson-resources crimson-scene crimson-particles crimson-runtime crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode bgfx::bimg imgui::imgui lodepng mikktspace::mikktspace assimp::assimp meshoptimizer::meshoptimizer nlohmann_json::nlohmann_json d3d11)
 endif()
 
-foreach(CC_TARGET crimson-renderer ragdoll_library_tests gpu_streaming_tests float_texture_streaming_tests environment_tests clustered_lighting_gpu_tests material_graph_publication_tests asset_library_deletion_tests native_resource_tests asset_deletion_runtime_tests decal_host_acceptance_tests point_shadow_render_tests material_height_render_tests material_refraction_render_tests decal_generated_render_tests ssr_render_tests directional_shadow_quality_tests material_mapping_render_tests forward_plus_render_tests ssgi_render_tests glow_render_tests ssao_render_tests fog_background_render_tests smaa_render_tests mesh_instancing_render_tests player_parenting_render_tests forward_plus_room_benchmark renderer_backend_benchmark ssgi_scene_motion_capture)
+foreach(CC_TARGET crimson-renderer ragdoll_library_tests gpu_streaming_tests float_texture_streaming_tests environment_tests clustered_lighting_gpu_tests material_graph_publication_tests asset_library_deletion_tests native_resource_tests asset_deletion_runtime_tests decal_host_acceptance_tests point_shadow_render_tests material_height_render_tests blend_material_render_tests material_refraction_render_tests decal_generated_render_tests ssr_render_tests directional_shadow_quality_tests material_mapping_render_tests forward_plus_render_tests ssgi_render_tests glow_render_tests ssao_render_tests fog_background_render_tests smaa_render_tests mesh_instancing_render_tests player_parenting_render_tests forward_plus_room_benchmark renderer_backend_benchmark ssgi_scene_motion_capture)
     if(TARGET ${CC_TARGET})
         target_link_libraries(${CC_TARGET} PRIVATE Crimson::Renderer Crimson::HostShaders d3d12 dxgi)
         target_include_directories(${CC_TARGET} BEFORE PRIVATE "${CRIMSON_FORWARD_GENERATED_DIR}")
