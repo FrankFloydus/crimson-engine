@@ -1407,6 +1407,13 @@ void AssetLibrary::requestImport(SDL_Window* window, const std::string& destinat
     }, callbackOwner, window, filters, 1, nullptr, true);
 }
 
+void AssetLibrary::queueImportFiles(std::span<const std::filesystem::path> sources,const std::string& destinationFolder) {
+    if(sources.empty())return;
+    ImportQueue::Batch batch;batch.destination=destinationFolder;batch.paths.reserve(sources.size());
+    for(const auto& source:sources)batch.paths.push_back(utf8(source));
+    std::lock_guard lock(imports_->mutex);imports_->batches.push_back(std::move(batch));
+}
+
 void AssetLibrary::processImports() {
     if(!textureStreamer_) for(const auto& asset:retiredTextures_){destroyTexture(asset.thumbnail);destroyTexture(asset.colorTexture);destroyTexture(asset.dataTexture);}
     retiredTextures_.clear();

@@ -46,7 +46,8 @@ public:
         simulationSuspended_=suspended;
         if(suspended) { gameInput_.cancel();playShortcuts_.cancel();playActionPending_=PlayAction::None; }
     }
-    bool handleEvent(const SDL_Event& event) {
+    bool handleEvent(const SDL_Event& event,AssetLibrary& assets) {
+        editor_.handleExternalDrop(event,assets);
         playShortcuts_.handleEvent(event);
         if(event.type==SDL_EVENT_KEY_DOWN && event.key.scancode==SDL_SCANCODE_ESCAPE)focusGame_=false;
         const bool cancelCameraKey=event.type==SDL_EVENT_KEY_DOWN && event.key.scancode==SDL_SCANCODE_ESCAPE && !event.key.repeat &&

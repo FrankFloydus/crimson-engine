@@ -95,6 +95,8 @@ Use **View** to show/hide Game, Outliner, Inspector and Asset Browser; **Ctrl+Sp
 
 ## Scenes and entities
 
+The Outliner's **Add** menu stays available above the tree, including in a full or scrolled list. Right-click empty Outliner space for the background Add menu. Click an entity's name/arrow area to interact with its row; left-click blank space beside or below rows to clear selection.
+
 Create a scene with **File → New scene** or the Asset Browser's **New scene** action, then drag model cards into the viewport to add independent entities. New scenes start empty with the built-in environment. Repeated placements share the imported model and GPU geometry while keeping separate transforms. Importing an asset only adds it to the browser. An imported model's internal node hierarchy remains unchanged.
 
 Use **File → Save** or **Ctrl+S** to save the current scene; **Save as...** creates a separate scene asset. Scenes are stored beneath `Content` as versioned `.crimson-scene` files and appear beside other assets. Double-click a scene card, or choose **Open scene** from its context menu, to open it. Browser deletion removes the selected scene file while shared models, textures and other scenes remain available. Switching or closing a dirty scene offers Save, Discard and Cancel.
@@ -532,9 +534,11 @@ These gestures follow Quader's material mini-viewport. **Reset view** restores o
 | W/S while holding right button | Fly forward/back |
 | A/D while holding right button | Strafe |
 | Wheel | Zoom toward/away from the pivot |
-| Wheel while flying | Adjust fly speed; default 25 units/second |
+| Wheel while flying | Increase/decrease fly speed proportionally; default 25 units/second |
 | Middle button while flying | Reset fly speed to 25 |
 | Escape / focus loss | Cancel navigation and release capture |
+
+While holding the right mouse button, each wheel notch multiplies or divides fly speed by 1.25, bounded to 1–1000 units/second. High-resolution wheel movement adjusts it proportionally. The speed changes the current WASD movement immediately; the wheel resumes ordinary zoom when the right button is released.
 
 Rotation, upright behavior, pan scale and reciprocal zoom follow Quader. The XZ grid is at `y=0`, with one-unit minor lines, two-unit major lines and Quader's colored axes. Its colors are independent of exposure. Transform dragging owns its input so manipulating an entity does not move the camera simultaneously.
 
@@ -549,6 +553,8 @@ Create folders through New Folder or the context menu; drag selected assets onto
 Right-click an asset or empty browser space for **Import**. It uses the same importer and the active folder captured when the file dialog opens. Newly imported model, image and material cards are placed together in that physical Content folder; reused assets retain their existing folders and aliases. An asset's context menu also offers **Open at Location**, which reveals its physical file in Windows Explorer, **Copy Path**, which copies that file's absolute parent directory, and **Copy Name**, which copies the displayed name or alias without its extension. Models reveal their retained source document inside the managed package, with the normalized model or package manifest as a fallback. Copy Name remains available for named built-in assets; filesystem actions require an available physical file.
 
 ## Import and assign textures
+
+Drag one or more supported files from Windows Explorer or the Desktop directly into the Asset Browser to import them. Drop onto the browser background for the current Content folder, or onto a folder card or breadcrumb for that folder. This also works when the browser is detached into its own window. The destination is captured when you release the files; importing continues through the same queued importer and per-file results as the Import button.
 
 1. Click **Import** in the Asset Browser or its right-click menu. PNG, JPEG, TGA, BMP and Radiance HDR are supported alongside glTF/GLB models; multiple files and mixed asset types can be selected. HDR images are environment sources. The destination is the active Content folder when the dialog opens. Each file imports independently, with failures reported in the browser.
 2. Files are copied into the active Content folder. Collisions receive a suffix rather than overwriting a different file.

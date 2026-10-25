@@ -151,7 +151,12 @@ void Navigation::update(Camera& camera,const ViewportRegion& region,float dt,boo
         } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
             const float steps = event.wheel.y * (event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1 : 1);
             if (!std::isfinite(steps)) continue;
-            if (flying()) flySpeed_ = std::clamp(flySpeed_+steps,1.0f,1000.0f);
+            if (flying()) {
+                // Keep fractional detents proportional and bound the exponent
+                // before pow so extreme finite events saturate without overflow.
+                const double factor=std::pow(1.25,std::clamp(double(steps),-64.0,64.0));
+                flySpeed_=static_cast<float>(std::clamp(double(flySpeed_)*factor,1.0,1000.0));
+            }
             else if (!region.inputBlocked && region.hovered) camera.zoom(steps);
         }
     }

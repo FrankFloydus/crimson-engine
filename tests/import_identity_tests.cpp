@@ -220,6 +220,48 @@ void asynchronousImportDestinations() {
     for(const auto& [id,entry]:presentation)require(reopened.parent(id)==entry.first&&reopened.name(id)==entry.second,"Import presentation did not persist in browser.json.");
     resources.stop();
 }
+void queuedExternalImports() {
+    Project p;const auto fixture=model_test::writeModelFixtures(p.root/"source");
+    const auto unicode=p.root/"source"/pathFromUtf8("Muro \xc3\xa8.png");fs::copy_file(fixture.image,unicode);
+    const auto sourceModel=readBytes(fixture.glb),sourceImage=readBytes(unicode);
+    ResourceManager resources;AssetLibrary library(p.root,&resources);
+    auto destination=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Dropped files");
+    const auto expectedFolder=destination,other=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Later navigation");
+    auto paths=std::vector<fs::path>{fixture.glb,unicode,p.root/"unsupported.xyz",fixture.gltf.parent_path()};
+    const auto before=library.catalog().size();library.queueImportFiles(paths,destination);
+    paths.clear();destination=other;
+    require(library.catalog().size()==before,"External file delivery imported synchronously instead of queuing its immutable batch.");
+    const auto untilComplete=[&](const char* summary) {
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{30};
+        do {resources.pump();library.processImports();
+            if(library.status().find(summary)!=std::string::npos)return;
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }while(std::chrono::steady_clock::now()<deadline);
+        throw std::runtime_error("The public external import queue did not publish: "+library.status());
+    };
+    untilComplete("of 4 asset(s).");
+    require(library.status().find("Imported 2")!=std::string::npos && library.status().find("unsupported.xyz")!=std::string::npos &&
+        library.status().find("source:")!=std::string::npos,"Mixed external imports lost a usable sibling, unsupported-file error or nonrecursive directory diagnostic.");
+    const auto model=std::find_if(library.catalog().begin(),library.catalog().end(),[](const auto& item){return item.kind==AssetKind::Model;});
+    require(model!=library.catalog().end(),"The public queue omitted its model.");
+    const auto modelId=model->id;std::shared_ptr<const ModelAsset> prepared;
+    const auto readyDeadline=std::chrono::steady_clock::now()+std::chrono::seconds{30};
+    do {
+        resources.pump();library.updateResources(0);prepared=library.findModel(modelId);
+        if(prepared)break;
+        require(library.modelDiagnostic(modelId).empty(),"Queued model preparation failed: "+library.modelDiagnostic(modelId));
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }while(std::chrono::steady_clock::now()<readyDeadline);
+    require(bool(prepared),"Queued model metadata did not publish after its asynchronous seed: "+library.modelDiagnostic(modelId));
+    requireFolder(library,modelImportCards(*prepared),expectedFolder);
+    bool foundImage=false;
+    for(const auto& item:library.catalog())if(item.name=="Muro \xc3\xa8.png") {requireFolder(library,std::array{item.id},expectedFolder);foundImage=true;}
+    require(foundImage && readBytes(fixture.glb)==sourceModel && readBytes(unicode)==sourceImage,"External Unicode import lost its image or changed a Desktop/source file.");
+    library.queueImportFiles(std::array{fixture.glb},other);untilComplete("of 1 asset(s).");
+    require(countKind(library,AssetKind::Model)==1 && library.status().find("reused 1")!=std::string::npos,
+        "Exact-content external reimport bypassed existing import identity reuse.");
+    requireFolder(library,modelImportCards(*prepared),expectedFolder);resources.stop();
+}
 void actualAsyncCatalog() {
     Project p;const auto fixture=model_test::writeModelFixtures(p.root/"source");ResourceManager resources;AssetLibrary library(p.root,&resources);AsyncImports imports(p.root,resources);
     const auto other=p.root/"OTHER.GLB";fs::copy_file(fixture.glb,other);
@@ -256,8 +298,29 @@ void startupMaterialCatalog() {
     for(std::size_t i=0;i<imported->materials.size();++i)manifest["materialAssets"].push_back(shared.id);
     writeFileAtomically(manifestFile,manifest.dump());
     {
+        const auto sharedFile=resolveAssetPath(p.root,shared.id);
+        const auto sharedBefore=readBytes(sharedFile),manifestBefore=readBytes(manifestFile);
         ResourceManager resources;AssetLibrary library(p.root,&resources);
-        require(resources.stats().records==0,"Shared material assignments queued unnecessary model catalog decoding at startup.");
+        // Ordinary models legitimately scan their animation catalog. This
+        // no-animation fixture must publish only its empty catalog packet;
+        // shared material assignments still require no material/geometry load.
+        require(resources.stats().records==1,"Shared material assignments queued work beyond the one animation-catalog scan.");
+        std::vector<ResourcePublication> publications;
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};
+        do {
+            resources.pump();auto current=resources.takePublications();
+            publications.insert(publications.end(),current.begin(),current.end());
+            if(resources.idle())break;
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }while(std::chrono::steady_clock::now()<deadline);
+        const auto stats=resources.stats();
+        require(resources.idle() && stats.records==1 && stats.loads==1 && stats.failures==0 &&
+            stats.cpuBytes==sizeof(ModelAsset),"Shared material startup decoded geometry/materials or failed its empty animation scan.");
+        require(publications.size()==1 && publications.front().kind==ResourceKind::Model &&
+            publications.front().id==imported->id && publications.front().variant=="animation-catalog",
+            "Shared material startup published an unexpected material-catalog or normal-model job.");
+        require(readBytes(sharedFile)==sharedBefore && readBytes(manifestFile)==manifestBefore && library.takeOwnWrites().empty(),
+            "The empty startup animation scan changed authored material/package files or reported sidecar writes.");
         require(library.findMaterial(shared.id)&&countKind(library,AssetKind::Model)==1&&countKind(library,AssetKind::Material)==1,
             "Skipping imported-sidecar migration lost the explicit native material or model catalog.");
         auto changed=shared;changed.name="Updated shared material";saveMaterialAsset(p.root,changed);library.onFileChanged(resolveAssetPath(p.root,shared.id));
@@ -540,7 +603,7 @@ int main(int argc,char** argv) {
         }
         const std::array<std::uint8_t,3> abc{'a','b','c'};
         require(modelImportDataDigest(abc)=="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad","Model import identity must use standard SHA-256.");
-        exactRepeatAndDependencies();legacyAndPublicationRaces();tombstonesFailureAndCancellation();actualAsyncCatalog();synchronousImportDestinations();asynchronousImportDestinations();startupMaterialCatalog();externalDirectoryNotifications();collisionResourceIntegration();
+        exactRepeatAndDependencies();legacyAndPublicationRaces();tombstonesFailureAndCancellation();actualAsyncCatalog();synchronousImportDestinations();asynchronousImportDestinations();queuedExternalImports();startupMaterialCatalog();externalDirectoryNotifications();collisionResourceIntegration();
         std::cout<<"Model import identity, dependency, tombstone, concurrent publication and public catalog checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

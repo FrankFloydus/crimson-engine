@@ -1,5 +1,6 @@
 #include "AssetBrowser.h"
 #include "AssetBrowserPaths.h"
+#include "AssetBrowserDropHitTest.h"
 #include "PropertyReset.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/ImGuiBgfx.h"
@@ -8,6 +9,7 @@
 
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
 #include <cctype>
@@ -91,6 +93,37 @@ std::string pathUtf8(const std::filesystem::path& path) {
 }
 }
 
+void AssetBrowserPanel::handleExternalDrop(const SDL_Event& event,AssetLibrary& assets,bool enabled,bool blocked) {
+    if(!enabled || library_!=&assets || !ImGui::GetCurrentContext()) {externalDrop_.reset();return;}
+    const bool drop=event.type==SDL_EVENT_DROP_BEGIN || event.type==SDL_EVENT_DROP_POSITION ||
+        event.type==SDL_EVENT_DROP_FILE || event.type==SDL_EVENT_DROP_TEXT || event.type==SDL_EVENT_DROP_COMPLETE;
+    int width{},height{};
+    if(drop) {
+        auto* native=SDL_GetWindowFromID(event.drop.windowID);
+        const auto handle=reinterpret_cast<void*>(static_cast<std::uintptr_t>(event.drop.windowID));
+        const auto* viewport=ImGui::FindViewportByPlatformHandle(handle);
+        auto* browser=ImGui::FindWindowByName("Asset Browser");
+        if(native && viewport && browser && browser->WasActive && !browser->Hidden && !browser->Collapsed &&
+            !(SDL_GetWindowFlags(native)&(SDL_WINDOW_HIDDEN|SDL_WINDOW_MINIMIZED)) && SDL_GetWindowSizeInPixels(native,&width,&height) && width>0 && height>0) {
+            // Windows drop positions come directly from ScreenToClient in SDL.
+            // Convert native client pixels into this ImGui viewport's units;
+            // neither desktop origin nor DPI scale is assumed to be one/zero.
+            const ImVec2 point(viewport->Pos.x+event.drop.x*viewport->Size.x/width,
+                viewport->Pos.y+event.drop.y*viewport->Size.y/height);
+            auto& context=*ImGui::GetCurrentContext();
+            const bool popup=!context.OpenPopupStack.empty();
+            if(!popup && !assetBrowserDropHitTest(browser,viewport,point))width=height=0;
+            blocked|=popup || context.ActiveId!=0 || context.MovingWindow || context.DragDropActive;
+        } else width=height=0;
+    }
+    auto delivered=externalDrop_.handle(event,static_cast<float>(width),static_cast<float>(height),blocked);
+    if(!delivered.diagnostic.empty())message_=std::move(delivered.diagnostic);
+    if(delivered.batch) {
+        try {assets.queueImportFiles(delivered.batch->files,delivered.batch->folder);message_.clear();}
+        catch(const std::exception& error) {message_=error.what();}
+    }
+}
+
 void AssetBrowserPanel::beginRename(const std::string& id,const std::string& name) {
     renameId_=id; renameText_.fill(0);
     std::memcpy(renameText_.data(),name.data(),std::min(name.size(),renameText_.size()-1));
@@ -99,8 +132,10 @@ void AssetBrowserPanel::beginRename(const std::string& id,const std::string& nam
 
 BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,int previewSize,Renderer* renderer) {
     BrowserActions actions;
+    externalDrop_.clearTargets();
     actions.previewSize=BrowserPreviewSizes[static_cast<size_t>(EditorPreferences::previewSizeIndex(previewSize))];
     if (library_!=&assets) {
+        externalDrop_.reset();
         library_=&assets; folder_=BrowserCatalog::ContentFolder; renameId_.clear(); message_.clear(); dragIds_.clear(); deferredClick_.clear();
         searchText_.fill(0);filter_=BrowserAssetFilter::All;
         displayedRevision_=0;
@@ -148,6 +183,16 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
     };
 
     if (ImGui::Begin("Asset Browser")) {
+        const auto addExternalTarget=[&](ImRect rect,const std::string& destination) {
+            auto* current=ImGui::GetCurrentWindow();rect.ClipWith(current->ClipRect);
+            const auto* viewport=current->Viewport;
+            if(!viewport || viewport->Size.x<=0 || viewport->Size.y<=0)return;
+            const auto host=static_cast<SDL_WindowID>(reinterpret_cast<std::uintptr_t>(viewport->PlatformHandle));
+            externalDrop_.addTarget(assetBrowserFileDropTarget(host,{rect.Min.x,rect.Min.y,rect.Max.x,rect.Max.y},
+                {viewport->Pos.x,viewport->Pos.y,viewport->Pos.x+viewport->Size.x,viewport->Pos.y+viewport->Size.y},
+                destination,catalog.writableFolder(destination)));
+        };
+        addExternalTarget(ImGui::GetCurrentWindow()->InnerRect,folder_);
         ImGui::BeginDisabled(!writableFolder);
         if (ImGui::Button("Import")) assets.requestImport(window,folder_);
         ImGui::SameLine();
@@ -191,12 +236,14 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
         auto category=static_cast<int>(filter_);
         if(ImGui::Combo("##Asset category",&category,"All\0Materials\0Models (GLB/glTF)\0Textures\0Scenes\0Particles\0Navigation Agent Profiles\0Gameplay Effects\0Animations\0Decals\0Ragdolls\0"))filter_=static_cast<BrowserAssetFilter>(category);
         if (ImGui::SmallButton("Project")) navigate=std::string{};
+        addExternalTarget(ImRect(ImGui::GetItemRectMin(),ImGui::GetItemRectMax()),{});
         receiveMove({});
         if(displayedRevision_!=catalog.revision()||displayedFolder_!=folder_)breadcrumbs_=catalog.breadcrumbs(folder_);
         for (const auto& breadcrumb:breadcrumbs_) {
             ImGui::SameLine(); ImGui::TextDisabled("/"); ImGui::SameLine();
             ImGui::PushID(breadcrumb.id.c_str());
             if (ImGui::SmallButton(breadcrumb.name.c_str())) navigate=breadcrumb.id;
+            addExternalTarget(ImRect(ImGui::GetItemRectMin(),ImGui::GetItemRectMax()),breadcrumb.id);
             receiveMove(breadcrumb.id); ImGui::PopID();
         }
         if (!catalog.status().empty()) ImGui::TextWrapped("%s",catalog.status().c_str());
@@ -249,6 +296,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                 if (editing) ImGui::Dummy(cardSize);
                 else ImGui::InvisibleButton("card",cardSize);
                 const bool cardVisible=ImGui::IsItemVisible();
+                if(item.folder && cardVisible)addExternalTarget(ImRect(origin,end),parentCard?catalog.parent(folder_):item.id);
                 const auto after=ImGui::GetCursorScreenPos();
                 const bool hovered=!editing && ImGui::IsItemHovered();
                 anyHovered|=hovered;
@@ -496,7 +544,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
             ImGui::EndPopup();
         }
         ImGui::EndChild();
-    }
+    } else externalDrop_.reset();
     ImGui::End();
     if (move) {
         try { catalog.move(move->ids,move->destination); assets.noteAssetWrite("assets/browser.json"); selection.clear(); message_.clear(); }

@@ -618,10 +618,50 @@ void navigationFlySpeedAndMovement() {
     nav.handleEvent(key(SDL_EVENT_KEY_DOWN,SDL_SCANCODE_W)); nav.update(camera,region,.1f); same(camera.eye(),initial.eye());
     nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_RIGHT,400,300)); nav.handleEvent(motion(440,340,40,40)); nav.update(camera,region,.1f); require(nav.flying(),"RMB failed to acquire fly"); same(camera.eye(),initial.eye()); same(camera.target,initial.target);
     nav.handleEvent(motion(430,310,10,10)); nav.update(camera,region,.1f); near(length(camera.eye()[0]-initial.eye()[0],camera.eye()[1]-initial.eye()[1],camera.eye()[2]-initial.eye()[2]),2.5,1e-4);
-    nav.handleEvent(wheel(25)); nav.update(camera,region,0); near(nav.flySpeed(),50);
+    const auto beforeWheel=camera;
+    nav.handleEvent(wheel(1)); nav.update(camera,region,.1f); near(nav.flySpeed(),31.25);
+    near(crimson::math::length(crimson::math::subtract(camera.eye(),beforeWheel.eye())),3.125,1e-4);
+    near(camera.distance(),beforeWheel.distance(),1e-4);
     nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_MIDDLE,400,300)); nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_UP,SDL_BUTTON_MIDDLE,400,300)); nav.update(camera,region,0); require(nav.flying(),"MMB speed reset ended fly"); near(nav.flySpeed(),25);
     nav.handleEvent(wheel(-10000)); nav.update(camera,region,0); near(nav.flySpeed(),1); nav.handleEvent(wheel(10000)); nav.update(camera,region,0); near(nav.flySpeed(),1000);
     nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_UP,SDL_BUTTON_RIGHT,400,300)); nav.update(camera,region,.1f); require(!nav.active(),"RMB release did not end fly"); const auto finalEye=camera.eye(); nav.update(camera,region,.1f); same(camera.eye(),finalEye);
+}
+void navigationFlyWheelScaling() {
+    crimson::Camera camera,fractionalCamera;
+    crimson::Navigation nav(nullptr),fractional(nullptr);
+    auto region=viewport();
+    for(auto* owner:{&nav,&fractional})owner->handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_RIGHT,400,300));
+    nav.update(camera,region,0);fractional.update(fractionalCamera,region,0);
+    const auto initial=camera;
+    nav.handleEvent(wheel(1));nav.update(camera,region,0);
+    for(unsigned i=0;i<4;++i)fractional.handleEvent(wheel(.25f));
+    fractional.update(fractionalCamera,region,0);
+    near(nav.flySpeed(),31.25);near(fractional.flySpeed(),nav.flySpeed(),1e-4);
+    same(camera.eye(),initial.eye());same(camera.target,initial.target);
+    same(fractionalCamera.eye(),initial.eye());same(fractionalCamera.target,initial.target);
+    nav.handleEvent(wheel(-1));nav.update(camera,region,0);near(nav.flySpeed(),25);
+    auto flipped=wheel(1);flipped.wheel.direction=SDL_MOUSEWHEEL_FLIPPED;
+    fractional.handleEvent(flipped);fractional.update(fractionalCamera,region,0);near(fractional.flySpeed(),25,1e-4);
+    fractional.handleEvent(wheel(.01f));fractional.update(fractionalCamera,region,0);
+    require(fractional.flySpeed()>25&&fractional.flySpeed()<25.1f,"High-resolution fly wheel input was rounded to an integer detent.");
+    fractional.handleEvent(wheel(-.01f));fractional.update(fractionalCamera,region,0);near(fractional.flySpeed(),25,1e-4);
+    for(float invalid:{std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity(),-std::numeric_limits<float>::infinity(),0.f})
+        nav.handleEvent(wheel(invalid));
+    nav.update(camera,region,0);near(nav.flySpeed(),25);
+    nav.handleEvent(wheel(std::numeric_limits<float>::max()));nav.update(camera,region,0);near(nav.flySpeed(),1000);
+    nav.handleEvent(wheel(-std::numeric_limits<float>::max()));nav.update(camera,region,0);near(nav.flySpeed(),1);
+    nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_MIDDLE,400,300));nav.update(camera,region,0);
+    require(nav.flying(),"Resetting saturated fly speed ended the captured gesture.");near(nav.flySpeed(),25);
+    region.hovered=false;
+    nav.handleEvent(wheel(1));nav.update(camera,region,0);near(nav.flySpeed(),31.25);
+    same(camera.eye(),initial.eye());same(camera.target,initial.target);
+    region.hovered=true;
+    nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_UP,SDL_BUTTON_RIGHT,400,300));nav.update(camera,region,0);
+    const auto distance=camera.distance();nav.handleEvent(wheel(1));nav.update(camera,region,0);
+    require(!nav.active(),"Ordinary wheel zoom acquired fly navigation.");near(nav.flySpeed(),31.25);near(camera.distance(),distance/1.18);
+    nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_RIGHT,400,300));nav.update(camera,region,0);
+    region.inputBlocked=true;nav.handleEvent(wheel(1));nav.update(camera,region,.1f);
+    require(!nav.active(),"Blocked viewport retained fly wheel ownership.");near(nav.flySpeed(),31.25);
 }
 void navigationCancellationAndWheel() {
     for (const bool escape : {false,true}) {
@@ -830,6 +870,7 @@ int main() {
     run("navigation viewport ownership, lazy sphere anchor and release", navigationOwnershipAndAnchor);
     run("navigation latched pan and same-frame pointer edges", navigationPanAndShortEdges);
     run("navigation fly speed, relative start and keyboard gating", navigationFlySpeedAndMovement);
+    run("navigation multiplicative fly wheel, fractional input and captured ownership", navigationFlyWheelScaling);
     run("navigation cancellation precedes motion and wheel is viewport-scoped", navigationCancellationAndWheel);
     run("navigation ignores foreign native window input and cancellation", navigationForeignWindowEvents);
     run("navigation translates desktop coordinates and releases destroyed window ownership", navigationDesktopCoordinatesAndWindowLifetime);

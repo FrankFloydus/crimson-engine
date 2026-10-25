@@ -9,6 +9,7 @@
 #include "CollisionFilterControls.h"
 #include "editor/CollisionLayersDocument.h"
 #include "SceneOutlinerColor.h"
+#include "SceneOutlinerUi.h"
 #include "CameraAuthoringControls.h"
 #include "InspectorTransform.h"
 #include "ColliderInspector.h"
@@ -253,10 +254,10 @@ std::vector<std::string> modelDropIds(const ImGuiPayload& payload,bool batch) {
     return result;
 }
 void reparentTarget(SceneDocument& document, PanelsState& state, EntityId parent, std::function<void()>& action,
-                    AssetLibrary* assets=nullptr,bool actorVisual=false) {
+                    AssetLibrary* assets=nullptr,bool actorVisual=false,const bool* backgroundRowHovered=nullptr) {
     const auto target=parent?document.scene().find(parent):std::nullopt;
     if(parent && (!target || (actorVisual && !target->actor)))return;
-    if (!ImGui::BeginDragDropTarget()) return;
+    if (!(backgroundRowHovered?beginSceneOutlinerBackgroundDropTarget(*backgroundRowHovered):ImGui::BeginDragDropTarget())) return;
     if (const auto* payload=ImGui::AcceptDragDropPayload(EntityPayload,ImGuiDragDropFlags_AcceptBeforeDelivery)) {
         if (payload->DataSize==sizeof(DraggedEntities)) {
             const auto dragged=*static_cast<const DraggedEntities*>(payload->Data);
@@ -1464,10 +1465,11 @@ void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEd
     if((state.lastSelection!=document.selection().ids || state.lastPrimary!=document.selection().primary) && !state.pendingClick)
         state.anchor=document.selection().primary;
     const bool blocked=scenePanelEditBlocked(allowEdits,canceled,document.transactionActive(),owner(state.active)==Panel::Inspector,paintStrokeActive);
-    if(!ImGui::Begin("Outliner")) {
+    if(!ImGui::Begin("Outliner",nullptr,SceneOutlinerWindowFlags)) {
         if(state.active==Edit::InlineName){document.cancel();state.active=Edit::None;state.renameId=NoEntity;}
         ImGui::End();return;
     }
+    drawSceneOutlinerAddMenu(!blocked,[&]{finishScenePanelEdit(document);addMenu(document);});
     if(!blocked && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
        !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) && ImGui::IsKeyPressed(ImGuiKey_F2,false))
         startRename(document,state,document.selection().primary);
@@ -1481,6 +1483,7 @@ void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEd
     for(auto it=children[NoEntity].rbegin();it!=children[NoEntity].rend();++it)pending.push_back({*it});
     std::vector<EntityId> visible;
     std::function<void()> action;
+    bool rowHovered=false;
     while(!pending.empty()) {
         const auto item=pending.back();pending.pop_back();
         if(item.close){ImGui::TreePop();continue;}
@@ -1492,11 +1495,7 @@ void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEd
         ImGui::BeginDisabled(!allowEdits || canceled || (blocked && !ownsRename));
         const bool entitySelected=selected(document,record.id);
         const bool leaf=children[record.id].empty();
-        auto flags=ImGuiTreeNodeFlags_OpenOnArrow|ImGuiTreeNodeFlags_OpenOnDoubleClick|
-            ImGuiTreeNodeFlags_SpanAvailWidth|ImGuiTreeNodeFlags_FramePadding;
-        if(entitySelected)flags|=ImGuiTreeNodeFlags_Selected;
-        if(leaf)flags|=ImGuiTreeNodeFlags_Leaf|ImGuiTreeNodeFlags_NoTreePushOnOpen;
-        if(renaming)flags|=ImGuiTreeNodeFlags_AllowOverlap;
+        const auto flags=sceneOutlinerRowFlags(entitySelected,leaf,renaming);
         if(state.expand.erase(record.id))ImGui::SetNextItemOpen(true);
         bool open{};
         {
@@ -1504,6 +1503,7 @@ void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEd
             open=ImGui::TreeNodeEx(id.c_str(),flags,"%s",renaming?"":record.name.c_str());appearance.finish(entitySelected);
         }
         const auto rowMin=ImGui::GetItemRectMin(),rowMax=ImGui::GetItemRectMax();
+        rowHovered|=sceneOutlinerRowHovered();
         const bool hovered=ImGui::IsItemHovered();
         if(hovered && !renaming)ImGui::SetTooltip("%s",kind(record));
         if(ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen() && !blocked && !renaming) {
@@ -1562,13 +1562,13 @@ void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEd
         }
     }
     state.visible=std::move(visible);
-    ImGui::BeginDisabled(blocked);
-    const auto remaining=ImGui::GetContentRegionAvail();
-    if(ImGui::InvisibleButton("##outliner_background",{std::max(remaining.x,1.f),std::max(remaining.y,1.f)})) {
-        finishScenePanelEdit(document);document.select({});state.anchor=NoEntity;
+    const bool backgroundBlocked=scenePanelEditBlocked(allowEdits,canceled,document.transactionActive(),owner(state.active)==Panel::Inspector,paintStrokeActive);
+    ImGui::BeginDisabled(backgroundBlocked);
+    if(sceneOutlinerBackgroundClicked(!backgroundBlocked,rowHovered)) {
+        finishScenePanelEdit(document);document.select({});state.anchor=NoEntity;state.pendingClick=NoEntity;
     }
-    if(!blocked)reparentTarget(document,state,NoEntity,action,&assets);
-    if(ImGui::BeginPopupContextItem("Outliner background")) {
+    if(!backgroundBlocked)reparentTarget(document,state,NoEntity,action,&assets,false,&rowHovered);
+    if(beginSceneOutlinerBackgroundMenu(!backgroundBlocked,rowHovered)) {
         if(ImGui::BeginMenu("Add")){finishScenePanelEdit(document);addMenu(document);ImGui::EndMenu();}
         ImGui::EndPopup();
     }

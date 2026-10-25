@@ -273,6 +273,7 @@ add_executable(crimson-renderer WIN32
     src/tools/VertexPaintTool.cpp
     src/tools/VertexPaintToolControls.cpp
     src/tools/AssetBrowser.cpp
+    src/tools/AssetBrowserFileDrop.cpp
     src/tools/AssetBrowserPaths.cpp
     src/tools/ParticleEditor.cpp
     src/tools/ParticleAppearanceEditor.cpp
@@ -399,6 +400,7 @@ if(BUILD_TESTING)
         src/editor/MaterialPreview.cpp src/editor/MaterialDocument.cpp
         src/editor/ViewportAssetDrop.cpp src/tools/DecalEditor.cpp src/tools/TextureAssetField.cpp
         src/tools/MaterialEditor.cpp src/tools/MaterialGraphEditor.cpp src/tools/ScenePanels.cpp src/tools/AssetBrowser.cpp
+        src/tools/AssetBrowserFileDrop.cpp
         src/resources/ShaderReloadSession.cpp src/resources/ProjectMaterialCache.cpp
         src/crimson-renderer/MaterialGraphGpu.cpp src/crimson-renderer/MaterialGraphShader.cpp)
     target_include_directories(decal_host_compile PRIVATE src tests "${CC_GENERATED_DIR}"
@@ -971,6 +973,12 @@ if(BUILD_TESTING)
     target_compile_options(asset_browser_tests PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(asset_browser_tests PRIVATE crimson-storage Crimson::Support nlohmann_json::nlohmann_json)
     add_test(NAME asset_browser_core COMMAND asset_browser_tests)
+    add_executable(asset_browser_file_drop_tests tests/asset_browser_file_drop_tests.cpp src/tools/AssetBrowserFileDrop.cpp)
+    target_include_directories(asset_browser_file_drop_tests PRIVATE src)
+    target_compile_definitions(asset_browser_file_drop_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(asset_browser_file_drop_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(asset_browser_file_drop_tests PRIVATE SDL3::SDL3 imgui::imgui)
+    add_test(NAME asset_browser_file_drop_core COMMAND asset_browser_file_drop_tests)
     add_executable(asset_browser_path_tests tests/asset_browser_path_tests.cpp src/tools/AssetBrowserPaths.cpp)
     target_include_directories(asset_browser_path_tests PRIVATE src)
     target_compile_definitions(asset_browser_path_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -1259,6 +1267,11 @@ if(BUILD_TESTING)
     target_compile_options(scene_component_ui_tests PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(scene_component_ui_tests PRIVATE crimson-scene imgui::imgui)
     add_test(NAME scene_component_ui_core COMMAND scene_component_ui_tests)
+    add_executable(outliner_ui_tests tests/outliner_ui_tests.cpp)
+    target_include_directories(outliner_ui_tests PRIVATE src)
+    target_compile_options(outliner_ui_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(outliner_ui_tests PRIVATE crimson-scene imgui::imgui)
+    add_test(NAME outliner_ui_core COMMAND outliner_ui_tests)
     add_executable(property_reset_tests tests/property_reset_tests.cpp)
     target_include_directories(property_reset_tests PRIVATE src)
     target_compile_options(property_reset_tests PRIVATE /W4 /permissive- /utf-8)

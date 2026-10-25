@@ -33,6 +33,9 @@ public:
                      const GameplayInspectorContext& gameplay={}, profiling::CaptureController* captures=nullptr,RagdollEditor* ragdolls=nullptr,
                      const LightPreviewContext& lights={});
     void cancelInteraction(SceneDocument&, Renderer&);
+    void handleExternalDrop(const SDL_Event& event,AssetLibrary& assets) {
+        browser_.handleExternalDrop(event,assets,panels_.assetBrowser,viewportBusy() || pending_!=Pending::None || bool(deletion_) || bool(opening_));
+    }
     bool exitAccepted() const { return exitAccepted_; }
     const ViewportAppearance& appearance() const { return preferences_.values().appearance; }
     AntiAliasing antiAliasing() const { return preferences_.values().antiAliasing; }

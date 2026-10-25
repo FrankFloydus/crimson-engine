@@ -229,6 +229,9 @@ public:
     bool deleteScene(const std::string& id);
 
     void requestImport(SDL_Window* window, const std::string& destinationFolder = {});
+    // Queue external file delivery through the same worker/publication path as
+    // the Import dialog. Copies paths and the destination before returning.
+    void queueImportFiles(std::span<const std::filesystem::path> sources,const std::string& destinationFolder = {});
     void processImports();
     const TextureAsset* importTexture(const std::filesystem::path& source,const std::string& destinationFolder = {});
     std::shared_ptr<const ModelAsset> importModel(const std::filesystem::path& source,const std::string& destinationFolder = {});

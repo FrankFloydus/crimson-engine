@@ -166,7 +166,7 @@ int run(const AppOptions& options) {
                 // Game relative mouse input and FPS press edges must not
                 // activate widgets beneath the captured platform cursor.
                 if(!editor || !editor->blocksEditorEvent(event))ImGui_ImplSDL3_ProcessEvent(&event);
-                if(!editor || !editor->handleEvent(event))navigation.handleEvent(event);
+                if(!editor || !editor->handleEvent(event,assets))navigation.handleEvent(event);
                 if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_HIDDEN) {
                     focusLossEvent=true;
                 }
