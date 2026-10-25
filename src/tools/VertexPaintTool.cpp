@@ -46,10 +46,11 @@ void VertexPaintTool::setEnabled(bool enabled,SceneDocument& document,Renderer& 
     if(enabled_==enabled)return;cancel(document,renderer);enabled_=enabled;diagnostic_.clear();
 }
 void VertexPaintTool::clear(bool retainFootprint) {
-    brushCache_.clear(retainFootprint);points_.clear();lastPoint_.reset();lastWorldPoint_.reset();pending_.reset();missingSurface_.reset();inverses_.clear();seams_.clear();surfaces_.clear();hoverTargets_.clear();surfaceSnapshot_={};cursorHit_.reset();cursorReady_=false;holdSurface_=false;used_=0;paletteMaterial_.clear();
+    brushCache_.clear(retainFootprint);points_.clear();lastPoint_.reset();lastWorldPoint_.reset();pending_.reset();missingSurface_.reset();inverses_.clear();seams_.clear();surfaces_.clear();hoverTargets_.clear();surfaceSnapshot_={};cursorHit_.reset();cursorReady_=false;holdSurface_=false;used_=0;paletteMaterial_.clear();paletteHit_.reset();
 }
 void VertexPaintTool::cancel(SceneDocument& document,Renderer& renderer) {
     CRIMSON_PROFILE_ZONE("Vertex paint cancel");
+    blendControls_.cancel(document);
     waitForRelease_=waitForRelease_||active();gesture_.cancel(document);if(pending_)renderer.cancelPicking();clear();
     shared::profiling::counter("Vertex paint active",0);shared::profiling::counter("Vertex paint pending GPU",0);shared::profiling::counter("Vertex paint queued dabs",0);
 }
@@ -63,6 +64,7 @@ void VertexPaintTool::finish(SceneDocument& document,Renderer& renderer) {
     shared::profiling::counter("Vertex paint active",0);shared::profiling::counter("Vertex paint pending GPU",0);shared::profiling::counter("Vertex paint queued dabs",0);
 }
 void VertexPaintTool::finishForCommand(SceneDocument& document,Renderer& renderer) {
+    blendControls_.finish(document);
     if(!active())return;
     waitForRelease_=true;
     if(gesture_.valid(document))finish(document,renderer);else cancel(document,renderer);
@@ -284,7 +286,7 @@ void VertexPaintTool::update(SceneDocument& document,Renderer& renderer,const st
         const auto same=[&]{if(selected.size()!=hoverTargets_.size())return false;for(std::size_t i=0;i<selected.size();++i){const auto& a=selected[i];const auto& b=hoverTargets_[i];if(a.entity!=b.entity||a.draw!=b.draw||a.primitive!=b.primitive||a.materialId!=b.materialId||a.world!=b.world||a.resourceRevision!=b.resourceRevision||!a.geometry||!b.geometry||a.geometry->signature!=b.geometry->signature)return false;}return true;}();
         hoverTargets_=std::move(selected);
         if(!same) {
-            paletteMaterial_.clear();inverses_.clear();seams_.clear();
+            paletteMaterial_.clear();paletteHit_.reset();inverses_.clear();seams_.clear();
             ++candidatePreparationCount_;
             if(!brushCache_.prepare(hoverTargets_,vp,width,height))hoverTargets_.clear();
             for(const auto& target:hoverTargets_){const auto inverse=math::inverse(target.world);if(!inverse){hoverTargets_.clear();break;}inverses_.push_back(*inverse);}
@@ -308,7 +310,7 @@ void VertexPaintTool::update(SceneDocument& document,Renderer& renderer,const st
     if(pending_&&ImGui::GetTime()-pendingSince_>5){renderer.cancelPicking();pending_.reset();holdSurface_=false;surfaces_.clear();brushCache_.resetVisibility();diagnostic_="Viewport surface readback timed out.";}
     cursorHit_=hovered?hit(pointer):std::nullopt;cursorReady_=cursorHit_&&cursorHit_->exact&&eligible(*cursorHit_);
     if(cursorReady_) {
-        for(const auto& target:targets())if(target.entity==cursorHit_->entity&&target.draw==cursorHit_->draw&&target.primitive==cursorHit_->primitive){paletteMaterial_=target.materialId;break;}
+        for(const auto& target:targets())if(target.entity==cursorHit_->entity&&target.draw==cursorHit_->draw&&target.primitive==cursorHit_->primitive){paletteMaterial_=target.materialId;paletteHit_=std::pair{target.entity,target.materialSlot};break;}
         if(!active())diagnostic_.clear();
     } else if(hovered&&cursorHit_&&!cursorHit_->exact&&!blocked) {
         diagnostic_="Preparing surface visibility...";request(document,renderer,pointer,serial);

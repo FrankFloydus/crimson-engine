@@ -10,28 +10,49 @@
       },
       {
         "fromNode": 3,
-        "fromPin": 1,
-        "id": 2,
-        "toNode": 5,
+        "fromPin": 27,
+        "id": 5,
+        "toNode": 6,
         "toPin": 8
       },
       {
-        "fromNode": 4,
-        "fromPin": 1,
-        "id": 3,
-        "toNode": 5,
-        "toPin": 9
+        "fromNode": 6,
+        "fromPin": 0,
+        "id": 6,
+        "toNode": 7,
+        "toPin": 8
       },
       {
-        "fromNode": 5,
-        "fromPin": 0,
-        "id": 4,
+        "fromNode": 3,
+        "fromPin": 27,
+        "id": 7,
         "toNode": 1,
         "toPin": 10
+      },
+      {
+        "fromNode": 7,
+        "fromPin": 0,
+        "id": 8,
+        "toNode": 1,
+        "toPin": 11
+      },
+      {
+        "fromNode": 6,
+        "fromPin": 0,
+        "id": 9,
+        "toNode": 8,
+        "toPin": 8
+      },
+      {
+        "fromNode": 8,
+        "fromPin": 0,
+        "id": 10,
+        "toNode": 1,
+        "toPin": 26
       }
     ],
-    "nextLinkId": 5,
-    "nextNodeId": 6,
+    "nextLinkId": 11,
+    "nextNodeId": 9,
     "nodes": [
       {
         "id": 1,
@@ -80,16 +101,16 @@
           "tessellation": {
             "amount": 0.10000000149011612,
             "enabled": false,
-            "heightLod": 0.0,
+            "heightLod": 1.6100000143051147,
             "maxFactor": 8,
-            "midpoint": 0.5
+            "midpoint": 0.0
           },
           "thickness": 0.0,
           "transmission": 1.0
         },
         "position": [
-          650.0,
-          50.0
+          771.0,
+          198.0
         ]
       },
       {
@@ -97,8 +118,8 @@
         "kind": 1,
         "name": "UV",
         "position": [
-          -650.0,
-          80.0
+          -733.0,
+          131.0
         ],
         "uv": {
           "mode": 0,
@@ -125,8 +146,8 @@
         "kind": 2,
         "name": "Texture 2D",
         "position": [
-          -400.0,
-          0.0
+          -445.0,
+          -10.0
         ],
         "texture": {
           "image": "dc0f3b4d-1f98-5ea4-b6f7-9bafc3f0e4d6",
@@ -141,24 +162,7 @@
         }
       },
       {
-        "color": [
-          1.0,
-          1.0,
-          1.0,
-          1.0
-        ],
-        "id": 4,
-        "kind": 4,
-        "name": "Base Color factor",
-        "position": [
-          -380.0,
-          105.0
-        ]
-      },
-      {
-        "id": 5,
-        "kind": 5,
-        "left": {
+        "alpha": {
           "type": 0,
           "value": [
             1.0,
@@ -167,10 +171,138 @@
             1.0
           ]
         },
-        "name": "Multiply",
-        "position": [
+        "color": [
           0.0,
-          0.0
+          0.0,
+          0.0,
+          1.0
+        ],
+        "id": 6,
+        "image": {
+          "blendMode": 0,
+          "brightness": 0.0,
+          "contrast": 0.0,
+          "featureSize": 12.0,
+          "gamma": 1.0,
+          "grayMode": 0,
+          "inputBlack": 0.0,
+          "inputWhite": 1.0,
+          "noiseContrast": 0.5,
+          "noisePattern": 0,
+          "normalFlipY": false,
+          "normalStrength": 1.0,
+          "opacity": 1.0,
+          "outputBlack": 0.0,
+          "outputWhite": 1.0,
+          "radius": 0.0009765625,
+          "roughness": 0.5,
+          "seed": 0,
+          "sharpen": 1.0
+        },
+        "kind": 23,
+        "left": {
+          "type": 5,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "name": "Grayscale",
+        "position": [
+          -137.33334350585938,
+          380.6667175292969
+        ],
+        "right": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      {
+        "atomic": {
+          "amount": 0.0,
+          "angle": 0.0,
+          "bothDirections": false,
+          "contrast": 0.18000000715255737,
+          "coverage": 0.9169999957084656,
+          "depth": 0.10000000149011612,
+          "direction": 4,
+          "enabled": true,
+          "radius": 0.009999999776482582,
+          "strength": 1.0
+        },
+        "color": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "id": 7,
+        "kind": 37,
+        "left": {
+          "type": 0,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "name": "Histogram Scan",
+        "position": [
+          206.66668701171875,
+          358.3333740234375
+        ],
+        "right": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      {
+        "atomic": {
+          "amount": 0.0,
+          "angle": 0.0,
+          "bothDirections": false,
+          "contrast": 0.0,
+          "coverage": 0.4410000145435333,
+          "depth": 0.10000000149011612,
+          "direction": 4,
+          "enabled": true,
+          "radius": 0.009999999776482582,
+          "strength": 1.0
+        },
+        "color": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "id": 8,
+        "kind": 37,
+        "left": {
+          "type": 0,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "name": "Histogram Scan",
+        "position": [
+          211.66668701171875,
+          662.3333740234375
         ],
         "right": {
           "type": 0,

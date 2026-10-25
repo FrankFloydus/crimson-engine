@@ -4,6 +4,7 @@
 #include "CollisionMesh.h"
 #include "SceneComponentKind.h"
 #include "SceneDecal.h"
+#include "SceneBlendSettings.h"
 #include "PrimitiveMesh.h"
 #include <crimson/renderer/forward/MeshPaint.h>
 #include "LightAuthoring.h"
@@ -73,6 +74,7 @@ struct ModelReference {
     std::optional<PrimitiveMeshSettings> primitive;
     SceneModelRagdoll ragdoll;
     std::optional<SceneMeshPaint> meshPaint;
+    SceneBlendSettings blendSettings;
 };
 // Authored identity only. Playback is transient and reconciled by document
 // generation plus persistent EntityId, never by an EnTT handle.
@@ -265,6 +267,7 @@ struct EntityRecord {
     bool receiveDecals{true}; // Per entity, including future visual capabilities.
     SceneModelRagdoll modelRagdoll;
     std::optional<SceneMeshPaint> meshPaint;
+    SceneBlendSettings blendSettings;
 };
 bool hasSceneComponent(const EntityRecord&,SceneComponentKind);
 std::vector<SceneComponentKind> sceneComponents(const EntityRecord&);

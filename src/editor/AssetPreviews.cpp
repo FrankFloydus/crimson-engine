@@ -561,10 +561,10 @@ struct AssetPreviews::Impl {
                     }
                 }else if(!animationId.empty()){loaded=false;entry.error=assets.animationDiagnostic(animationId);}
             }
-            const auto materials=assets.resolvedModelMaterials(*asset,model.materialOverrides);
-            if (!assets.modelMaterialsReady(*asset,model.materialOverrides)) {
+            const auto materials=assets.resolvedModelMaterials(*asset,model.materialOverrides,model.blendSettings);
+            if (!assets.modelMaterialsReady(*asset,model.materialOverrides,model.blendSettings)) {
                 loaded=false;
-                const auto diagnostic=assets.modelMaterialsDiagnostic(*asset,model.materialOverrides);
+                const auto diagnostic=assets.modelMaterialsDiagnostic(*asset,model.materialOverrides,model.blendSettings);
                 if (!diagnostic.empty()) entry.error=diagnostic;
                 continue;
             }

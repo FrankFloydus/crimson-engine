@@ -19,6 +19,7 @@
 #include "ContentStorage.h"
 #include "QuaderSceneBundle.h"
 #include "ModelMaterialSlots.h"
+#include "ModelBlendSettings.h"
 #include "resources/AssetId.h"
 
 #include <SDL3/SDL.h>
@@ -874,14 +875,38 @@ ModelResolvers AssetLibrary::modelResolvers()const {
         if(!resolved.empty()&&std::filesystem::exists(materialAssetPath(root,resolved))){const auto material=loadMaterialAsset(root,resolved);return modelMaterialCompatible(material)?material.surface:defaultMaterialAsset().surface;}return {};
     }};
 }
-std::vector<ModelMaterial> AssetLibrary::resolvedModelMaterials(const ModelAsset& model,std::span<const AssetRef<MaterialAsset>> materialOverrides)const {
+std::shared_ptr<const MaterialGraph> AssetLibrary::blendGraphVariant(const std::shared_ptr<const MaterialGraph>& source,
+    const std::array<std::optional<MaterialBlendLayer>,4>& layers) const {
+    if(!source||source->empty()||materialOutputNode(*source).output.shading!=MaterialShading::BlendPbr)return source;
+    for(auto& entry:blendGraphVariants_)if(entry.source.lock()==source&&entry.layers==layers) {
+        entry.used=++blendGraphUse_;return entry.graph;
+    }
+    auto graph=modelBlendGraph(source,layers);
+    if(graph==source)return source;
+    std::erase_if(blendGraphVariants_,[](const auto& entry){return entry.source.expired();});
+    // Numeric gestures can visit many values. Keep a bounded recent working
+    // set; prepared packets independently lease any generation still in use.
+    const auto bytes=sizeof(MaterialGraph)+graph->nodes.capacity()*sizeof(MaterialNode)+graph->links.capacity()*sizeof(MaterialLink);
+    std::size_t retained=bytes;for(const auto& entry:blendGraphVariants_)retained+=entry.bytes;
+    while(!blendGraphVariants_.empty()&&(blendGraphVariants_.size()>=64||retained>16u*1024u*1024u)) {
+        const auto oldest=std::min_element(blendGraphVariants_.begin(),blendGraphVariants_.end(),[](const auto& a,const auto& b){return a.used<b.used;});
+        retained-=oldest->bytes;blendGraphVariants_.erase(oldest);
+    }
+    blendGraphVariants_.push_back({source,layers,graph,++blendGraphUse_,bytes});return graph;
+}
+std::vector<ModelMaterial> AssetLibrary::resolvedModelMaterials(const ModelAsset& model,std::span<const AssetRef<MaterialAsset>> materialOverrides,const SceneBlendSettings& blendSettings)const {
     auto result=model.materials;
     for(size_t i=result.size();i<materialOverrides.size();++i)
         if(!materialOverrides[i].empty()&&!isLegacyUnusedMaterialSlot(model,i))throw std::runtime_error("An assigned material slot no longer exists in this model.");
     for(size_t i=0;i<result.size();++i) {
         const auto id=i<materialOverrides.size()&&!materialOverrides[i].empty()?materialOverrides[i].id:
             i<model.materialIds.size()?model.materialIds[i]:importedMaterialId(model.id,i);
-        if(auto material=findMaterial(id))result[i]=materialCompatible(material)?material->surface:defaultMaterialAsset().surface;
+        const auto material=findMaterial(id);
+        if(material)result[i]=materialCompatible(material)?material->surface:defaultMaterialAsset().surface;
+        // The exact assignment guards each override. A stale entry stays
+        // dormant when this slot is assigned another material or falls back.
+        if(result[i].graph&&material&&material->id==id)if(const auto* settings=findSceneBlendMaterialSettings(blendSettings,static_cast<std::uint32_t>(i),id))
+            result[i].graph=blendGraphVariant(result[i].graph,settings->layers);
     }
     for(const auto& primitive:model.primitives) {
         if(primitive.material>=result.size()) throw std::runtime_error("Model has an invalid material reference.");
@@ -1080,7 +1105,7 @@ void AssetLibrary::trimTextureCache(std::size_t bytes) {
 bool AssetLibrary::modelBindingsReady(const std::vector<ModelMaterialTextures>& bindings) const {
     return std::all_of(bindings.begin(),bindings.end(),[](const auto& material){return material.drawable();});
 }
-bool AssetLibrary::modelMaterialsReady(const ModelAsset& model,std::span<const AssetRef<MaterialAsset>> materialOverrides) const {
+bool AssetLibrary::modelMaterialsReady(const ModelAsset& model,std::span<const AssetRef<MaterialAsset>> materialOverrides,const SceneBlendSettings& blendSettings) const {
     const auto slots=std::max(model.materials.size(),model.materialIds.size());
     for(size_t i=slots;i<materialOverrides.size();++i)
         if(!materialOverrides[i].empty()&&!isLegacyUnusedMaterialSlot(model,i))return false;
@@ -1092,9 +1117,10 @@ bool AssetLibrary::modelMaterialsReady(const ModelAsset& model,std::span<const A
         const auto material=findMaterial(target);
         if(!material||!materialDiagnostic(target).empty())return false;
     }
+    if(!blendSettings.empty())try{(void)resolvedModelMaterials(model,materialOverrides,blendSettings);}catch(const std::exception&){return false;}
     return true;
 }
-std::string AssetLibrary::modelMaterialsDiagnostic(const ModelAsset& model,std::span<const AssetRef<MaterialAsset>> materialOverrides) const {
+std::string AssetLibrary::modelMaterialsDiagnostic(const ModelAsset& model,std::span<const AssetRef<MaterialAsset>> materialOverrides,const SceneBlendSettings& blendSettings) const {
     const auto slots=std::max(model.materials.size(),model.materialIds.size());
     for(size_t i=slots;i<materialOverrides.size();++i)
         if(!materialOverrides[i].empty()&&!isLegacyUnusedMaterialSlot(model,i))return "An assigned material slot no longer exists in this model.";
@@ -1106,6 +1132,7 @@ std::string AssetLibrary::modelMaterialsDiagnostic(const ModelAsset& model,std::
         if(const auto material=findMaterial(target);material&&!materialCompatible(material))return "Mesh material is invalid: "+material->name;
         const auto diagnostic=materialDiagnostic(target);if(!diagnostic.empty())return diagnostic;
     }
+    if(!blendSettings.empty())try{(void)resolvedModelMaterials(model,materialOverrides,blendSettings);}catch(const std::exception& error){return error.what();}
     return {};
 }
 void AssetLibrary::rebuildModelCache(const std::string& id) {
@@ -2259,6 +2286,11 @@ size_t replaceDeletedModelMaterials(SceneSnapshot& snapshot,const AssetReference
         if(!modelMaterialCompatible(material))throw std::runtime_error("Mesh material is invalid: "+material.name);
         if(assigned.id!=replacement){assigned=AssetRef<MaterialAsset>{replacement};++changed;}
     }
+    for(auto& record:snapshot.records) {
+        const auto before=record.blendSettings.size();
+        std::erase_if(record.blendSettings,[&](const auto& value){return deletedMaterials.contains(previous.resolveMaterial(value.material.id));});
+        changed+=before-record.blendSettings.size();
+    }
     Scene::validate(snapshot.records,snapshot.properties);return changed;
 }
 size_t replaceDeletedNavigationProfiles(SceneSnapshot& snapshot,const AssetReferenceManager& previous,const AssetReferenceManager& next,
@@ -2388,6 +2420,8 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
             if(record.collider && !record.collider->source.empty())usages.push_back({record.collider->source.id,id,name,record.name+" / Collider source",isActive,false});
             for(size_t slot=0;slot<record.modelMaterials.size();++slot)if(!record.modelMaterials[slot].empty())
                 usages.push_back({record.modelMaterials[slot].id,id,name,record.name+" / Material slot "+std::to_string(slot+1),isActive,false});
+            for(const auto& blend:record.blendSettings)
+                usages.push_back({blend.material.id,id,name,record.name+" / Material slot "+std::to_string(blend.slot+1)+" / Blend settings",isActive,false});
             if(record.particle&&!record.particle->empty())usages.push_back({record.particle->id,id,name,record.name+" / Particle effect",isActive,false});
             if(record.decal){if(!record.decal->asset.empty())usages.push_back({record.decal->asset.id,id,name,record.name+" / Decal surface",isActive,false});
                 if(!record.decal->seed.modelId.empty())usages.push_back({record.decal->seed.modelId,id,name,record.name+" / Decal seed geometry",isActive,false});}
@@ -2515,12 +2549,15 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
                 (entity.effects&&std::any_of(entity.effects->starting.begin(),entity.effects->starting.end(),[&](const auto& effect){return effects.contains(references_.resolveGameplayEffect(effect.id));}))||
                 (entity.controller&&profiles.contains(references_.resolveNavigationAgentProfile(entity.controller->profile.id)))||
                 (entity.navigationVolume&&std::any_of(entity.navigationVolume->profiles.begin(),entity.navigationVolume->profiles.end(),[&](const auto& profile){return profiles.contains(references_.resolveNavigationAgentProfile(profile.id));}))||
-                std::any_of(entity.modelMaterials.begin(),entity.modelMaterials.end(),[&](const auto& assigned){return !assigned.empty()&&materials.contains(references_.resolveMaterial(assigned.id));}))++count;
+                std::any_of(entity.modelMaterials.begin(),entity.modelMaterials.end(),[&](const auto& assigned){return !assigned.empty()&&materials.contains(references_.resolveMaterial(assigned.id));})||
+                std::any_of(entity.blendSettings.begin(),entity.blendSettings.end(),[&](const auto& blend){return materials.contains(references_.resolveMaterial(blend.material.id));}))++count;
             if(count)plan.scenes.push_back({scene.id,scene.name,count});}
         if(active){for(const auto& entity:active->scene().records())if((entity.model&&models.contains(references_.resolve(entity.model->id))) || (entity.collider&&!entity.collider->source.empty()&&models.contains(references_.resolve(entity.collider->source.id))))plan.clearsActiveHistory=true;
             for(const auto& id:active->historicalModelReferences())if(models.contains(references_.resolve(id)))plan.clearsActiveHistory=true;
             for(const auto& entity:active->scene().records())for(const auto& assigned:entity.modelMaterials)
                 if(!assigned.empty()&&materials.contains(references_.resolveMaterial(assigned.id)))plan.clearsActiveHistory=true;
+            for(const auto& entity:active->scene().records())for(const auto& blend:entity.blendSettings)
+                if(materials.contains(references_.resolveMaterial(blend.material.id)))plan.clearsActiveHistory=true;
             for(const auto& id:active->historicalMaterialReferences())if(materials.contains(references_.resolveMaterial(id)))plan.clearsActiveHistory=true;
             for(const auto& entity:active->scene().records())if(entity.particle&&!entity.particle->empty()&&particles.contains(references_.resolveParticle(entity.particle->id)))plan.clearsActiveHistory=true;
             for(const auto& id:active->historicalParticleReferences())if(particles.contains(references_.resolveParticle(id)))plan.clearsActiveHistory=true;}

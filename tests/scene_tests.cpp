@@ -71,6 +71,63 @@ void sameRecords(const std::vector<EntityRecord>& a, const std::vector<EntityRec
     for (size_t i=0;i<a.size();++i) require(sameEntity(a[i],b[i]),"Entity data differs.");
 }
 
+void occurrenceBlendSettingsStorageAndHistory() {
+    TempProject project;SceneDocument document(project.root);
+    const auto first=document.createModel("assets/models/shared/manifest.json","First");
+    const auto second=document.createModel("assets/models/shared/manifest.json","Second");
+    const std::string material="assets/materials/shared-blend.crimson-material",other="assets/materials/other-blend.crimson-material";
+    require(document.save("Blend occurrences"),document.status());
+    const auto file=sceneAssetPath(project.root,document.assetId());const auto initial=readText(file);
+    const auto initialJson=Json::parse(initial);
+    for(const auto& entity:initialJson.at("entities"))require(!entity.contains("blendSettings"),"Default model gained Blend overrides.");
+    SceneDocument legacy(project.root);require(legacy.load(document.assetId())&&!legacy.dirty()&&readText(file)==initial,"Absent Blend settings changed scene or dirty state on load.");
+    auto record=*document.scene().find(first);record.meshPaint.emplace();
+    const std::array<std::uint8_t,12> rgb{0,0,0,80,50,20,10,20,30,0,100,60};
+    const auto payload=makeMeshPaintPayload(4,rgb);record.meshPaint->draws.push_back({0,0,0,321,payload});
+    require(document.updateEntity(first,record),document.status());const auto paint=record.meshPaint;
+    MaterialBlendLayer settings;settings.heightBlend=true;settings.heightInfluence=.65f;settings.blendSoftness=.15f;
+    settings.heightScale=-2;settings.heightMidpoint=.35f;settings.tint={.8f,1.4f,.6f};settings.roughnessScale=1.8f;
+    settings.normalInfluence=.4f;settings.roughnessInfluence=.7f;settings.colorInfluence=.3f;settings.metallicInfluence=.2f;settings.occlusionInfluence=.1f;
+    settings.mappingOverride=true;settings.mapping.mode=MaterialUvMode::WorldTriplanar;settings.mapping.scale={2,3,4};
+    settings.mapping.offset={-.2f,.4f,1};settings.mapping.rotation={23,-17,90};settings.mapping.scaleLinked=false;
+    const auto mutate=[&](auto& records,auto&){for(auto& entity:records)if(entity.id==first)setSceneBlendLayer(entity.blendSettings,1,material,2,settings);};
+    require(document.begin("Change Blend layer")&&document.update(mutate),document.status());document.cancel();
+    require(document.scene().find(first)->blendSettings.empty()&&document.scene().find(first)->meshPaint==paint,"Cancel changed paint or retained Blend controls.");
+    const auto history=document.history().size();
+    require(document.begin("Change Blend layer")&&document.update(mutate)&&document.update(mutate)&&document.commit(),document.status());
+    require(document.history().size()==history+1&&!document.transactionActive(),"One Blend gesture did not release exactly one undo command.");
+    const auto authored=*document.scene().find(first);
+    require(findSceneBlendLayer(authored.blendSettings,1,material,2)&&*findSceneBlendLayer(authored.blendSettings,1,material,2)==settings,
+        "Occurrence Blend layer lost values.");
+    require(!findSceneBlendLayer(authored.blendSettings,0,material,2)&&!findSceneBlendLayer(authored.blendSettings,1,other,2)&&
+        !findSceneBlendLayer(authored.blendSettings,1,material,0)&&document.scene().find(second)->blendSettings.empty(),"Blend controls leaked across source slot, material, layer or occurrence.");
+    require(document.undo()&&document.scene().find(first)->blendSettings.empty()&&document.scene().find(first)->meshPaint==paint&&document.redo(),"Blend undo/redo damaged paint or settings.");
+    const auto extracted=extractScene(document.scene());
+    const auto found=std::find_if(extracted.models.begin(),extracted.models.end(),[&](const auto& model){return model.id==first;});
+    require(found!=extracted.models.end()&&found->blendSettings==authored.blendSettings,"Render extraction lost occurrence Blend settings.");
+    document.select({first},first);require(document.duplicateSelection(),document.status());const auto duplicate=document.selection().primary;
+    require(duplicate!=first&&document.scene().find(duplicate)->blendSettings==authored.blendSettings&&document.undo(),"Duplicate or its undo lost Blend settings.");
+    require(document.save(),document.status());const auto saved=readText(file);SceneDocument loaded(project.root);
+    require(loaded.load(document.assetId())&&!loaded.dirty()&&readText(file)==saved&&loaded.scene().find(first)->blendSettings==authored.blendSettings&&
+        loaded.scene().find(first)->meshPaint==paint,"Blend save/reopen changed paint, settings or dirty state.");
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(loaded),runtime.status());
+    require(runtime.edit("Runtime Blend edit",[&](auto& records,auto&){for(auto& entity:records)if(entity.id==first)setSceneBlendLayer(entity.blendSettings,1,material,2,std::nullopt);})&&
+        runtime.scene().find(first)->blendSettings.empty()&&loaded.scene().find(first)->blendSettings==authored.blendSettings,"Play Blend edit escaped into authored scene.");
+    require(document.edit("Reset Blend layer",[&](auto& records,auto&){for(auto& entity:records)if(entity.id==first)setSceneBlendLayer(entity.blendSettings,1,material,2,std::nullopt);})&&
+        document.scene().find(first)->blendSettings.empty()&&document.scene().find(first)->meshPaint==paint&&document.undo(),"Layer reset changed paint or could not undo.");
+    const auto references=document.historicalMaterialReferences();require(std::find(references.begin(),references.end(),material)!=references.end(),"Blend history lost its guarded material reference.");
+    auto invalid=authored;invalid.blendSettings.push_back(invalid.blendSettings.front());
+    rejects([&]{Scene::validate({invalid},{});});
+    invalid=authored;invalid.blendSettings.front().layers[2]->heightScale=std::numeric_limits<float>::infinity();rejects([&]{Scene::validate({invalid},{});});
+    invalid=authored;invalid.blendSettings.front().layers[2]->mapping.mode=static_cast<MaterialUvMode>(4);rejects([&]{Scene::validate({invalid},{});});
+    auto malformed=Json::parse(saved);
+    const auto index=static_cast<std::size_t>(std::find_if(malformed["entities"].begin(),malformed["entities"].end(),[](const auto& entity){return entity.contains("blendSettings");})-malformed["entities"].begin());
+    auto& binding=malformed["entities"][index]["blendSettings"][0];binding["layers"][2]["heightBlend"]=1;
+    writeText(file,malformed.dump());SceneDocument bad(project.root);require(!bad.load(document.assetId()),"Blend boolean accepted numeric input.");
+    malformed=Json::parse(saved);malformed["entities"][index]["blendSettings"][0]["layers"]=Json::array();writeText(file,malformed.dump());
+    require(!bad.load(document.assetId()),"Malformed Blend layer array was accepted.");
+}
+
 void physicalSceneStorage() {
     TempProject project;SceneDocument document(project.root);
     const auto entity=document.createEmpty("Preserved entity");
@@ -2003,7 +2060,7 @@ int main(int argc,char** argv) {
             std::cout<<report.dump(2)<<'\n';return 0;
         }
         require(argc==1,"Usage: scene_tests [--benchmark-scene DISPOSABLE_ROOT SCENE_ID REPORT.json | --benchmark-external-scene]");
-        registryAndHierarchy();cachedHierarchicalVisibility();physicalSceneStorage();
+        registryAndHierarchy();cachedHierarchicalVisibility();physicalSceneStorage();occurrenceBlendSettingsStorageAndHistory();
         reparentPreservesAffine();
         transactionsAndSelection();
         viewportIndividualSelection();

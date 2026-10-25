@@ -125,7 +125,7 @@ bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
         a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows && a.lightingScopes==b.lightingScopes &&
         a.quader==b.quader && a.quaderGenerated==b.quaderGenerated &&
         a.modelAnimation==b.modelAnimation && a.modelRagdoll==b.modelRagdoll && a.visible==b.visible && a.receiveDecals==b.receiveDecals &&
-        a.outlinerStyle==b.outlinerStyle && a.meshShading==b.meshShading && a.primitive==b.primitive && a.meshPaint==b.meshPaint;
+        a.outlinerStyle==b.outlinerStyle && a.meshShading==b.meshShading && a.primitive==b.primitive && a.meshPaint==b.meshPaint && a.blendSettings==b.blendSettings;
 }
 bool sameProperties(const SceneProperties& a, const SceneProperties& b) {
     return a.activeEnvironment == b.activeEnvironment && a.activeCamera==b.activeCamera && a.playerCharacter==b.playerCharacter;
@@ -160,6 +160,7 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
         record.meshShading=model->meshShading;
         record.primitive=model->primitive;
         record.meshPaint=model->meshPaint;
+        record.blendSettings=model->blendSettings;
     }
     if (const auto* particle = registry_.try_get<ParticleReference>(entity)) record.particle = particle->assetId;
     if (const auto* decal = registry_.try_get<SceneDecal>(entity)) record.decal = *decal;
@@ -275,6 +276,15 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             throw std::runtime_error("Model asset reference must be a nonempty project-relative path.");
         if(record.primitive && (!record.model || !validPrimitiveMeshSettings(record.model->id,*record.primitive)))
             throw std::runtime_error("Primitive geometry requires a built-in mesh, finite dimensions from 0.001 to 100000 meters, sides from 3 to 256 and rings from 2 to 256.");
+        validateSceneBlendSettings(record.blendSettings);
+        if(!record.model&&!record.blendSettings.empty())throw std::runtime_error("Blend settings require a model entity.");
+        for(const auto& binding:record.blendSettings) {
+            const auto& id=binding.material.id;
+            const auto path=std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(id.data()),id.size()));
+            if(isEngineAssetId(id)||(!isAssetUuid(id)&&(!safeReference(id)||path.parent_path()!=std::filesystem::path("assets/materials")||path.extension()!=".crimson-material")))
+                throw std::runtime_error("Blend settings require a managed .crimson-material identity.");
+            if(record.model&&isBuiltinModel(record.model->id)&&binding.slot!=0)throw std::runtime_error("Built-in meshes have only one Blend material slot.");
+        }
         if(record.meshPaint) {
             const auto& paint=*record.meshPaint;
             if(!record.model||paint.subdivisionLevel>MaximumMeshPaintLevel||paint.recipeVersion!=MeshPaintRecipeVersion)
@@ -566,7 +576,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         candidate.emplace<Visibility>(entity,record.visible,record.visible,false);
         candidate.emplace<VisualSettings>(entity,record.receiveDecals);
         candidate.emplace<OutlinerStyle>(entity,record.outlinerStyle);
-        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation,record.meshShading,record.primitive,record.modelRagdoll,record.meshPaint);
+        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation,record.meshShading,record.primitive,record.modelRagdoll,record.meshPaint,record.blendSettings);
         if (record.particle) candidate.emplace<ParticleReference>(entity,*record.particle);
         if (record.decal) candidate.emplace<SceneDecal>(entity,*record.decal);
         if (record.directional) candidate.emplace<SceneDirectionalLight>(entity,*record.directional);

@@ -18,6 +18,7 @@
 #include "resources/ResourceManager.h"
 #include "resources/Paths.h"
 #include "scene/PrimitiveMesh.h"
+#include "scene/SceneBlendSettings.h"
 #include <filesystem>
 #include <array>
 #include <memory>
@@ -201,15 +202,15 @@ public:
     void noteAssetWrite(const std::string& id) { ownWrites_.push_back(resolveAssetPath(projectRoot_,id)); }
     std::vector<std::filesystem::path> takeOwnWrites() { auto result=std::move(ownWrites_);ownWrites_.clear();return result; }
     bool modelBindingsReady(const std::vector<ModelMaterialTextures>&) const;
-    bool modelMaterialsReady(const ModelAsset&,std::span<const AssetRef<MaterialAsset>> materialOverrides={}) const;
-    std::string modelMaterialsDiagnostic(const ModelAsset&,std::span<const AssetRef<MaterialAsset>> materialOverrides={}) const;
+    bool modelMaterialsReady(const ModelAsset&,std::span<const AssetRef<MaterialAsset>> materialOverrides={},const SceneBlendSettings& blendSettings={}) const;
+    std::string modelMaterialsDiagnostic(const ModelAsset&,std::span<const AssetRef<MaterialAsset>> materialOverrides={},const SceneBlendSettings& blendSettings={}) const;
     void rebuildModelCache(const std::string& id);
     void setTextureDemand(std::uint32_t edge,bool nativeQuality=false);
     void setThumbnailDemand(std::uint32_t edge) { thumbnailDemand_=edge; }
     std::size_t textureResidentBytes() const;
     void trimTextureCache(std::size_t bytes);
     ModelResolvers modelResolvers() const;
-    std::vector<ModelMaterial> resolvedModelMaterials(const ModelAsset& model,std::span<const AssetRef<MaterialAsset>> materialOverrides={}) const;
+    std::vector<ModelMaterial> resolvedModelMaterials(const ModelAsset& model,std::span<const AssetRef<MaterialAsset>> materialOverrides={},const SceneBlendSettings& blendSettings={}) const;
     AssetReferenceManager& references() { return references_; }
     const AssetReferenceManager& references() const { return references_; }
     AssetDeletionPlan planDeletion(const std::vector<std::string>& ids,const SceneDocument* active=nullptr);
@@ -383,6 +384,17 @@ private:
         std::optional<ModelMaterial> fixedSurface;
     };
     mutable std::unordered_map<const MaterialGraph*,GraphShaderCache> graphShaderCache_;
+    struct BlendGraphVariant {
+        std::weak_ptr<const MaterialGraph> source;
+        std::array<std::optional<MaterialBlendLayer>,4> layers;
+        std::shared_ptr<const MaterialGraph> graph;
+        std::uint64_t used{};
+        std::size_t bytes{};
+    };
+    mutable std::vector<BlendGraphVariant> blendGraphVariants_;
+    mutable std::uint64_t blendGraphUse_{};
+    std::shared_ptr<const MaterialGraph> blendGraphVariant(const std::shared_ptr<const MaterialGraph>&,
+        const std::array<std::optional<MaterialBlendLayer>,4>&) const;
     bool materialCompatible(const std::shared_ptr<const MaterialAsset>&) const;
     GraphShaderCache& graphCache(const std::shared_ptr<const MaterialGraph>&) const;
     std::uint8_t requiredGraphUvs(const std::shared_ptr<const MaterialGraph>&) const;

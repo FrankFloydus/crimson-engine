@@ -24,7 +24,7 @@ public:
                      bool cameraGestureActive=false, bool preserveCameraLens=false);
     void cancel(SceneDocument&, Renderer&);
     bool otherInteractionActive() const { return transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || materialDrop_.active() || decalDrop_.active(); }
-    bool interacting() const { return otherInteractionActive() || vertexPaint_.active(); }
+    bool interacting() const { return otherInteractionActive() || vertexPaint_.interacting(); }
     void prepareVertexPaintUi(SceneDocument&,Renderer&,std::uint32_t bgfxFrame);
     void finishVertexPaintCommand(SceneDocument& document,Renderer& renderer){vertexPaint_.finishForCommand(document,renderer);}
     void setVertexPaintTargetQuery(VertexPaintTargetQuery query){vertexPaint_.setTargetQuery(std::move(query));}

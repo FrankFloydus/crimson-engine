@@ -567,9 +567,9 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         if(node.kind==MaterialNodeKind::MaterialReference) {
             const auto source=assets.material?assets.material(node.material.id):TexturePresentation{};
             const auto label=source.name.empty()?std::string("Choose material"):source.name;
-            const auto begin=ImGui::GetCursorScreenPos();
             if(source.textureId)ImGui::Image(ImTextureRef(source.textureId),{48,48});
             canvasLabel(label.c_str(),width);
+            s.presentation.controls.push_back({node.id,"Source",point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
             if(ImGui::IsItemClicked()&&assets.chooseMaterial)assets.chooseMaterial(node.id);
             if(editable&&ImGui::BeginDragDropTarget()) {
                 if(const auto* payload=ImGui::AcceptDragDropPayload("CC_MATERIAL_ASSET")) {
@@ -580,7 +580,6 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                 }
                 ImGui::EndDragDropTarget();
             }
-            (void)begin;
         }
         if((assets.nodeImage||textureSource)&&node.kind!=MaterialNodeKind::Output&&node.kind!=MaterialNodeKind::Grunge&&
            node.kind!=MaterialNodeKind::Time&&node.kind!=MaterialNodeKind::ParticleColor&&!outputs.empty()) {
@@ -655,23 +654,6 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         const auto labeledWidth=[&](const char* label) {
             return std::max(1.f,width-ImGui::CalcTextSize(label).x-ImGui::GetStyle().ItemInnerSpacing.x);
         };
-        if(node.kind==MaterialNodeKind::MaterialReference) {
-            const auto outputId=materialOutputNode(graph).id;
-            const bool baseOnly=std::any_of(graph.links.begin(),graph.links.end(),[&](const auto& link){return link.fromNode==node.id&&link.toNode==outputId&&link.toPin==MaterialPin::Base;})&&
-                std::none_of(graph.links.begin(),graph.links.end(),[&](const auto& link){return link.fromNode==node.id&&link.toNode==outputId&&link.toPin!=MaterialPin::Base;});
-            if(!baseOnly) {
-                choice("Toggle layer height blending",[defaults](auto& n){return resettableProperty(n.blendLayer.heightBlend,defaults.blendLayer.heightBlend,[&]{return ImGui::Checkbox("Height Blend",&n.blendLayer.heightBlend);});});
-                s.presentation.controls.push_back({node.id,"Height Blend",point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
-                if(node.blendLayer.heightBlend) {
-                    ImGui::SetNextItemWidth(labeledWidth("Height Influence"));
-                    field("Change layer height influence",[defaults](auto& n){return resettableProperty(n.blendLayer.heightInfluence,defaults.blendLayer.heightInfluence,[&]{return ImGui::SliderFloat("Height Influence",&n.blendLayer.heightInfluence,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
-                    s.presentation.controls.push_back({node.id,"Height Influence",point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
-                    ImGui::SetNextItemWidth(labeledWidth("Blend Softness"));
-                    field("Change layer blend softness",[defaults](auto& n){return resettableProperty(n.blendLayer.blendSoftness,defaults.blendLayer.blendSoftness,[&]{return ImGui::SliderFloat("Blend Softness",&n.blendLayer.blendSoftness,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
-                    s.presentation.controls.push_back({node.id,"Blend Softness",point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
-                }
-            }
-        }
         if(materialNodeImageOperation(node.kind) || node.kind==MaterialNodeKind::Noise || node.kind==MaterialNodeKind::ProceduralTexture) {
             const auto parameter=[&](const char* label,const char* transaction,const auto& draw) {
                 ImGui::SetNextItemWidth(labeledWidth(label));field(transaction,draw);

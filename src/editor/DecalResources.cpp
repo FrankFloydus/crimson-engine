@@ -19,7 +19,7 @@ struct Hash {
 };
 bool overlaps(const Aabb&a,const Aabb&b){if(!a.valid||!b.valid)return true;for(size_t i=0;i<3;++i)if(a.minimum[i]>b.maximum[i]||b.minimum[i]>a.maximum[i])return false;return true;}
 std::vector<bool> eligibleSlots(AssetLibrary&assets,const ExtractedModel&m,const ModelAsset&model,std::string*diagnostic=nullptr){
-    const auto materials=assets.resolvedModelMaterials(model,m.materialOverrides);std::vector<bool>result;result.reserve(materials.size());
+    const auto materials=assets.resolvedModelMaterials(model,m.materialOverrides,m.blendSettings);std::vector<bool>result;result.reserve(materials.size());
     for(const auto&material:materials){std::string reason;const bool eligible=decals::receiverMaterialEligible(material,&reason);result.push_back(eligible);if(diagnostic&&!eligible&&diagnostic->empty())*diagnostic=std::move(reason);}return result;
 }
 bool eligibleDraw(const decals::ModelSurface&s,uint32_t draw,uint32_t primitive,const std::vector<bool>&slots){
@@ -44,7 +44,7 @@ DecalSourceResult DecalResources::modelSurface(const ExtractedModel&m,ResourcePr
     result.revision=std::max<uint64_t>(1,assets_.modelRevision(m.assetId));
     result.fingerprint=model->stream?model->stream->key:assets_.modelFingerprint(m.assetId);Hash identity;identity.add(model->id);identity.add(result.fingerprint);
     bool painted=m.meshPaint.has_value();
-    try{if(!painted)for(const auto& material:assets_.resolvedModelMaterials(*model,m.materialOverrides))if(material.graph&&materialOutputNode(*material.graph).output.shading==MaterialShading::BlendPbr){painted=true;break;}}
+    try{if(!painted)for(const auto& material:assets_.resolvedModelMaterials(*model,m.materialOverrides,m.blendSettings))if(material.graph&&materialOutputNode(*material.graph).output.shading==MaterialShading::BlendPbr){painted=true;break;}}
     catch(const std::exception& error){result.failed=true;result.diagnostic=error.what();return result;}
     std::vector<std::shared_ptr<const decals::SurfaceBoundaryLineage>> boundaries;
     if(painted){const auto prepared=meshPaint_.prepare(m,priority);if(!prepared.ready){result.failed=prepared.failed;result.diagnostic=prepared.diagnostic;return result;}model=prepared.decalAsset;result.revision=prepared.revision;result.fingerprint=prepared.decalSignature;identity=Hash{};identity.add(model->id);identity.add(result.fingerprint);boundaries.resize(model->draws.size());for(const auto& draw:prepared.draws)if(draw.draw<boundaries.size())boundaries[draw.draw]=draw.decalBoundary;}

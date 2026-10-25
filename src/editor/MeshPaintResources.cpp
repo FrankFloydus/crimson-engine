@@ -110,10 +110,10 @@ PreparedMeshPaintModel MeshPaintResources::prepare(const EntityRecord& record,Re
     if(record.meshPaint)for(const auto& stored:record.meshPaint->draws)if(stored.draw>=data->paintedDraws.size()||data->paintedDraws[stored.draw].sourcePrimitive!=stored.primitive)out.diagnostic="Vertex paint source changed. Reset Paint to start again.";
     statuses_[record.id]=out.diagnostic;return out;
 }
-PreparedMeshPaintModel MeshPaintResources::prepare(const ExtractedModel& model,ResourcePriority priority){EntityRecord record;record.id=model.id;record.model=AssetRef<ModelAsset>{model.assetId};record.primitive=model.primitive;record.modelMaterials=model.materialOverrides;record.modelAnimation=model.animation;record.modelRagdoll=model.ragdoll;record.meshPaint=model.meshPaint;record.meshShading=model.meshShading;return prepare(record,priority);}
+PreparedMeshPaintModel MeshPaintResources::prepare(const ExtractedModel& model,ResourcePriority priority){EntityRecord record;record.id=model.id;record.model=AssetRef<ModelAsset>{model.assetId};record.primitive=model.primitive;record.modelMaterials=model.materialOverrides;record.blendSettings=model.blendSettings;record.modelAnimation=model.animation;record.modelRagdoll=model.ragdoll;record.meshPaint=model.meshPaint;record.meshShading=model.meshShading;return prepare(record,priority);}
 VertexPaintTargets MeshPaintResources::targets(const SceneDocument& document,EntityId entity){CRIMSON_PROFILE_ZONE("Vertex paint selected draw preparation");VertexPaintTargets out;const auto record=document.scene().find(entity);const auto world=document.scene().worldTransform(entity);if(!record||!world||!document.scene().isVisible(entity)){out.diagnostic="Select a visible rigid mesh.";return out;}
     const auto prepared=prepare(*record,ResourcePriority::Selected);out.diagnostic=prepared.diagnostic;if(!prepared.ready||!out.diagnostic.empty())return out;
-    try{const auto materials=assets_.resolvedModelMaterials(*prepared.asset,record->modelMaterials);for(const auto& draw:prepared.draws){const auto& p=prepared.asset->primitives[draw.primitive];if(p.material>=materials.size()||!materials[p.material].graph)continue;const auto& output=materialOutputNode(*materials[p.material].graph).output;
+    try{const auto materials=assets_.resolvedModelMaterials(*prepared.asset,record->modelMaterials,record->blendSettings);for(const auto& draw:prepared.draws){const auto& p=prepared.asset->primitives[draw.primitive];if(p.material>=materials.size()||!materials[p.material].graph)continue;const auto& output=materialOutputNode(*materials[p.material].graph).output;
             if(output.shading!=MaterialShading::BlendPbr||output.blend!=MaterialBlend::Opaque||output.tessellation.enabled)continue;
             VertexPaintTarget target;target.entity=entity;target.draw=draw.draw;target.primitive=draw.primitive;target.sourcePrimitive=draw.sourcePrimitive;target.resourceRevision=prepared.revision;target.materialSlot=p.material;
             target.materialId=p.material<record->modelMaterials.size()&&!record->modelMaterials[p.material].empty()?record->modelMaterials[p.material].id:
@@ -177,7 +177,7 @@ VertexPaintSurfaceSnapshot MeshPaintResources::surfaces(const SceneDocument& doc
         auto model=assets_.findModel(occurrence.assetId,occurrence.primitive);
         if(!model)continue;
         const auto revision=std::max<std::uint64_t>(1,assets_.modelRevision(occurrence.assetId));
-        auto materials=assets_.resolvedModelMaterials(*model,occurrence.materialOverrides);
+        auto materials=assets_.resolvedModelMaterials(*model,occurrence.materialOverrides,occurrence.blendSettings);
         const bool rigid=occurrence.animation.asset.empty()&&occurrence.ragdoll.asset.empty()&&rigidSource(*model);
         if(!rigid) {
             const auto inverse=math::inverse(occurrence.world);if(!inverse)continue;

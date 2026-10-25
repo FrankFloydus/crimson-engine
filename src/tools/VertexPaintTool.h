@@ -1,6 +1,7 @@
 #pragma once
 #include "editor/VertexPaintGesture.h"
 #include "tools/Tools.h"
+#include "VertexBlendLayerControls.h"
 #include <deque>
 #include <optional>
 #include <unordered_map>
@@ -18,11 +19,13 @@ public:
     bool showSubdivisions() const {return enabled_&&showSubdivisions_;}
     void selectLayer(std::uint32_t layer) {if(layer<4)brush_.layer=layer;}
     bool active() const {return gesture_.active();}
+    bool interacting() const {return active()||blendControls_.active();}
     bool surfaceHeld() const {return active()||holdSurface_;}
     // Resolve release/commands before editor panels query document ownership.
     void prepareUi(SceneDocument&,Renderer&,std::uint64_t& serial,Vec2 pointer,
         bool hovered,bool held,bool commandRequested,bool cancelRequested,const std::optional<PickResult>& pick={});
     void finishForCommand(SceneDocument&,Renderer&);
+    void prepareBlendSettingsUi(SceneDocument& document,bool held,bool command,bool cancel) {blendControls_.prepareUi(document,held,command,cancel);}
     void drawControls(SceneDocument&,AssetLibrary&,Renderer&);
     void drawBrushSettings();
     std::span<const std::string> previewMaterials() const {return previewMaterials_;}
@@ -58,6 +61,10 @@ private:
     std::uint64_t documentGeneration_{};
     SceneSelection hoverSelection_;
     std::string paletteMaterial_;
+    std::optional<std::pair<EntityId,std::uint32_t>> paletteHit_;
+    EntityId paletteEntity_{};
+    std::uint32_t paletteSlot_{};
+    VertexBlendLayerControls blendControls_;
     std::vector<std::string> previewMaterials_;
     std::string diagnostic_;
     struct ProfileFrame;

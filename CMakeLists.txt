@@ -272,6 +272,7 @@ add_executable(crimson-renderer WIN32
     src/tools/PrimitiveMeshInspector.cpp
     src/tools/VertexPaintTool.cpp
     src/tools/VertexPaintToolControls.cpp
+    src/tools/VertexBlendLayerControls.cpp
     src/tools/AssetBrowser.cpp
     src/tools/AssetBrowserFileDrop.cpp
     src/tools/AssetBrowserPaths.cpp
@@ -903,11 +904,16 @@ if(BUILD_TESTING)
     target_link_libraries(vertex_paint_surface_tests PRIVATE crimson-scene)
     target_compile_options(vertex_paint_surface_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME vertex_paint_surface_core COMMAND vertex_paint_surface_tests)
-    add_executable(vertex_paint_tool_tests tests/vertex_paint_tool_tests.cpp src/tools/VertexPaintTool.cpp)
+    add_executable(vertex_paint_tool_tests tests/vertex_paint_tool_tests.cpp src/tools/VertexPaintTool.cpp src/tools/VertexBlendLayerControls.cpp src/tools/HdrColorEditor.cpp)
     target_link_libraries(vertex_paint_tool_tests PRIVATE crimson-scene Crimson::Renderer imgui::imgui)
     target_compile_definitions(vertex_paint_tool_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX BX_CONFIG_DEBUG=$<IF:$<CONFIG:Debug>,1,0>)
     target_compile_options(vertex_paint_tool_tests PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus /Zc:preprocessor)
     add_test(NAME vertex_paint_tool_core COMMAND vertex_paint_tool_tests)
+    add_executable(vertex_blend_layer_tests tests/vertex_blend_layer_tests.cpp src/tools/VertexBlendLayerControls.cpp src/tools/HdrColorEditor.cpp)
+    target_link_libraries(vertex_blend_layer_tests PRIVATE crimson-scene imgui::imgui)
+    target_compile_definitions(vertex_blend_layer_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(vertex_blend_layer_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME vertex_blend_layer_core COMMAND vertex_blend_layer_tests)
     add_executable(blend_material_host_tests tests/blend_material_host_tests.cpp)
     target_link_libraries(blend_material_host_tests PRIVATE crimson-material-shaders)
     target_compile_options(blend_material_host_tests PRIVATE /W4 /permissive- /utf-8)
@@ -1210,6 +1216,7 @@ if(BUILD_TESTING)
     target_compile_options(asset_library_deletion_tests PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(asset_library_deletion_tests PRIVATE crimson-quader crimson-material-gpu crimson-resources crimson-scene crimson-particles SDL3::SDL3 bgfx::bgfx bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace assimp::assimp)
     add_test(NAME asset_library_deletion_core COMMAND asset_library_deletion_tests)
+    add_test(NAME blend_occurrence_material_core COMMAND asset_library_deletion_tests --blend-occurrence)
     add_test(NAME quader_material_publication_core COMMAND asset_library_deletion_tests --quader-material-publication)
     add_test(NAME decal_asset_library_core COMMAND asset_library_deletion_tests --decal-assets)
     add_test(NAME animation_library_core COMMAND asset_library_deletion_tests --animation-assets)

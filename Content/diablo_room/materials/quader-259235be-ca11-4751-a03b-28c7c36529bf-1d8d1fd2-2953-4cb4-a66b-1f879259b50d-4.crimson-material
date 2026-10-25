@@ -125,11 +125,11 @@
         "kind": 1,
         "name": "UV",
         "position": [
-          -763.0,
-          138.0
+          -650.0,
+          80.0
         ],
         "uv": {
-          "mode": 2,
+          "mode": 0,
           "offset": [
             0.0,
             0.0,
@@ -141,9 +141,9 @@
             0.0
           ],
           "scale": [
-            0.5,
-            0.5,
-            0.5
+            1.0,
+            1.0,
+            1.0
           ],
           "scaleLinked": true
         }
@@ -153,8 +153,8 @@
         "kind": 2,
         "name": "Texture 2D",
         "position": [
-          -381.0,
-          -330.0
+          -400.0,
+          0.0
         ],
         "texture": {
           "image": "85dfbfbf-7720-5f7f-bd86-230b61b17035",
@@ -179,8 +179,8 @@
         "kind": 4,
         "name": "Base Color factor",
         "position": [
-          -287.0,
-          65.0
+          -380.0,
+          105.0
         ]
       },
       {
@@ -215,8 +215,8 @@
         "kind": 2,
         "name": "Texture 2D",
         "position": [
-          -605.0,
-          390.0
+          -400.0,
+          240.0
         ],
         "texture": {
           "image": "ce5567e1-9463-54f7-aa04-fdcfa20c9d21",
@@ -235,8 +235,8 @@
         "kind": 3,
         "name": "Roughness factor",
         "position": [
-          -223.0,
-          637.0
+          -380.0,
+          345.0
         ],
         "range": [
           0.0,

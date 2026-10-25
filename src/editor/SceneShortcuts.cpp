@@ -18,7 +18,8 @@ SceneShortcutRequests readSceneShortcuts(const SceneShortcutContext& context) {
     const auto* navWindow=ImGui::GetCurrentContext()->NavWindow;
     const auto* rootWindow=navWindow ? navWindow->RootWindow : nullptr;
     const bool entityFocus=rootWindow && (std::string_view(rootWindow->Name)=="Viewport" ||
-        std::string_view(rootWindow->Name)=="Outliner" || std::string_view(rootWindow->Name)=="Inspector");
+        std::string_view(rootWindow->Name)=="Outliner" || std::string_view(rootWindow->Name)=="Inspector" ||
+        std::string_view(rootWindow->Name)=="Vertex Paint Tool");
     const bool assetDocumentFocus=context.particleDocumentFocus || context.materialDocumentFocus;
     if ((!entityFocus && !assetDocumentFocus) || context.transactionActive || context.modelDropPending) return requests;
 

@@ -2,6 +2,7 @@
 #include "material_fixtures.h"
 #include "assets/AssetLibrary.h"
 #include "assets/MaterialGraphReferences.h"
+#include "assets/ModelBlendSettings.h"
 #include "assets/AtomicFile.h"
 #include "assets/ContentStorage.h"
 #include "resources/AssetId.h"
@@ -2392,7 +2393,106 @@ void decalAssetLibraryDeletion() {
 
 }
 
+namespace {
+void blendOccurrenceMaterials() {
+    Project project;ResourceManager resources;AssetLibrary library(project.root,&resources);
+    auto child=*library.createMaterial("Occurrence source");
+    child.graph={};const auto childOutput=addMaterialNode(child.graph,MaterialNodeKind::Output).id;
+    const auto image=addMaterialNode(child.graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(child.graph,image)->texture.image.id=GrayTextureId;
+    connectMaterialNodes(child.graph,image,MaterialPin::RGB,childOutput,MaterialPin::BaseColor);
+    canonicalizeMaterialAsset(child);saveMaterialAsset(project.root,child);library.publishMaterial(std::make_shared<const MaterialAsset>(child));
+    auto blend=*library.createMaterial("Occurrence Blend");initializeBlendMaterialGraph(blend.graph);
+    for(auto& node:blend.graph.nodes)if(node.kind==MaterialNodeKind::MaterialReference)node.material.id=child.id;
+    const auto output=materialOutputNode(blend.graph).id;
+    const auto red=materialInputLink(blend.graph,output,MaterialPin::Red)->fromNode;
+    findMaterialNode(blend.graph,red)->blendLayer.heightBlend=true;
+    findMaterialNode(blend.graph,red)->blendLayer.roughnessScale=.8f;
+    const auto height=addMaterialNode(blend.graph,MaterialNodeKind::Scalar).id;
+    findMaterialNode(blend.graph,height)->scalar=.7f;
+    connectMaterialNodes(blend.graph,height,MaterialPin::Value,red,MaterialPin::Height);
+    canonicalizeMaterialAsset(blend);saveMaterialAsset(project.root,blend);library.publishMaterial(std::make_shared<const MaterialAsset>(blend));
+    const auto original=library.findMaterial(blend.id),originalChild=library.findMaterial(child.id);
+    const auto authored=serializeMaterialAsset(*original),sourceBytes=read(materialAssetPath(project.root,blend.id));
+    const auto geometry=library.findModel(BuiltinBoxModelId);
+    const ModelMaterialOverrides assignments{AssetRef<MaterialAsset>{blend.id}};
+    const auto untouched=library.resolvedModelMaterials(*geometry,assignments);
+    MaterialBlendLayer controls=findMaterialNode(original->graph,red)->blendLayer;
+    controls.heightInfluence=.3f;controls.blendSoftness=.09f;controls.heightScale=1.7f;controls.heightMidpoint=.43f;
+    controls.normalInfluence=.25f;controls.roughnessInfluence=.37f;controls.colorInfluence=.48f;controls.metallicInfluence=.59f;controls.occlusionInfluence=.61f;
+    controls.tint={.71f,.82f,.93f};controls.roughnessScale=1.24f;
+    controls.mappingOverride=true;controls.mapping.mode=MaterialUvMode::WorldTriplanar;controls.mapping.scale={2,3,4};controls.mapping.offset={.1f,.2f,.3f};
+    SceneBlendSettings settings;setSceneBlendLayer(settings,0,blend.id,1,controls);
+    const auto changed=library.resolvedModelMaterials(*geometry,assignments,settings);
+    require(changed[0].graph!=untouched[0].graph&&findMaterialNode(*changed[0].graph,red)->blendLayer==controls,
+        "Occurrence controls did not produce an isolated immutable Blend graph.");
+    require(library.resolvedModelMaterials(*geometry,assignments,settings)[0].graph==changed[0].graph,
+        "Repeated occurrence preparation rebuilt an unchanged Blend graph.");
+    require(library.resolvedModelMaterials(*geometry,assignments)[0].graph==untouched[0].graph&&
+        findMaterialNode(*untouched[0].graph,red)->blendLayer.roughnessScale==.8f,
+        "Editing one occurrence changed a second occurrence or lost the material's original fallback settings.");
+    auto guarded=settings;guarded[0].material.id=child.id;
+    require(library.resolvedModelMaterials(*geometry,assignments,guarded)[0].graph==untouched[0].graph,
+        "A stale material-identity guard applied Blend controls to another assignment.");
+    const ModelMaterialOverrides otherAssignment{AssetRef<MaterialAsset>{child.id}};
+    require(library.resolvedModelMaterials(*geometry,otherAssignment,settings)[0].graph==originalChild->surface.graph,
+        "Reassigning a slot leaked its previous Blend appearance onto the replacement material.");
+    const auto shaderFor=[&](const ModelMaterial& material){auto asset=*original;asset.graph=*material.graph;return generateMaterialGraphShader(asset,{originalChild});};
+    const auto shader=shaderFor(changed[0]);
+    const auto hasRow=[&](const Vec4& value){return std::find(shader.uniforms.begin(),shader.uniforms.end(),value)!=shader.uniforms.end();};
+    require(hasRow({controls.colorInfluence,controls.normalInfluence,controls.roughnessInfluence,controls.metallicInfluence})&&
+        hasRow({controls.occlusionInfluence,controls.roughnessScale,controls.heightScale,controls.heightMidpoint})&&
+        hasRow({controls.tint[0],controls.tint[1],controls.tint[2],0})&&hasRow({controls.heightInfluence,controls.blendSoftness,0,0}),
+        "Occurrence appearance controls did not reach generated shader parameter rows.");
+    require(std::any_of(shader.textures.begin(),shader.textures.end(),[&](const auto& binding) {
+        return shader.uniforms[binding.mappingRow][0]==2&&shader.uniforms[binding.mappingRow][1]==3;
+    }),"Occurrence mapping did not reach the generated surface samples.");
+    controls.tint={.2f,.4f,.6f};controls.heightInfluence=.8f;controls.mapping.scale={5,6,7};
+    setSceneBlendLayer(settings,0,blend.id,1,controls);
+    const auto moved=library.resolvedModelMaterials(*geometry,assignments,settings);const auto movedShader=shaderFor(moved[0]);
+    require(movedShader.topologyKey==shader.topologyKey&&movedShader.uniforms!=shader.uniforms,
+        "Numeric occurrence edits changed shader topology or retained stale uniforms.");
+    for(std::size_t i=0;i<shader.variants.size();++i)require(shader.variants[i].source==movedShader.variants[i].source,
+        "A numeric occurrence edit changed generated program source.");
+    setSceneBlendLayer(settings,0,blend.id,1,{});
+    require(settings.empty()&&library.resolvedModelMaterials(*geometry,assignments,settings)[0].graph==untouched[0].graph,
+        "Removing occurrence controls did not restore the original authored Blend graph.");
+    // Shared authored reference nodes may intentionally feed several layers.
+    auto shared=blend.graph;const auto base=materialInputLink(shared,output,MaterialPin::Base)->fromNode;
+    connectMaterialNodes(shared,red,MaterialPin::Surface,output,MaterialPin::Green);
+    const auto sharedSource=std::make_shared<const MaterialGraph>(shared);
+    std::array<std::optional<MaterialBlendLayer>,4> sharedControls;sharedControls[1]=controls;
+    const auto split=modelBlendGraph(sharedSource,sharedControls);
+    const auto redSplit=materialInputLink(*split,output,MaterialPin::Red)->fromNode;
+    require(redSplit!=red&&materialInputLink(*split,output,MaterialPin::Green)->fromNode==red&&
+        materialInputLink(*split,output,MaterialPin::Base)->fromNode==base&&
+        materialInputLink(*split,redSplit,MaterialPin::Height)->fromNode==height&&
+        findMaterialNode(*sharedSource,red)->blendLayer!=controls,
+        "A per-layer override changed another pin sharing the same reference or lost its Height map branch.");
+    validateMaterialGraph(*split);
+    sharedControls[1]=findMaterialNode(*sharedSource,red)->blendLayer;
+    const auto equalSplit=modelBlendGraph(sharedSource,sharedControls);
+    require(materialInputLink(*equalSplit,output,MaterialPin::Red)->fromNode==redSplit,
+        "Returning a shared layer's numeric controls to their original values changed its split-node topology.");
+    require(serializeMaterialAsset(*library.findMaterial(blend.id))==authored&&read(materialAssetPath(project.root,blend.id))==sourceBytes&&
+        library.findMaterial(child.id)==originalChild,"Occurrence rendering mutated a shared material or source asset.");
+    SceneDocument scene(project.root);const auto entity=scene.createBox("Dormant Blend controls");auto entityRecord=*scene.scene().find(entity);
+    setSceneBlendLayer(entityRecord.blendSettings,0,blend.id,1,controls);
+    require(scene.updateEntity(entity,entityRecord)&&scene.save("Blend guard deletion"),scene.status());
+    const auto plan=library.planDeletion({blend.id},&scene);
+    require(plan.error.empty()&&plan.needsReferenceWarning()&&!plan.scenes.empty()&&plan.clearsActiveHistory,
+        "Dormant occurrence Blend settings were omitted from material deletion references.");
+    finishDeletion(library,resources,plan,{},&scene);
+    require(scene.scene().find(entity)->blendSettings.empty()&&record(readSceneSnapshot(project.root,scene.assetId()),entity).blendSettings.empty(),
+        "Deleting a Blend material retained its stale settings or transferred them onto the fallback material.");
+    resources.stop();
+}
+}
+
 int main(int argc,char** argv){try{
+    if(argc==2&&std::string(argv[1])=="--blend-occurrence") {
+        blendOccurrenceMaterials();std::cout<<"Occurrence Blend material isolation, inherited controls, shader uniforms/mapping and guarded deletion passed.\n";return 0;
+    }
     if(argc==2&&std::string(argv[1])=="--quader-material-publication") {
         quaderSameGenerationMaterialPublication();std::cout<<"Quader same-generation native material publication and Sync-Off authority checks passed.\n";return 0;
     }

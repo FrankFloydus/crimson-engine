@@ -1,0 +1,295 @@
+{
+  "graph": {
+    "links": [
+      {
+        "fromNode": 8,
+        "fromPin": 37,
+        "id": 6,
+        "toNode": 1,
+        "toPin": 38
+      },
+      {
+        "fromNode": 9,
+        "fromPin": 37,
+        "id": 7,
+        "toNode": 1,
+        "toPin": 39
+      },
+      {
+        "fromNode": 10,
+        "fromPin": 37,
+        "id": 8,
+        "toNode": 1,
+        "toPin": 40
+      },
+      {
+        "fromNode": 11,
+        "fromPin": 37,
+        "id": 9,
+        "toNode": 1,
+        "toPin": 41
+      }
+    ],
+    "nextLinkId": 10,
+    "nextNodeId": 12,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5,
+          "attenuationColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "attenuationDistance": 1.0,
+          "baseColor": [
+            0.21404114365577698,
+            0.21404114365577698,
+            0.21404114365577698
+          ],
+          "blend": 0,
+          "decalColorEnabled": true,
+          "decalColorStrength": 1.0,
+          "decalMetallicEnabled": false,
+          "decalMetallicStrength": 1.0,
+          "decalNormalEnabled": false,
+          "decalNormalStrength": 1.0,
+          "decalRoughnessEnabled": false,
+          "decalRoughnessStrength": 1.0,
+          "doubleSided": false,
+          "emission": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "height": 0.5,
+          "ior": 1.5,
+          "metallic": 0.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "receiveFog": true,
+          "refraction": false,
+          "roughness": 1.0,
+          "shading": 3,
+          "specular": 0.5,
+          "tessellation": {
+            "amount": 0.10000000149011612,
+            "enabled": false,
+            "heightLod": 0.0,
+            "maxFactor": 8,
+            "midpoint": 0.5
+          },
+          "thickness": 0.0,
+          "transmission": 1.0
+        },
+        "position": [
+          700.0,
+          80.0
+        ]
+      },
+      {
+        "blendLayer": {
+          "blendSoftness": 0.20000000298023224,
+          "colorInfluence": 1.0,
+          "heightBlend": false,
+          "heightInfluence": 1.0,
+          "heightMidpoint": 0.5,
+          "heightScale": 1.0,
+          "mapping": {
+            "mode": 0,
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "scaleLinked": true
+          },
+          "mappingOverride": false,
+          "metallicInfluence": 1.0,
+          "normalInfluence": 1.0,
+          "occlusionInfluence": 1.0,
+          "roughnessInfluence": 1.0,
+          "roughnessScale": 1.0,
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "id": 8,
+        "kind": 53,
+        "material": "c1e510b0-1517-490b-a7fa-878ac5b25288",
+        "name": "Base",
+        "position": [
+          115.0,
+          -109.0
+        ]
+      },
+      {
+        "blendLayer": {
+          "blendSoftness": 0.20000000298023224,
+          "colorInfluence": 1.0,
+          "heightBlend": false,
+          "heightInfluence": 1.0,
+          "heightMidpoint": 0.5,
+          "heightScale": 1.0,
+          "mapping": {
+            "mode": 0,
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "scaleLinked": true
+          },
+          "mappingOverride": false,
+          "metallicInfluence": 1.0,
+          "normalInfluence": 1.0,
+          "occlusionInfluence": 1.0,
+          "roughnessInfluence": 1.0,
+          "roughnessScale": 1.0,
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "id": 9,
+        "kind": 53,
+        "material": "1b0effcb-7816-4ce6-bd23-6678c9f91f27",
+        "name": "Red",
+        "position": [
+          115.0,
+          67.0
+        ]
+      },
+      {
+        "blendLayer": {
+          "blendSoftness": 0.20000000298023224,
+          "colorInfluence": 1.0,
+          "heightBlend": false,
+          "heightInfluence": 1.0,
+          "heightMidpoint": 0.5,
+          "heightScale": 1.0,
+          "mapping": {
+            "mode": 0,
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "scaleLinked": true
+          },
+          "mappingOverride": false,
+          "metallicInfluence": 1.0,
+          "normalInfluence": 1.0,
+          "occlusionInfluence": 1.0,
+          "roughnessInfluence": 1.0,
+          "roughnessScale": 1.0,
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "id": 10,
+        "kind": 53,
+        "material": "9742bccd-2bef-4707-b341-026887f1d6d6",
+        "name": "Green",
+        "position": [
+          131.0,
+          275.0
+        ]
+      },
+      {
+        "blendLayer": {
+          "blendSoftness": 0.20000000298023224,
+          "colorInfluence": 1.0,
+          "heightBlend": false,
+          "heightInfluence": 1.0,
+          "heightMidpoint": 0.5,
+          "heightScale": 1.0,
+          "mapping": {
+            "mode": 0,
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "scaleLinked": true
+          },
+          "mappingOverride": false,
+          "metallicInfluence": 1.0,
+          "normalInfluence": 1.0,
+          "occlusionInfluence": 1.0,
+          "roughnessInfluence": 1.0,
+          "roughnessScale": 1.0,
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "id": 11,
+        "kind": 53,
+        "material": "e698f0ce-a518-596e-8710-ff12e009eb5d",
+        "name": "Blue",
+        "position": [
+          160.0,
+          471.0
+        ]
+      }
+    ],
+    "version": 20
+  },
+  "id": "296b9bfa-b835-434b-b45c-936ba0e18c35",
+  "name": "New Material 8",
+  "originModel": "",
+  "type": "crimson-material",
+  "version": 6
+}

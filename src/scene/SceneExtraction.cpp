@@ -102,6 +102,7 @@ ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery
             result.models.back().meshShading=model->meshShading;
             result.models.back().primitive=model->primitive;
             result.models.back().meshPaint=model->meshPaint;
+            result.models.back().blendSettings=model->blendSettings;
             result.models.back().visible=visible;result.models.back().actorOwner=actorOwner(id);
             result.models.back().receiveDecals=registry.get<VisualSettings>(entity).receiveDecals;
         }

@@ -488,35 +488,45 @@ void materialSlotsSurviveSourceSync() {
     require(applyQuaderSceneImport(document,owner,link,initial,query),document.status());
     const auto visual=generatedId(document.scene(),owner,"mesh/floor");
     auto entity=*document.scene().find(visual);setModelMaterialOverride(entity.modelMaterials,1,replacement);
+    MaterialBlendLayer layer;layer.heightBlend=true;layer.heightScale=2.5f;layer.blendSoftness=.12f;
+    setSceneBlendLayer(entity.blendSettings,1,replacement.id,2,layer);
     require(document.updateEntity(visual,entity),document.status());
     auto changed=lightSyncFixture("slots-b");sources[changed.meshes[0].modelId]={a,b,c};
     require(applyQuaderSceneImport(document,owner,link,changed,query),document.status());
     require(document.scene().find(visual)->modelMaterials==entity.modelMaterials,"Ordinary Quader geometry sync lost numbered slot assignments.");
+    require(document.scene().find(visual)->blendSettings==entity.blendSettings,"Ordinary Quader sync lost occurrence Blend settings.");
     const auto before=snapshot(document);
     auto reordered=lightSyncFixture("slots-reordered");
     auto prepared=std::make_shared<ModelAsset>();prepared->id=reordered.meshes[0].modelId;prepared->materialIds={b,c,a};
     reordered.preparedModels.push_back(prepared);sources[prepared->id]=prepared->materialIds;
     require(applyQuaderSceneImport(document,owner,link,reordered,query),document.status());
     require(document.scene().find(visual)->modelMaterials==ModelMaterialOverrides{replacement},"Unique source material identity did not follow its reordered slot.");
+    const auto remappedBlend=document.scene().find(visual)->blendSettings;
+    require(findSceneBlendLayer(remappedBlend,0,replacement.id,2)&&*findSceneBlendLayer(remappedBlend,0,replacement.id,2)==layer&&
+        !findSceneBlendLayer(remappedBlend,1,replacement.id,2),"Unique source material reorder did not move Blend settings with its surface.");
     const auto remapped=snapshot(document);require(document.undo() && snapshot(document)==before,"Slot remapping did not undo with its Quader import.");
     require(document.redo() && snapshot(document)==remapped,"Slot remapping did not redo with its Quader import.");
     auto ambiguous=lightSyncFixture("slots-ambiguous");sources[ambiguous.meshes[0].modelId]={b,b,c};
     require(applyQuaderSceneImport(document,owner,link,ambiguous,query)&&document.scene().find(visual)->modelMaterials.empty()&&
         document.scene().find(visual)->model->id==ambiguous.meshes[0].modelId,"An ambiguous source slot blocked sync or retained its stale override.");
-    entity=*document.scene().find(visual);setModelMaterialOverride(entity.modelMaterials,2,replacement);require(document.updateEntity(visual,entity),document.status());
+    require(document.scene().find(visual)->blendSettings.empty(),"Ambiguous source slot retained occurrence Blend settings.");
+    entity=*document.scene().find(visual);setModelMaterialOverride(entity.modelMaterials,2,replacement);setSceneBlendLayer(entity.blendSettings,2,replacement.id,1,layer);require(document.updateEntity(visual,entity),document.status());
     auto removed=lightSyncFixture("slots-removed");sources[removed.meshes[0].modelId]={a,b};
     require(applyQuaderSceneImport(document,owner,link,removed,query)&&document.scene().find(visual)->modelMaterials.empty()&&
         document.scene().find(visual)->model->id==removed.meshes[0].modelId,"A removed source slot blocked sync or retained its stale override.");
+    require(document.scene().find(visual)->blendSettings.empty(),"Removed source slot retained occurrence Blend settings.");
     auto repeated=lightSyncFixture("slots-repeated-a");sources[repeated.meshes[0].modelId]={b,b,c};
     require(applyQuaderSceneImport(document,owner,link,repeated,query),document.status());
-    entity=*document.scene().find(visual);setModelMaterialOverride(entity.modelMaterials,1,replacement);require(document.updateEntity(visual,entity),document.status());
+    entity=*document.scene().find(visual);setModelMaterialOverride(entity.modelMaterials,1,replacement);setSceneBlendLayer(entity.blendSettings,1,replacement.id,1,layer);require(document.updateEntity(visual,entity),document.status());
     auto repeatedNext=lightSyncFixture("slots-repeated-b");sources[repeatedNext.meshes[0].modelId]={b,b,c};
     require(applyQuaderSceneImport(document,owner,link,repeatedNext,query) && document.scene().find(visual)->modelMaterials==entity.modelMaterials,
         "Unchanged repeated source slots lost their numbered instance assignments.");
+    require(document.scene().find(visual)->blendSettings==entity.blendSettings,"Unchanged repeated source slots lost occurrence Blend settings.");
     auto repeatedReordered=lightSyncFixture("slots-repeated-reordered");sources[repeatedReordered.meshes[0].modelId]={c,b,b};
     require(applyQuaderSceneImport(document,owner,link,repeatedReordered,query)&&document.scene().find(visual)->modelMaterials.empty(),
         "Changed repeated source IDs blocked sync or guessed an ambiguous numbered assignment.");
 
+    require(document.scene().find(visual)->blendSettings.empty(),"Changed repeated source slots guessed occurrence Blend settings.");
     const std::string d="assets/materials/source-d.crimson-material";
     const AssetRef<MaterialAsset> survivorA{"assets/materials/instance-a.crimson-material"},survivorD{"assets/materials/instance-d.crimson-material"};
     auto mixedBefore=lightSyncFixture("slots-mixed-before");sources[mixedBefore.meshes[0].modelId]={a,b,c,d};
@@ -524,6 +534,9 @@ void materialSlotsSurviveSourceSync() {
     entity=*document.scene().find(visual);
     setModelMaterialOverride(entity.modelMaterials,0,survivorA);setModelMaterialOverride(entity.modelMaterials,1,replacement);
     setModelMaterialOverride(entity.modelMaterials,2,replacement);setModelMaterialOverride(entity.modelMaterials,3,survivorD);
+    setSceneBlendLayer(entity.blendSettings,0,survivorA.id,1,layer);setSceneBlendLayer(entity.blendSettings,1,replacement.id,2,layer);
+    setSceneBlendLayer(entity.blendSettings,2,replacement.id,2,layer);setSceneBlendLayer(entity.blendSettings,3,survivorD.id,3,layer);
+    setSceneBlendLayer(entity.blendSettings,6,replacement.id,0,layer);
     setModelMaterialOverride(entity.modelMaterials,6,replacement); // Authored before source metadata was available.
     require(document.updateEntity(visual,entity),document.status());const auto stale=snapshot(document);const auto history=document.history().size();
     auto mixedAfter=lightSyncFixture("slots-mixed-after");sources[mixedAfter.meshes[0].modelId]={c,d,c,a};
@@ -531,6 +544,9 @@ void materialSlotsSurviveSourceSync() {
     ModelMaterialOverrides expected;setModelMaterialOverride(expected,1,survivorD);setModelMaterialOverride(expected,3,survivorA);
     require(document.scene().find(visual)->modelMaterials==expected&&document.history().size()==history+1&&!document.transactionActive(),
         "Mixed sync did not preserve unique remaps while dropping removed, ambiguous and out-of-range overrides in one command.");
+    const auto cleanedBlend=document.scene().find(visual)->blendSettings;
+    require(cleanedBlend.size()==2&&findSceneBlendLayer(cleanedBlend,1,survivorD.id,3)&&findSceneBlendLayer(cleanedBlend,3,survivorA.id,1),
+        "Mixed Quader import did not preserve unique Blend settings while dropping stale bindings.");
     const auto cleaned=snapshot(document);
     require(document.undo()&&snapshot(document)==stale,"Undo did not restore the exact stale slot assignments and former source package.");
     require(document.redo()&&snapshot(document)==cleaned,"Redo did not drop stale assignments and restore valid remaps atomically.");

@@ -13,7 +13,8 @@ void VertexPaintTool::drawControls(SceneDocument& document,AssetLibrary& assets,
     previewMaterials_.clear();
     if(!enabled_)return;
     CRIMSON_PROFILE_ZONE("Vertex paint controls and palette");
-    std::shared_ptr<const MaterialAsset> palette,hoveredPalette;
+    struct Palette {std::uint32_t slot;std::shared_ptr<const MaterialAsset> material;};
+    std::vector<Palette> palettes;
     const auto collectPalette=[&](EntityId entity) {
         const auto record=document.scene().find(entity);if(!record||!record->model)return;
         const auto model=assets.findModel(record->model->id,record->primitive);if(!model)return;
@@ -22,17 +23,32 @@ void VertexPaintTool::drawControls(SceneDocument& document,AssetLibrary& assets,
                 slot<model->materialIds.size()&&!model->materialIds[slot].empty()?model->materialIds[slot]:importedMaterialId(model->id,slot);
             const auto candidate=assets.findMaterial(id);
             if(!candidate||candidate->shading!=MaterialShading::BlendPbr)continue;
-            if(!palette)palette=candidate;
-            if(id==paletteMaterial_)hoveredPalette=candidate;
+            palettes.push_back({static_cast<std::uint32_t>(slot),candidate});
         }
     };
     collectPalette(document.selection().primary);
-    for(const auto entity:document.selection().ids)if(entity!=document.selection().primary)collectPalette(entity);
-    if(hoveredPalette)palette=std::move(hoveredPalette);
+    if(paletteEntity_!=document.selection().primary) {blendControls_.finish(document);paletteEntity_=document.selection().primary;paletteSlot_=palettes.empty()?0:palettes.front().slot;}
+    if(paletteHit_&&paletteHit_->first==paletteEntity_)
+        if(const auto hovered=std::find_if(palettes.begin(),palettes.end(),[&](const auto& p){return p.slot==paletteHit_->second&&p.material->id==paletteMaterial_;});hovered!=palettes.end())paletteSlot_=hovered->slot;
+    auto selectedPalette=std::find_if(palettes.begin(),palettes.end(),[&](const auto& p){return p.slot==paletteSlot_;});
+    if(selectedPalette==palettes.end())selectedPalette=palettes.begin();
+    std::shared_ptr<const MaterialAsset> palette=selectedPalette==palettes.end()?nullptr:selectedPalette->material;
+    if(selectedPalette!=palettes.end())paletteSlot_=selectedPalette->slot;
     bool open=true;ImGui::SetNextWindowSize({330,380},ImGuiCond_FirstUseEver);
     if(ImGui::Begin("Vertex Paint Tool",&open)) {
         if(ImGui::BeginCombo("Mode","Material")){ImGui::Selectable("Material",true);ImGui::EndCombo();}
-        if(palette)ImGui::TextUnformatted(palette->name.c_str());
+        if(palettes.size()>1) {
+            const auto label="Slot "+std::to_string(paletteSlot_+1)+": "+palette->name;
+            if(ImGui::BeginCombo("Material Slot",label.c_str())) {
+                for(const auto& choice:palettes) {
+                    const auto name="Slot "+std::to_string(choice.slot+1)+": "+choice.material->name;
+                    if(ImGui::Selectable(name.c_str(),choice.slot==paletteSlot_)) {
+                        blendControls_.finish(document);paletteSlot_=choice.slot;palette=choice.material;paletteMaterial_=palette->id;paletteHit_.reset();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+        } else if(palette)ImGui::TextUnformatted(palette->name.c_str());
         constexpr std::array pins{MaterialPin::Base,MaterialPin::Red,MaterialPin::Green,MaterialPin::Blue};
         constexpr std::array<const char*,4> channels{"Base","R","G","B"};
         const float thumbnailSide=ImGui::GetFrameHeight()*1.6f,rowHeight=thumbnailSide+ImGui::GetStyle().FramePadding.y*2;
@@ -62,8 +78,13 @@ void VertexPaintTool::drawControls(SceneDocument& document,AssetLibrary& assets,
             ImGui::SetCursorScreenPos(next);ImGui::PopID();
         }
         drawBrushSettings();
+        const auto* selectedLink=palette?materialInputLink(palette->graph,materialOutputNode(palette->graph).id,pins[brush_.layer]):nullptr;
+        const auto* selectedNode=selectedLink?findMaterialNode(palette->graph,selectedLink->fromNode):nullptr;
+        if(selectedNode&&selectedNode->kind==MaterialNodeKind::MaterialReference)
+            blendControls_.draw(document,{document.selection().primary,paletteSlot_,brush_.layer,palette->id},selectedNode->blendLayer);
+        else blendControls_.finish(document);
         if(!diagnostic_.empty())ImGui::TextWrapped("%s",diagnostic_.c_str());
-    }
+    } else blendControls_.finish(document);
     ImGui::End();if(!open)setEnabled(false,document,renderer);
 }
 }

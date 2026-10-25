@@ -96,6 +96,10 @@
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
       "name": ""
     },
+    "1b0effcb-7816-4ce6-bd23-6678c9f91f27": {
+      "folder": "e1532038-745a-45f8-be13-424d0666ce9b",
+      "name": "concrete"
+    },
     "1cc829fb-6016-51b2-8694-77f77163c5f0": {
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
       "name": ""
@@ -136,12 +140,20 @@
       "folder": "d538ad63-f38f-4a16-9fe3-45011e1466b5",
       "name": ""
     },
+    "296b9bfa-b835-434b-b45c-936ba0e18c35": {
+      "folder": "e1532038-745a-45f8-be13-424d0666ce9b",
+      "name": "blend_mat"
+    },
     "2af7cac9-c134-5083-a797-fd59a9ef76b1": {
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
       "name": ""
     },
     "2b61df34-dba8-5821-bcf5-e0df3ab2d458": {
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
+      "name": ""
+    },
+    "2c43f7a2-20f6-4482-abb9-65b3092cb0d6": {
+      "folder": "folder:content",
       "name": ""
     },
     "2c76984e-4b77-5102-ae3e-2aadd7dc1f1d": {
@@ -412,6 +424,10 @@
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
       "name": ""
     },
+    "7bc66359-f5ed-54ce-9557-f690d1dd72d8": {
+      "folder": "203e6990-dede-4b2e-8fc3-74bd9d5d4a57",
+      "name": ""
+    },
     "7bcdd431-f833-5ec9-aa78-5315d019ba8d": {
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
       "name": ""
@@ -484,6 +500,10 @@
       "folder": "5083cf68-b4f4-4916-9b30-a97dfdddf4bb",
       "name": ""
     },
+    "8868e25c-7a4c-5412-9200-9bfcda8fd99c": {
+      "folder": "203e6990-dede-4b2e-8fc3-74bd9d5d4a57",
+      "name": ""
+    },
     "8a7789db-2a57-4c99-9972-c70c7ee0707b": {
       "folder": "ba35e64f-fba4-4a4c-9041-ce7fb3326096",
       "name": ""
@@ -543,6 +563,10 @@
     "96a19512-4814-5d84-8ed9-fdda265170e6": {
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
       "name": ""
+    },
+    "9742bccd-2bef-4707-b341-026887f1d6d6": {
+      "folder": "e1532038-745a-45f8-be13-424d0666ce9b",
+      "name": "grass"
     },
     "97ec1a0b-0bf6-4250-adf3-db9c293d8f49": {
       "folder": "79cc8186-8619-4284-9acf-07346b0ef2a9",
@@ -608,6 +632,10 @@
       "folder": "a21fe72d-ad05-447c-bc68-929497ee944c",
       "name": ""
     },
+    "a58f83e0-fe9b-462c-8f58-b4225b729247": {
+      "folder": "e1532038-745a-45f8-be13-424d0666ce9b",
+      "name": ""
+    },
     "a621fcf0-c0dc-5b87-8307-17f0dad0113e": {
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
       "name": ""
@@ -668,6 +696,10 @@
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
       "name": ""
     },
+    "b11c6a29-6117-5e7a-947b-1d51526ebea1": {
+      "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
+      "name": ""
+    },
     "b1baf989-9a2b-46e0-8149-a9be465b01c0": {
       "folder": "02b0b2e7-72bb-4d97-b510-8fbde40a46af",
       "name": ""
@@ -690,6 +722,10 @@
     },
     "b737d995-06d2-51fb-b797-a8dc6dd75eb0": {
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
+      "name": ""
+    },
+    "b8253538-dccb-52a3-9421-f57bef78603e": {
+      "folder": "e472066f-174b-452f-a700-65035fb2dbbd",
       "name": ""
     },
     "b82cf7f0-4b0e-52fa-b356-f41a053f897e": {
@@ -736,12 +772,20 @@
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
       "name": ""
     },
+    "c1e510b0-1517-490b-a7fa-878ac5b25288": {
+      "folder": "e1532038-745a-45f8-be13-424d0666ce9b",
+      "name": "base_mat"
+    },
     "c27dc7a1-0e0b-55a0-ac6a-c0b2bccf8937": {
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
       "name": ""
     },
     "c2a613ee-c6ac-5ceb-89ad-9a16baeb58a7": {
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
+      "name": ""
+    },
+    "c2da6e4a-cc5a-5e42-a906-8154ed292c39": {
+      "folder": "203e6990-dede-4b2e-8fc3-74bd9d5d4a57",
       "name": ""
     },
     "c3744381-b311-4b32-a277-507ee54a5269": {
@@ -776,6 +820,10 @@
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
       "name": ""
     },
+    "c88156fd-ec9f-5015-ae66-7fa8ac27e2e8": {
+      "folder": "fca6b0b7-71ac-4683-a6a2-e0c63f72c4d4",
+      "name": ""
+    },
     "c88a46a0-eff4-5947-9709-d6686f225701": {
       "folder": "6b77f30d-bcf9-4621-8e4e-54bc2627c0de",
       "name": ""
@@ -786,6 +834,10 @@
     },
     "cb3d7d36-9a34-5717-b146-1649a3a033de": {
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
+      "name": ""
+    },
+    "cc4250fa-cfe2-534f-ab90-521a6ab0b646": {
+      "folder": "6f95d4d2-f653-4aaf-89bb-c296fb2c5e91",
       "name": ""
     },
     "cc61dfb7-f4a1-5dd8-a260-a885db997ab1": {
@@ -807,6 +859,10 @@
     "cfd9d088-c1b5-4558-8e56-fe260adf89af": {
       "folder": "ba35e64f-fba4-4a4c-9041-ce7fb3326096",
       "name": "glass"
+    },
+    "cfddcc23-b627-4492-bac2-84e3da5c9a59": {
+      "folder": "e1532038-745a-45f8-be13-424d0666ce9b",
+      "name": ""
     },
     "d1156142-edeb-573c-b3e0-09f8bc3dbc76": {
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
@@ -876,6 +932,10 @@
       "folder": "a21fe72d-ad05-447c-bc68-929497ee944c",
       "name": ""
     },
+    "dde3eddd-5768-57b0-9f63-d56caf554ac8": {
+      "folder": "a21fe72d-ad05-447c-bc68-929497ee944c",
+      "name": ""
+    },
     "defc302b-0015-5572-b8ac-0d646fc818e3": {
       "folder": "d538ad63-f38f-4a16-9fe3-45011e1466b5",
       "name": ""
@@ -910,6 +970,10 @@
     },
     "e44b4255-ac0c-58ff-b98f-1e747aad688b": {
       "folder": "2fe155f2-e910-4b62-87f9-44374e75c523",
+      "name": ""
+    },
+    "e457cfe9-a6cb-4120-9326-24cb88f2d20d": {
+      "folder": "e1532038-745a-45f8-be13-424d0666ce9b",
       "name": ""
     },
     "e488cf25-b1df-56b9-b77d-945570a92676": {
@@ -1039,6 +1103,12 @@
       "path": "Engine/gameplay"
     },
     {
+      "id": "203e6990-dede-4b2e-8fc3-74bd9d5d4a57",
+      "name": "models",
+      "parent": "e818ac04-0a0e-4846-ad23-c6162578f701",
+      "path": "Content/scene_1/models"
+    },
+    {
       "id": "20ccb86a-8d33-4c7b-9335-efce136185f0",
       "name": "models",
       "parent": "folder:content",
@@ -1139,6 +1209,24 @@
       "name": "textures",
       "parent": "folder:content",
       "path": "Content/textures"
+    },
+    {
+      "id": "e472066f-174b-452f-a700-65035fb2dbbd",
+      "name": "textures",
+      "parent": "e818ac04-0a0e-4846-ad23-c6162578f701",
+      "path": "Content/scene_1/textures"
+    },
+    {
+      "id": "e818ac04-0a0e-4846-ad23-c6162578f701",
+      "name": "scene_1",
+      "parent": "folder:content",
+      "path": "Content/scene_1"
+    },
+    {
+      "id": "fca6b0b7-71ac-4683-a6a2-e0c63f72c4d4",
+      "name": "materials",
+      "parent": "e818ac04-0a0e-4846-ad23-c6162578f701",
+      "path": "Content/scene_1/materials"
     },
     {
       "id": "folder:content",

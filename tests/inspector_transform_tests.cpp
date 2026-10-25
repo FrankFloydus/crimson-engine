@@ -442,14 +442,20 @@ void particleShortcutOwnership(){
     io.ConfigInputTrickleEventQueue=false;
     unsigned char* pixels{};int width{},height{};io.Fonts->GetTexDataAsRGBA32(&pixels,&width,&height);
     io.Fonts->SetTexID(static_cast<ImTextureID>(1));
+    ImVec2 paintFieldLow{},paintFieldHigh{};float paintHeight=.5f;
     const auto tick=[&](SceneShortcutContext ownership,const char* focus) {
         ImGui::NewFrame();
-        for(const auto* name:{"Inspector","Particle effect###ParticleEffect","Sprite material###SpriteMaterial"}) {
+        for(const auto* name:{"Inspector","Particle effect###ParticleEffect","Sprite material###SpriteMaterial","Vertex Paint Tool"}) {
             ImGui::SetNextWindowPos(std::string_view(name)=="Inspector" ? ImVec2(20,20):ImVec2(440,20));
             ImGui::SetNextWindowSize({380,400});
             ImGui::Begin(name,nullptr,ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoFocusOnAppearing);
             if(focus && std::string_view(name)==focus)ImGui::SetWindowFocus();
-            ImGui::TextUnformatted(name);ImGui::End();
+            ImGui::TextUnformatted(name);
+            if(std::string_view(name)=="Vertex Paint Tool") {
+                ImGui::InputFloat("Height Influence",&paintHeight);
+                paintFieldLow=ImGui::GetItemRectMin();paintFieldHigh=ImGui::GetItemRectMax();
+            }
+            ImGui::End();
         }
         const auto result=readSceneShortcuts(ownership);ImGui::Render();return result;
     };
@@ -488,6 +494,27 @@ void particleShortcutOwnership(){
     require(press(ImGuiKey_D,{},"Inspector").duplicate,"Returning to Inspector lost scene Duplicate.");
     require(press(ImGuiKey_Delete,{},"Inspector",false).eraseSelection,"Returning to Inspector lost scene Delete.");
     require(press(ImGuiKey_F,{},"Inspector",false).focusSelection,"Returning to Inspector lost scene Focus.");
+    require(press(ImGuiKey_Z,{},"Vertex Paint Tool").undo,"Inactive paint-panel focus lost scene Undo.");
+    require(press(ImGuiKey_Z,{},"Vertex Paint Tool",true,true).redo,"Inactive paint-panel focus lost scene Ctrl+Shift+Z Redo.");
+    require(press(ImGuiKey_Y,{},"Vertex Paint Tool").redo,"Inactive paint-panel focus lost scene Ctrl+Y Redo.");
+    require(press(ImGuiKey_D,{},"Vertex Paint Tool").duplicate,"Inactive paint-panel focus lost scene Duplicate.");
+    require(press(ImGuiKey_Delete,{},"Vertex Paint Tool",false).eraseSelection,"Inactive paint-panel focus lost scene Delete.");
+    require(press(ImGuiKey_F,{},"Vertex Paint Tool",false).focusSelection,"Inactive paint-panel focus lost scene Focus.");
+    require(!press(ImGuiKey_Z,{.transactionActive=true},"Vertex Paint Tool").undo,
+        "An active paint-property transaction leaked scene Undo.");
+    require(!press(ImGuiKey_Z,{.navigationActive=true},"Vertex Paint Tool").undo,
+        "Scene navigation ownership leaked Undo through paint-panel focus.");
+    require(!press(ImGuiKey_Z,{.preferencesKeyboard=true},"Vertex Paint Tool").undo,
+        "Preferences keyboard ownership leaked Undo through paint-panel focus.");
+    io.AddMousePosEvent((paintFieldLow.x+paintFieldHigh.x)*.5f,(paintFieldLow.y+paintFieldHigh.y)*.5f);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);tick({},"Vertex Paint Tool");
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);tick({},"Vertex Paint Tool");
+    require(ImGui::IsAnyItemActive(),"Paint numeric-input shortcut fixture did not activate its real widget.");
+    require(!press(ImGuiKey_Z,{},"Vertex Paint Tool").undo,
+        "An active paint numeric input emitted scene Undo instead of retaining text-input ownership.");
+    ImGui::ClearActiveID();tick({},"Vertex Paint Tool");tick({},"Vertex Paint Tool");
+    require(press(ImGuiKey_Z,{},"Vertex Paint Tool").undo,
+        "Releasing paint numeric-input ownership did not restore scene Undo.");
 }
 }
 int main(){

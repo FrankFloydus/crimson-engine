@@ -24,9 +24,10 @@ bool derivedGeometry(const std::string& source,const std::string& geometry) {
     return geometry.starts_with("mesh-paint:") ||
         (isBuiltinModel(source)&&!geometry.empty()&&!isBuiltinModel(geometry));
 }
-std::string materialPreparationKey(const std::string& id,std::span<const AssetRef<MaterialAsset>> overrides) {
+std::string materialPreparationKey(const std::string& id,std::span<const AssetRef<MaterialAsset>> overrides,EntityId appearanceOccurrence=0) {
     while(!overrides.empty()&&overrides.back().empty())overrides=overrides.first(overrides.size()-1);
     auto key=id+std::string(1,'\0');
+    if(appearanceOccurrence)key+="blend-occurrence:"+std::to_string(appearanceOccurrence)+std::string(1,'\0');
     for(const auto& material:overrides){key+=material.id;key+='\0';}
     return key;
 }
@@ -218,13 +219,16 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
     // Canonicalize trailing inherited slots; embedded separators retain slot order.
     auto asset=assets_.findModel(id,presentation?presentation->primitive:std::optional<PrimitiveMeshSettings>{});
     const auto demandSource=asset;
+    const SceneBlendSettings inheritedBlend;
+    const auto& blendSettings=presentation?presentation->blendSettings:inheritedBlend;
     const bool rigid=asset&&asset->skins.empty()&&asset->animations.empty()&&presentation&&presentation->animation.asset.empty()&&!presentation->physicsPose&&
         std::none_of(asset->primitives.begin(),asset->primitives.end(),[](const auto& primitive){return primitive.hasSkinning||!primitive.morphTargets.empty();});
     bool painted=rigid&&presentation->meshPaint.has_value();
-    if(rigid&&!painted)try {for(const auto& material:assets_.resolvedModelMaterials(*asset,materialOverrides))
+    if(rigid&&!painted)try {for(const auto& material:assets_.resolvedModelMaterials(*asset,materialOverrides,blendSettings))
         painted|=material.graph&&materialOutputNode(*material.graph).output.shading==MaterialShading::BlendPbr;
     } catch(const std::exception&) {/* Normal packet preparation retains its diagnostic below. */}
-    const auto key=materialPreparationKey((asset?asset->id:id)+(painted?":paint-occurrence:"+std::to_string(presentation->id):""),materialOverrides);
+    const auto key=materialPreparationKey((asset?asset->id:id)+(painted?":paint-occurrence:"+std::to_string(presentation->id):""),materialOverrides,
+        painted||blendSettings.empty()?0:presentation->id);
     auto& entry=entries_[key];entry.sourceId=id;entry.wanted=true; entry.used=std::chrono::steady_clock::now();
     entry.failed=false;
     const auto retain=[&](std::shared_ptr<const PreparedEditorModel> model) {
@@ -250,7 +254,7 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
         const auto presentedPose=presentation?pose(*presentation,asset):std::shared_ptr<const ModelPose>{};
         const auto fov=verticalFov(camera,renderer_,priority,aspect);
         bool refined=true;
-        auto materials=assets_.resolvedModelMaterials(*asset,materialOverrides);
+        auto materials=assets_.resolvedModelMaterials(*asset,materialOverrides,blendSettings);
         if (asset->stream) {
             if (entry.geometryRevision!=revision) { entry.geometry.clear(); entry.geometryRevision=revision; }
             renderer_.configureModelStream(asset->id,revision,*asset->stream);
@@ -274,12 +278,12 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
             }
             if (!renderer_.modelStreamReady(asset->id,revision)) return retain(entry.current);
         } else if (!renderer_.prepareModel(*asset)) { entry.diagnostic=renderer_.modelStatus(); entry.failed=true; return retain(entry.current); }
-        if (!assets_.modelMaterialsReady(*asset,materialOverrides)) {
-            const auto error=assets_.modelMaterialsDiagnostic(*asset,materialOverrides);
+        if (!assets_.modelMaterialsReady(*asset,materialOverrides,blendSettings)) {
+            const auto error=assets_.modelMaterialsDiagnostic(*asset,materialOverrides,blendSettings);
             if (!error.empty()) { entry.diagnostic=error; entry.failed=true; }
             return retain(entry.current);
         }
-        if(const auto diagnostic=assets_.modelMaterialsDiagnostic(*asset,materialOverrides);!diagnostic.empty())entry.diagnostic=diagnostic;
+        if(const auto diagnostic=assets_.modelMaterialsDiagnostic(*asset,materialOverrides,blendSettings);!diagnostic.empty())entry.diagnostic=diagnostic;
         // Cached browser cards render at time zero; they do not inherit the live
         // world's animated mapping footprint when sharing this resource owner.
         const auto context=priority==ResourcePriority::Preview?MaterialEvaluationContext{}:materialContext_;
@@ -344,7 +348,9 @@ VertexPaintSurfaceSnapshot EditorResources::vertexPaintSurfaces(const SceneDocum
         }else if(!occurrence.animation.asset.empty()||!occurrence.ragdoll.asset.empty()||!asset->skins.empty()||!asset->animations.empty()||
             std::any_of(asset->primitives.begin(),asset->primitives.end(),[](const auto& p){return p.hasSkinning||!p.morphTargets.empty();}))state.bounds={};
         const auto source=assets_.findModel(occurrence.assetId,occurrence.primitive);
-        const auto key=materialPreparationKey((source?source->id:occurrence.assetId)+(asset->id.starts_with("mesh-paint:")?":paint-occurrence:"+std::to_string(occurrence.id):""),occurrence.materialOverrides);
+        const bool painted=asset->id.starts_with("mesh-paint:");
+        const auto key=materialPreparationKey((source?source->id:occurrence.assetId)+(painted?":paint-occurrence:"+std::to_string(occurrence.id):""),occurrence.materialOverrides,
+            painted||occurrence.blendSettings.empty()?0:occurrence.id);
         if(const auto prepared=entries_.find(key);prepared!=entries_.end()&&prepared->second.current)for(const auto& binding:prepared->second.current->textures) {
             if(binding.graph){hash(state.signature,binding.graph->coverageSignature(materialContext_));for(const auto value:binding.graph->sourceFingerprints)hash(state.signature,value);}
             else for(const auto value:binding.sourceFingerprints)hash(state.signature,value);
@@ -358,13 +364,13 @@ Aabb EditorResources::modelBounds(const ExtractedModel& model,const std::shared_
         assets_.findModel(model.assetId,model.primitive):source;
     const auto value=pose(model,asset);
     auto bounds=value?value->bounds:asset->bounds;
-    const auto key=materialPreparationKey(asset->id,model.materialOverrides);
+    const auto key=materialPreparationKey(asset->id,model.materialOverrides,model.blendSettings.empty()?0:model.id);
     auto [cached,inserted]=displacementExtents_.try_emplace(key);
     if(inserted)try {
         // Unknown material metadata cannot establish a safe displaced bound.
         // Admit it conservatively while the normal resource path resolves it.
-        if(assets_.modelMaterialsReady(*asset,model.materialOverrides)) {
-            auto extent=displacementExtent(assets_.resolvedModelMaterials(*asset,model.materialOverrides));
+        if(assets_.modelMaterialsReady(*asset,model.materialOverrides,model.blendSettings)) {
+            auto extent=displacementExtent(assets_.resolvedModelMaterials(*asset,model.materialOverrides,model.blendSettings));
             if(const auto previous=entries_.find(key);previous!=entries_.end()&&previous->second.current)
                 extent=std::max(extent,displacementExtent(previous->second.current->materials));
             cached->second=extent;

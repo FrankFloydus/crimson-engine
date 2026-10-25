@@ -87,6 +87,11 @@ bool applyQuaderSceneImport(SceneDocument& document,EntityId owner,const QuaderL
         if(previous.meshPaint && previous.model!=incoming.model)
             throw std::runtime_error("Quader sync needs a validated paint migration before replacing painted geometry.");
         return previous.meshPaint;
-    },result.topologyOnly);
+    },result.topologyOnly,[&](const EntityRecord& previous,const EntityRecord& incoming) {
+        if(previous.blendSettings.empty()||previous.model==incoming.model)return previous.blendSettings;
+        const auto before=sources(previous.model->id),after=sources(incoming.model->id);
+        if(!before||!after)throw std::runtime_error("Quader sync is waiting for source material slots to preserve Blend settings on "+incoming.name+".");
+        return remapSceneBlendSettings(previous.blendSettings,*before,*after);
+    });
 }
 }

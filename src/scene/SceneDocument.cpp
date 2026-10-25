@@ -128,6 +128,52 @@ Json meshPaintJson(const SceneMeshPaint& paint) {
     Json draws=Json::array();for(const auto& draw:paint.draws)draws.push_back({{"draw",draw.draw},{"primitive",draw.primitive},{"level",draw.level},{"source",hexId(draw.sourceSignature)},{"vertices",draw.weights->vertexCount},{"rgb8",paintBase64(meshPaintBytes(*draw.weights))}});
     return {{"recipe",paint.recipeVersion},{"level",paint.subdivisionLevel},{"draws",std::move(draws)}};
 }
+Json blendLayerJson(const MaterialBlendLayer& layer) {
+    return {{"heightBlend",layer.heightBlend},{"heightInfluence",layer.heightInfluence},{"blendSoftness",layer.blendSoftness},
+        {"heightScale",layer.heightScale},{"heightMidpoint",layer.heightMidpoint},{"normalInfluence",layer.normalInfluence},
+        {"roughnessInfluence",layer.roughnessInfluence},{"colorInfluence",layer.colorInfluence},{"metallicInfluence",layer.metallicInfluence},
+        {"occlusionInfluence",layer.occlusionInfluence},{"tint",layer.tint},{"roughnessScale",layer.roughnessScale},
+        {"mappingOverride",layer.mappingOverride},{"mapping",{{"mode",static_cast<int>(layer.mapping.mode)},
+        {"scale",layer.mapping.scale},{"offset",layer.mapping.offset},{"rotation",layer.mapping.rotation},{"scaleLinked",layer.mapping.scaleLinked}}}};
+}
+MaterialBlendLayer readBlendLayer(const Json& json) {
+    if(!json.is_object())throw std::runtime_error("Occurrence Blend layer must be an object.");
+    MaterialBlendLayer layer;
+    layer.heightBlend=json.value("heightBlend",layer.heightBlend);layer.heightInfluence=json.value("heightInfluence",layer.heightInfluence);
+    layer.blendSoftness=json.value("blendSoftness",layer.blendSoftness);layer.heightScale=json.value("heightScale",layer.heightScale);
+    layer.heightMidpoint=json.value("heightMidpoint",layer.heightMidpoint);layer.normalInfluence=json.value("normalInfluence",layer.normalInfluence);
+    layer.roughnessInfluence=json.value("roughnessInfluence",layer.roughnessInfluence);layer.colorInfluence=json.value("colorInfluence",layer.colorInfluence);
+    layer.metallicInfluence=json.value("metallicInfluence",layer.metallicInfluence);layer.occlusionInfluence=json.value("occlusionInfluence",layer.occlusionInfluence);
+    layer.tint=json.value("tint",layer.tint);layer.roughnessScale=json.value("roughnessScale",layer.roughnessScale);
+    layer.mappingOverride=json.value("mappingOverride",layer.mappingOverride);
+    if(json.contains("mapping")) {
+        const auto& mapping=json.at("mapping");if(!mapping.is_object())throw std::runtime_error("Occurrence Blend mapping must be an object.");
+        const auto mode=readCollisionBits(mapping.at("mode"));if(mode>3)throw std::runtime_error("Invalid occurrence Blend mapping mode.");
+        layer.mapping.mode=static_cast<MaterialUvMode>(mode);layer.mapping.scale=mapping.at("scale").get<Vec3>();
+        layer.mapping.offset=mapping.at("offset").get<Vec3>();layer.mapping.rotation=mapping.at("rotation").get<Vec3>();
+        layer.mapping.scaleLinked=mapping.value("scaleLinked",layer.mapping.scaleLinked);
+    }
+    validateSceneBlendLayer(layer);return layer;
+}
+SceneBlendSettings readBlendSettings(const Json& json) {
+    if(!json.is_array()||json.size()>MaximumModelMaterialSlots)throw std::runtime_error("Invalid occurrence Blend settings table.");
+    SceneBlendSettings settings;settings.reserve(json.size());
+    for(const auto& item:json) {
+        SceneBlendMaterialSettings binding;binding.slot=readCollisionBits(item.at("slot"));binding.material=item.at("material").get<AssetRef<MaterialAsset>>();
+        const auto& layers=item.at("layers");if(!layers.is_array()||layers.size()!=4)throw std::runtime_error("Occurrence Blend settings require Base/R/G/B layers.");
+        for(std::size_t index=0;index<4;++index)if(!layers[index].is_null())binding.layers[index]=readBlendLayer(layers[index]);
+        settings.push_back(std::move(binding));
+    }
+    validateSceneBlendSettings(settings);return settings;
+}
+Json blendSettingsJson(const SceneBlendSettings& settings) {
+    Json json=Json::array();
+    for(const auto& binding:settings) {
+        Json layers=Json::array();for(const auto& layer:binding.layers)layers.push_back(layer?blendLayerJson(*layer):Json{});
+        json.push_back({{"slot",binding.slot},{"material",binding.material},{"layers",std::move(layers)}});
+    }
+    return json;
+}
 SceneDecal readDecal(const Json& json) {
     SceneDecal decal;decal.asset=json.at("asset").get<AssetRef<DecalAsset>>();
     if(json.contains("projection")) {
@@ -429,6 +475,7 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
         if(version>=14)record.visible=entity.value("visible",true);
         if (entity.contains("model")) record.model=entity.at("model").get<AssetRef<ModelAsset>>();
         if(version>=25&&entity.contains("meshPaint"))record.meshPaint=readMeshPaint(entity.at("meshPaint"));
+        if(entity.contains("blendSettings"))record.blendSettings=readBlendSettings(entity.at("blendSettings"));
         if(entity.contains("primitive")) {
             const auto& source=entity.at("primitive");
             if(!source.is_object() || !record.model || !isBuiltinModel(record.model->id))
@@ -863,6 +910,7 @@ void canonicalizeSceneAssetRefs(SceneSnapshot& snapshot) {
         if(record.model)record.model->id=canonicalAssetId(record.model->id);
         record.modelRagdoll.asset.id=canonicalAssetId(record.modelRagdoll.asset.id);
         for(auto& material:record.modelMaterials)material.id=canonicalAssetId(material.id);
+        for(auto& binding:record.blendSettings)binding.material.id=canonicalAssetId(binding.material.id);
         if(record.particle)record.particle->id=canonicalAssetId(record.particle->id);
         if(record.decal){record.decal->asset.id=canonicalAssetId(record.decal->asset.id);record.decal->seed.modelId=canonicalAssetId(record.decal->seed.modelId);}
         if(record.collider)record.collider->source.id=canonicalAssetId(record.collider->source.id);
@@ -884,6 +932,7 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if (record.model) {
             entity["model"] = *record.model;
             if(record.meshPaint)entity["meshPaint"]=meshPaintJson(*record.meshPaint);
+            if(!record.blendSettings.empty())entity["blendSettings"]=blendSettingsJson(record.blendSettings);
             if(record.primitive) {
                 const auto& primitive=*record.primitive;
                 const auto base=canonicalAssetId(record.model->id);
@@ -966,8 +1015,8 @@ enum EntityField : uint64_t {
     OutlinerStyleField=1ull<<28,NavigationVolumeField=1ull<<29,EnemyField=1ull<<30,
     // Bit31 was authored Attributes; it is permanently reserved.
     TagsField=1ull<<32,EffectsField=1ull<<33,MeshShadingField=1ull<<34,PrimitiveMeshField=1ull<<35,DecalField=1ull<<36,ReceiveDecalsField=1ull<<37,
-    ModelRagdollField=1ull<<38,MeshPaintField=1ull<<39,
-    AllEntityFields=((1ull<<40)-1)&~(1ull<<31)
+    ModelRagdollField=1ull<<38,MeshPaintField=1ull<<39,BlendSettingsField=1ull<<40,
+    AllEntityFields=((1ull<<41)-1)&~(1ull<<31)
 };
 enum PropertyField : uint32_t { ActiveEnvironment=1u<<0,ActiveCamera=1u<<1,PlayerCharacter=1u<<2 };
 template<class T> bool equalLight(const std::optional<T>& a,const std::optional<T>& b) {
@@ -990,6 +1039,7 @@ uint64_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.meshShading!=b.meshShading)fields|=MeshShadingField;
     if(a.primitive!=b.primitive)fields|=PrimitiveMeshField;
     if(a.meshPaint!=b.meshPaint)fields|=MeshPaintField;
+    if(a.blendSettings!=b.blendSettings)fields|=BlendSettingsField;
     if(a.decal!=b.decal)fields|=DecalField;if(a.receiveDecals!=b.receiveDecals)fields|=ReceiveDecalsField;
     if(a.visible!=b.visible)fields|=VisibleField;
     if(a.movement!=b.movement)fields|=MotorField;
@@ -1020,6 +1070,7 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint64_t fields)
     if(fields&MeshShadingField)target.meshShading=source.meshShading;
     if(fields&PrimitiveMeshField)target.primitive=source.primitive;
     if(fields&MeshPaintField)target.meshPaint=source.meshPaint;
+    if(fields&BlendSettingsField)target.blendSettings=source.blendSettings;
     if(fields&DecalField)target.decal=source.decal;if(fields&ReceiveDecalsField)target.receiveDecals=source.receiveDecals;
     if(fields&VisibleField)target.visible=source.visible;
     if(fields&MotorField)target.movement=source.movement;
@@ -1477,6 +1528,7 @@ std::vector<std::string> SceneDocument::historicalMaterialReferences() const {
     std::unordered_set<std::string> references;
     const auto add=[&](const EntityRecord& record) {
         for(const auto& material:record.modelMaterials)if(!material.empty())references.insert(material.id);
+        for(const auto& binding:record.blendSettings)references.insert(binding.material.id);
     };
     for(const auto& command:history_.commands_)for(const auto& change:command.entities) {
         if(change.before)add(*change.before);if(change.after)add(*change.after);
@@ -1658,7 +1710,7 @@ EntityId SceneDocument::createQuader(const std::string& name) {
     EntityRecord record;record.name=name;record.quader.emplace();return create(std::move(record),"Create Quader");
 }
 bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,const std::vector<EntityRecord>& generated,
-    const ModelMaterialRemap& remapMaterials,const ModelPaintRemap& remapPaint,bool preservePlacement) {
+    const ModelMaterialRemap& remapMaterials,const ModelPaintRemap& remapPaint,bool preservePlacement,const ModelBlendRemap& remapBlendSettings) {
     if(transient_ || transaction_){status_="Quader import waits for Edit mode and the current scene edit.";return false;}
     const auto root=scene_.find(owner);
     if(!root || !root->quader){status_="Quader entity no longer exists.";return false;}
@@ -1706,6 +1758,9 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
                 preserveAuthoredActorComponents(record,*previous);
                 if(record.model && previous->model) {
                     record.meshPaint=remapPaint?remapPaint(*previous,record):previous->meshPaint;
+                    if(remapBlendSettings)record.blendSettings=remapBlendSettings(*previous,record);
+                    else if(record.model==previous->model)record.blendSettings=previous->blendSettings;
+                    else if(!previous->blendSettings.empty())throw std::runtime_error("Quader sync needs source material slots to preserve Blend settings on "+record.name+".");
                     record.lightingScopes=previous->lightingScopes;
                     record.meshShading=previous->meshShading;
                     if(remapMaterials)record.modelMaterials=remapMaterials(*previous,record);

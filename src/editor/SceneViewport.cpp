@@ -152,7 +152,7 @@ void SceneViewport::drawDecalPlacementPlane(const Mat4& frame,const Camera& came
     imageDrawList_->PopClipRect();
 }
 void SceneViewport::prepareVertexPaintUi(SceneDocument& document,Renderer& renderer,std::uint32_t bgfxFrame) {
-    if(!vertexPaint_.active())return;
+    if(!vertexPaint_.interacting())return;
     CRIMSON_PROFILE_ZONE("Vertex paint pre UI release and commands");
     const auto& io=ImGui::GetIO();
     const bool command=(io.KeyCtrl&&(ImGui::IsKeyPressed(ImGuiKey_S,false)||ImGui::IsKeyPressed(ImGuiKey_Z,false)||
@@ -161,6 +161,12 @@ void SceneViewport::prepareVertexPaintUi(SceneDocument& document,Renderer& rende
         ImGui::IsKeyPressed(ImGuiKey_Tab,false)||ImGui::IsKeyPressed(ImGuiKey_Enter,false)||
         ImGui::IsKeyPressed(ImGuiKey_P,false)||
         ImGui::IsKeyPressed(ImGuiKey_LeftAlt,false)||ImGui::IsKeyPressed(ImGuiKey_RightAlt,false);
+    // Layer fields use ordinary scene history, without holding the paint
+    // surface/clock or waiting for GPU visibility. Finish before menus draw.
+    const bool blendCommand=command&&!io.WantTextInput&&!ImGui::IsKeyPressed(ImGuiKey_Enter,false)&&!ImGui::IsKeyPressed(ImGuiKey_Tab,false);
+    vertexPaint_.prepareBlendSettingsUi(document,ImGui::IsMouseDown(ImGuiMouseButton_Left),blendCommand,
+        io.AppFocusLost||ImGui::IsKeyPressed(ImGuiKey_Escape,false));
+    if(!vertexPaint_.active())return;
     const auto* window=ImGui::FindWindowByName("Viewport");
     const bool unavailable=!window||window->Collapsed||imageRegion_.width<=0||imageRegion_.height<=0;
     Vec2 pointer{};bool hovered=false;

@@ -60,6 +60,8 @@
           "blend": 0,
           "decalColorEnabled": true,
           "decalColorStrength": 1.0,
+          "decalMetallicEnabled": false,
+          "decalMetallicStrength": 1.0,
           "decalNormalEnabled": true,
           "decalNormalStrength": 1.0,
           "decalRoughnessEnabled": true,
@@ -79,7 +81,7 @@
           "opacityMask": 1.0,
           "receiveFog": true,
           "refraction": false,
-          "roughness": 0.15299999713897705,
+          "roughness": 0.3619999885559082,
           "shading": 2,
           "specular": 0.5,
           "tessellation": {
@@ -102,8 +104,8 @@
         "kind": 2,
         "name": "Texture 2D",
         "position": [
-          -317.0,
-          -209.0
+          -479.0,
+          -227.0
         ],
         "texture": {
           "image": "737de3e1-9ff3-498f-93f0-f0b6207fad13",
@@ -137,7 +139,7 @@
         "right": {
           "type": 1,
           "value": [
-            0.5954395532608032,
+            0.6937822103500366,
             0.0,
             0.0,
             1.0
@@ -172,8 +174,8 @@
           "inputWhite": 1.0,
           "noiseContrast": 0.5,
           "noisePattern": 0,
-          "normalFlipY": false,
-          "normalStrength": 0.37299999594688416,
+          "normalFlipY": true,
+          "normalStrength": 0.27300000190734863,
           "opacity": 1.0,
           "outputBlack": 0.0,
           "outputWhite": 1.0,
@@ -208,7 +210,7 @@
         }
       }
     ],
-    "version": 17
+    "version": 20
   },
   "id": "fb1978e0-7ccc-55e1-8b6f-3a8b914a26db",
   "name": "New Decal Material",

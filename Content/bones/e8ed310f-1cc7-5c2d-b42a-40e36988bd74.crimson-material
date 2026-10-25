@@ -25,13 +25,27 @@
       {
         "fromNode": 7,
         "fromPin": 0,
-        "id": 8,
+        "id": 11,
+        "toNode": 8,
+        "toPin": 8
+      },
+      {
+        "fromNode": 8,
+        "fromPin": 0,
+        "id": 13,
+        "toNode": 9,
+        "toPin": 8
+      },
+      {
+        "fromNode": 9,
+        "fromPin": 0,
+        "id": 17,
         "toNode": 1,
         "toPin": 10
       }
     ],
-    "nextLinkId": 9,
-    "nextNodeId": 8,
+    "nextLinkId": 18,
+    "nextNodeId": 11,
     "nodes": [
       {
         "id": 1,
@@ -88,8 +102,8 @@
           "transmission": 1.0
         },
         "position": [
-          163.0,
-          115.0
+          467.0,
+          -40.0
         ]
       },
       {
@@ -97,8 +111,8 @@
         "kind": 1,
         "name": "UV",
         "position": [
-          -1081.0,
-          -1.0
+          -1760.0,
+          -13.0
         ],
         "uv": {
           "mode": 0,
@@ -125,8 +139,8 @@
         "kind": 2,
         "name": "Texture 2D",
         "position": [
-          -781.0,
-          -1.0
+          -1348.0,
+          -106.0
         ],
         "texture": {
           "image": "ad86efbd-67cd-56c8-b6b9-8cc49652f78f",
@@ -159,7 +173,7 @@
         "id": 7,
         "image": {
           "blendMode": 0,
-          "brightness": 0.07999999821186066,
+          "brightness": 0.017000000923871994,
           "contrast": -0.01899999938905239,
           "featureSize": 12.0,
           "gamma": 1.0,
@@ -190,8 +204,8 @@
         },
         "name": "Brightness / Contrast",
         "position": [
-          -304.6667175292969,
-          -34.000003814697266
+          -1101.666748046875,
+          -234.0
         ],
         "right": {
           "type": 0,
@@ -202,9 +216,52 @@
             1.0
           ]
         }
+      },
+      {
+        "id": 8,
+        "kind": 49,
+        "kuwahara": {
+          "mix": 0.6439999938011169,
+          "radius": 7
+        },
+        "left": {
+          "type": 0,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "name": "Kuwahara",
+        "position": [
+          -557.199951171875,
+          -282.4000244140625
+        ]
+      },
+      {
+        "id": 9,
+        "kind": 47,
+        "left": {
+          "type": 0,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "name": "Posterization",
+        "position": [
+          -157.79998779296875,
+          -243.60000610351563
+        ],
+        "stylization": {
+          "levels": 16
+        }
       }
     ],
-    "version": 18
+    "version": 20
   },
   "id": "e8ed310f-1cc7-5c2d-b42a-40e36988bd74",
   "name": "tripo_mat_7e26b674-1fc6-47b6-b1e4-463008bce1ff",
