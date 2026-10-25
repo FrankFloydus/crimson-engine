@@ -51,14 +51,16 @@ void VertexPaintTool::drawControls(SceneDocument& document,AssetLibrary& assets,
         } else if(palette)ImGui::TextUnformatted(palette->name.c_str());
         constexpr std::array pins{MaterialPin::Base,MaterialPin::Red,MaterialPin::Green,MaterialPin::Blue};
         constexpr std::array<const char*,4> channels{"Base","R","G","B"};
+        if(palette&&palette->blendDefinition&&!palette->blendDefinition->layers[brush_.layer].enabled)selectLayer(0);
         const float thumbnailSide=ImGui::GetFrameHeight()*1.6f,rowHeight=thumbnailSide+ImGui::GetStyle().FramePadding.y*2;
         for(std::uint32_t layer=0;layer<pins.size();++layer) {
+            if(palette&&palette->blendDefinition&&!palette->blendDefinition->layers[layer].enabled)continue;
             std::string id;
             if(palette)if(const auto* link=materialInputLink(palette->graph,materialOutputNode(palette->graph).id,pins[layer]))
                 if(const auto* node=findMaterialNode(palette->graph,link->fromNode);node&&node->kind==MaterialNodeKind::MaterialReference)id=node->material.id;
             const auto source=id.empty()?std::shared_ptr<const MaterialAsset>{}:assets.findMaterial(id);
             if(!id.empty()&&std::find(previewMaterials_.begin(),previewMaterials_.end(),id)==previewMaterials_.end())previewMaterials_.push_back(id);
-            const auto label=source?source->name:id.empty()?std::string("Default surface"):assets.displayName(id);
+            const auto label=source?source->name:id.empty()&&palette&&palette->blendDefinition?"Layer "+std::to_string(layer+1)+" (Inline)":id.empty()?std::string("Default surface"):assets.displayName(id);
             ImGui::PushID(static_cast<int>(layer));
             const auto start=ImGui::GetCursorScreenPos();
             if(ImGui::Selectable("##material",brush_.layer==layer,ImGuiSelectableFlags_AllowOverlap,{0,rowHeight}))selectLayer(layer);
@@ -78,11 +80,7 @@ void VertexPaintTool::drawControls(SceneDocument& document,AssetLibrary& assets,
             ImGui::SetCursorScreenPos(next);ImGui::PopID();
         }
         drawBrushSettings();
-        const auto* selectedLink=palette?materialInputLink(palette->graph,materialOutputNode(palette->graph).id,pins[brush_.layer]):nullptr;
-        const auto* selectedNode=selectedLink?findMaterialNode(palette->graph,selectedLink->fromNode):nullptr;
-        if(selectedNode&&selectedNode->kind==MaterialNodeKind::MaterialReference)
-            blendControls_.draw(document,{document.selection().primary,paletteSlot_,brush_.layer,palette->id},selectedNode->blendLayer);
-        else blendControls_.finish(document);
+        blendControls_.finish(document);
         if(!diagnostic_.empty())ImGui::TextWrapped("%s",diagnostic_.c_str());
     } else blendControls_.finish(document);
     ImGui::End();if(!open)setEnabled(false,document,renderer);

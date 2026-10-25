@@ -22,7 +22,7 @@ namespace {
 void canceled(std::stop_token stop){if(stop.stop_requested())throw std::runtime_error("Asset deletion preparation canceled.");}
 void materialDependencies(const std::filesystem::path& root,const MaterialAsset& definition,const AssetReferenceManager& policy,std::vector<std::filesystem::path>& result,bool staged=false) {
     if(!staged&&!isEngineAssetId(definition.id))result.push_back(checkedManagedAssetPath(root,definition.id));
-    visitMaterialTextures(definition.surface,false,[&](const auto& id,MaterialTextureRole role){
+    visitMaterialAssetTextures(definition,[&](const auto& id,MaterialTextureRole role){
         const auto image=policy.resolveTexture(id,role==MaterialTextureRole::Normal);
         if(image.empty()||isEngineAssetId(image))return;
         const auto file=checkedManagedAssetPath(root,image);auto extension=file.extension().string();std::transform(extension.begin(),extension.end(),extension.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
@@ -32,7 +32,7 @@ void materialDependencies(const std::filesystem::path& root,const MaterialAsset&
         const auto target=policy.resolveMaterial(id);
         const auto child=loadMaterialAsset(root,target);
         if(!blendMaterialSourceCompatible(child)||child.id==definition.id)
-            throw std::runtime_error("Blend layers require a solid Lit replacement without tessellation.");
+            throw std::runtime_error("Blend layers require a solid Lit replacement.");
         // Nested material references are rejected by compatibility, so this is bounded.
         materialDependencies(root,child,policy,result);
     }
@@ -113,7 +113,7 @@ std::shared_ptr<DeletionValidation> validateAssetDeletion(const std::filesystem:
         canceled(stop);const auto definition=loadParticleAsset(root,entry.id);canceled(stop);
         auto material=loadMaterialAsset(root,policy.resolveParticleMaterial(definition.emitter.material.id));
         if(!particleMaterialCompatible(material))material=defaultParticleMaterialAsset();
-        visitMaterialTextures(material.surface,false,[&](const auto& id,MaterialTextureRole role){
+        visitMaterialAssetTextures(material,[&](const auto& id,MaterialTextureRole role){
             const auto image=policy.resolveTexture(id,role==MaterialTextureRole::Normal);
             if(!image.empty()&&!isEngineAssetId(image))(void)decodeManagedImage(checkedManagedAssetPath(root,image));
         });
@@ -122,7 +122,7 @@ std::shared_ptr<DeletionValidation> validateAssetDeletion(const std::filesystem:
     }
     for(const auto& entry:decals) {
         canceled(stop);auto asset=loadDecalAsset(root,entry.id);
-        if(const auto material=decalMaterial(root,asset,policy))visitMaterialTextures(material->surface,false,[&](const auto& id,MaterialTextureRole role){
+        if(const auto material=decalMaterial(root,asset,policy))visitMaterialAssetTextures(*material,[&](const auto& id,MaterialTextureRole role){
             const auto image=policy.resolveTexture(id,role==MaterialTextureRole::Normal);if(image.empty()||isEngineAssetId(image))return;
             const auto file=checkedManagedAssetPath(root,image);if(file.extension()==".hdr")throw std::runtime_error("Decal materials cannot use HDR environments.");(void)decodeManagedImage(file);
         });

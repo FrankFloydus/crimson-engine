@@ -861,6 +861,10 @@ std::shared_ptr<const MaterialAsset> AssetLibrary::createMaterial(const std::str
     try{auto material=std::make_shared<MaterialAsset>(createMaterialAsset(projectRoot_,name));publishMaterial(material);noteAssetWrite(material->id);select(material->id);status_="Created "+material->name;return material;}
     catch(const std::exception& error){status_=error.what();return {};}
 }
+std::shared_ptr<const MaterialAsset> AssetLibrary::createBlendMaterial(const std::string& name) {
+    try{auto material=std::make_shared<MaterialAsset>(createBlendMaterialAsset(projectRoot_,name));publishMaterial(material);noteAssetWrite(material->id);select(material->id);status_="Created "+material->name;return material;}
+    catch(const std::exception& error){status_=error.what();return {};}
+}
 std::shared_ptr<const MaterialAsset> AssetLibrary::copyMaterial(const std::string& id,const std::string& name) {
     try{const auto source=findMaterial(id);if(!source)throw std::runtime_error("Material is unavailable: "+id);
         auto material=std::make_shared<MaterialAsset>(copyMaterialAsset(projectRoot_,*source,name));publishMaterial(material);noteAssetWrite(material->id);select(material->id);status_="Copied "+material->name;return material;}
@@ -1631,7 +1635,7 @@ AssetLibrary::GraphShaderCache& AssetLibrary::graphCache(const std::shared_ptr<c
     for(const auto& id:materialGraphMaterialReferences(*graph,true)) {
         const auto source=findMaterial(id);
         if(!source)throw std::runtime_error("Blend source material is unavailable: "+id);
-        if(!blendMaterialSourceCompatible(*source))throw std::runtime_error("Blend layers require solid Lit materials without tessellation: "+source->name);
+        if(!blendMaterialSourceCompatible(*source))throw std::runtime_error("Blend layers require solid Lit materials: "+source->name);
         next.sources.push_back(source);next.sourceRevisions.emplace_back(id,materialRevision(id));
     }
     if(graphShaderCache_.size()>128)std::erase_if(graphShaderCache_,[](const auto& entry){return entry.second.source.expired();});
@@ -2355,7 +2359,7 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     std::unordered_set<std::string> usableMaterials;
     for(const auto& entry:catalog_)if(entry.kind==AssetKind::Material)try{if(std::filesystem::is_regular_file(resolveAssetPath(projectRoot_,entry.id)))usableMaterials.insert(entry.id);}catch(const std::exception&){}
     for(const auto& stored:materials_){const auto material=stored->id==materialDocumentId_&&std::filesystem::is_regular_file(materialAssetPath(projectRoot_,stored->id))?std::make_shared<MaterialAsset>(loadMaterialAsset(projectRoot_,stored->id)):stored;
-        visitMaterialTextures(material->surface,false,[&](const auto& id,MaterialTextureRole role){
+        visitMaterialAssetTextures(*material,[&](const auto& id,MaterialTextureRole role){
             usages.push_back({id,material->id,material->name,role==MaterialTextureRole::Normal?"Normal texture":"Graph texture",false,false,!usableMaterials.contains(material->id)});
         });
         for(const auto& id:materialMaterialReferences(*material))
@@ -2677,20 +2681,18 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         for(const auto& entry:catalog_)if(entry.kind==AssetKind::Material&&!deletedIds.contains(entry.id)){
             auto material=loadMaterialAsset(projectRoot_,entry.id);bool changed=false;
             canonicalizeMaterialAsset(material);
-            rewriteMaterialGraphTextures(material.graph,[&](const auto& id,MaterialTextureRole role){
+            changed=rewriteMaterialAssetReferences(material,[&](const auto& id,MaterialTextureRole role){
                 if(!deletedIds.contains(references_.resolve(id)))return id;
                 const auto replacement=nextReferences.resolveTexture(id,role==MaterialTextureRole::Normal);
-                changed|=replacement!=id;return replacement;
-            });
-            for(auto& node:material.graph.nodes)if(node.kind==MaterialNodeKind::MaterialReference&&!node.material.empty()&&
-                deletedIds.contains(references_.resolve(node.material.id))) {
-                const auto replacement=nextReferences.resolveMaterial(node.material.id);
+                return replacement;
+            },[&](const auto& id){
+                if(!deletedIds.contains(references_.resolve(id)))return id;
+                const auto replacement=nextReferences.resolveMaterial(id);
                 const auto definition=findMaterial(replacement);
                 if(!definition||!blendMaterialSourceCompatible(*definition)||definition->id==material.id)
-                    throw std::runtime_error("Blend layers require a solid Lit replacement without tessellation.");
-                changed|=node.material.id!=replacement;node.material.id=replacement;
-            }
-            if(changed)canonicalizeMaterialAsset(material);
+                    throw std::runtime_error("Blend layers require a solid Lit replacement.");
+                return replacement;
+            });
             if(changed){changes.push_back({entry.id,serializeMaterialAsset(material)});
                 if(entry.id!=materialDocumentId_){auto definition=std::make_shared<MaterialAsset>(std::move(material));preparedAuthoredMaterials[entry.id]={definition,preparedMaterialRevision++,{}};
                     for(auto& cached:preparedMaterials)if(cached->id==entry.id)cached=definition;}}

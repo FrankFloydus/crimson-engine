@@ -40,6 +40,7 @@ public:
     std::string undoLabel() const;
     std::string redoLabel() const;
     bool create(const std::string& name = "New Material");
+    bool createBlend(const std::string& name = "New Blend Material");
     bool load(const std::string& id);
     bool loadStaged(const MaterialAsset&);
     bool save(const std::string& name = {}, bool saveAs = false);

@@ -38,7 +38,7 @@ MaterialGraphSourceSet resolveMaterialSources(const MaterialAsset& material,cons
     for(const auto& id:materialGraphMaterialReferences(material.graph,true)) {
         if(id==material.id)throw std::runtime_error("A Blend material cannot reference itself.");
         auto source=load(id);if(!source)throw std::runtime_error("Blend source material is unavailable: "+id);
-        if(!materialBlendSourceCompatible(*source))throw std::runtime_error("Blend layers require solid Lit materials without tessellation: "+source->name);
+        if(!materialBlendSourceCompatible(*source))throw std::runtime_error("Blend layers require ordinary Lit, Opaque materials: "+source->name);
         result.push_back(std::move(source));
     }
     return result;

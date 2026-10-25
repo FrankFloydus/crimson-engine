@@ -54,6 +54,7 @@ struct EditorFrame {
     bool createParticle{false};
     std::uint64_t playParticleEntity{};
     bool createMaterial{false};
+    bool createBlendMaterial{false};
     std::string openMaterial, materialFolder;
     bool createNavigationAgentProfile{false};
     std::string openNavigationAgentProfile,navigationAgentProfileFolder;
@@ -80,6 +81,7 @@ struct BrowserActions {
     bool createParticle{false};
     std::string openParticle, particleFolder;
     bool createMaterial{false};
+    bool createBlendMaterial{false};
     std::string openMaterial, materialFolder;
     bool createNavigationAgentProfile{false};
     std::string openNavigationAgentProfile,navigationAgentProfileFolder;

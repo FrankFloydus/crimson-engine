@@ -196,9 +196,13 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
         ImGui::BeginDisabled(!writableFolder);
         if (ImGui::Button("Import")) assets.requestImport(window,folder_);
         ImGui::SameLine();
-        if (ImGui::Button("Create")) ImGui::OpenPopup("Create native asset");
+        if (ImGui::Button("Add")) ImGui::OpenPopup("Create native asset");
         if (ImGui::BeginPopup("Create native asset")) {
-            if (ImGui::MenuItem("Material")) { actions.createMaterial=true;actions.materialFolder=folder_; }
+            if(ImGui::BeginMenu("Material")) {
+                if(ImGui::MenuItem("Standard Graph Material")){actions.createMaterial=true;actions.materialFolder=folder_;}
+                if(ImGui::MenuItem("Blend Material")){actions.createBlendMaterial=true;actions.materialFolder=folder_;}
+                ImGui::EndMenu();
+            }
             if (ImGui::MenuItem("Decal")) { actions.createDecal=true;actions.decalFolder=folder_; }
             if (ImGui::MenuItem("Particle Effect")) { actions.createParticle=true;actions.particleFolder=folder_; }
             if(ImGui::MenuItem("Navigation Agent Profile")){actions.createNavigationAgentProfile=true;actions.navigationAgentProfileFolder=folder_;}
@@ -537,7 +541,11 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
             ImGui::Separator();
             if (ImGui::MenuItem("New Folder")) createFolder();
             if (ImGui::MenuItem("New scene")) actions.newScene=true;
-            if (ImGui::MenuItem("Material")) { actions.createMaterial=true;actions.materialFolder=folder_; }
+            if(ImGui::BeginMenu("Material")) {
+                if(ImGui::MenuItem("Standard Graph Material")){actions.createMaterial=true;actions.materialFolder=folder_;}
+                if(ImGui::MenuItem("Blend Material")){actions.createBlendMaterial=true;actions.materialFolder=folder_;}
+                ImGui::EndMenu();
+            }
             if (ImGui::MenuItem("Decal")) { actions.createDecal=true;actions.decalFolder=folder_; }
             if (ImGui::MenuItem("Particle Effect")) { actions.createParticle=true;actions.particleFolder=folder_; }
             ImGui::EndDisabled();

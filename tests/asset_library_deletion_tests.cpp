@@ -2476,6 +2476,43 @@ void blendOccurrenceMaterials() {
         "Returning a shared layer's numeric controls to their original values changed its split-node topology.");
     require(serializeMaterialAsset(*library.findMaterial(blend.id))==authored&&read(materialAssetPath(project.root,blend.id))==sourceBytes&&
         library.findMaterial(child.id)==originalChild,"Occurrence rendering mutated a shared material or source asset.");
+    auto inlineBlend=*library.createBlendMaterial("Inline occurrence Blend");
+    auto& inlineLayer=inlineBlend.blendDefinition->layers[1];
+    inlineLayer.channels[0].mode=BlendChannelMode::Texture;inlineLayer.channels[0].image.id=GrayTextureId;
+    inlineLayer.appearance.mapping.scale={1.2f,1.3f,1.4f};
+    canonicalizeMaterialAsset(inlineBlend);saveMaterialAsset(project.root,inlineBlend);library.publishMaterial(std::make_shared<const MaterialAsset>(inlineBlend));
+    const ModelMaterialOverrides inlineAssignment{AssetRef<MaterialAsset>{inlineBlend.id}};
+    const auto inlineOriginal=library.resolvedModelMaterials(*geometry,inlineAssignment)[0].graph;
+    const auto inlineOutput=materialOutputNode(*inlineOriginal).id;
+    const auto inlineReference=materialInputLink(*inlineOriginal,inlineOutput,MaterialPin::Red)->fromNode;
+    require(findMaterialNode(*inlineOriginal,inlineReference)->kind==MaterialNodeKind::ResolvedSurface,
+        "Inline material did not expose the existing occurrence appearance owner.");
+    auto inlineControls=inlineLayer.appearance;inlineControls.tint={.4f,.5f,.6f};inlineControls.roughnessScale=.7f;
+    inlineControls.mappingOverride=true;inlineControls.mapping.mode=MaterialUvMode::WorldTriplanar;inlineControls.mapping.scale={4,5,6};
+    SceneBlendSettings inlineSettings;setSceneBlendLayer(inlineSettings,0,inlineBlend.id,1,inlineControls);
+    const auto inlineChanged=library.resolvedModelMaterials(*geometry,inlineAssignment,inlineSettings)[0].graph;
+    require(inlineChanged!=inlineOriginal&&findMaterialNode(*inlineChanged,inlineReference)->blendLayer==inlineControls,
+        "Inline layers silently ignored an occurrence's guarded appearance.");
+    validateMaterialGraph(*inlineChanged);
+    const auto inlineShader=[&](const std::shared_ptr<const MaterialGraph>& graph){auto asset=inlineBlend;asset.blendDefinition.reset();asset.graph=*graph;return generateMaterialGraphShader(asset);};
+    const auto beforeInlineShader=inlineShader(inlineOriginal),changedInlineShader=inlineShader(inlineChanged);
+    require(std::any_of(changedInlineShader.textures.begin(),changedInlineShader.textures.end(),[&](const auto& binding){
+        return changedInlineShader.uniforms[binding.mappingRow][0]==4&&changedInlineShader.uniforms[binding.mappingRow][1]==5;
+    }),"Inline occurrence mapping did not reach its packed surface samples.");
+    require(beforeInlineShader.textures.size()==changedInlineShader.textures.size(),"Inline occurrence mapping added runtime samplers.");
+    for(std::size_t i=0;i<beforeInlineShader.textures.size();++i) {
+        require(beforeInlineShader.textures[i].resize.has_value()&&changedInlineShader.textures[i].resize.has_value()&&
+            beforeInlineShader.textures[i].resize->definitionKey==changedInlineShader.textures[i].resize->definitionKey,
+            "Inline occurrence placement changed immutable generated-image content keys.");
+    }
+    require(library.resolvedModelMaterials(*geometry,inlineAssignment)[0].graph==inlineOriginal&&
+        findMaterialNode(*inlineOriginal,inlineReference)->blendLayer==inlineLayer.appearance,
+        "Inline occurrence controls changed the shared material or another mesh.");
+    inlineControls.mapping.scale={7,8,9};setSceneBlendLayer(inlineSettings,0,inlineBlend.id,1,inlineControls);
+    const auto inlineMoved=library.resolvedModelMaterials(*geometry,inlineAssignment,inlineSettings)[0].graph;
+    const auto movedInlineShader=inlineShader(inlineMoved);
+    require(movedInlineShader.topologyKey==changedInlineShader.topologyKey&&movedInlineShader.uniforms!=changedInlineShader.uniforms,
+        "Inline occurrence mapping values changed shader topology or retained stale parameters.");
     SceneDocument scene(project.root);const auto entity=scene.createBox("Dormant Blend controls");auto entityRecord=*scene.scene().find(entity);
     setSceneBlendLayer(entityRecord.blendSettings,0,blend.id,1,controls);
     require(scene.updateEntity(entity,entityRecord)&&scene.save("Blend guard deletion"),scene.status());

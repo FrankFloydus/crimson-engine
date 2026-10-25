@@ -381,6 +381,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(frame.createParticle) particleEditor_.requestCreate(frame.particleFolder,assets);
     if(!frame.openParticle.empty()) particleEditor_.requestOpen(frame.openParticle,assets);
     if(frame.createMaterial)materialEditor_.requestCreate(frame.materialFolder,assets);
+    if(frame.createBlendMaterial)materialEditor_.requestCreateBlend(frame.materialFolder,assets);
     if(!frame.openMaterial.empty())materialEditor_.requestOpen(frame.openMaterial,assets);
     particleEditor_.setAntiAliasing(editor_.antiAliasing());
     materialEditor_.setAntiAliasing(editor_.antiAliasing());

@@ -582,7 +582,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     frame.openParticle=browser.openParticle.empty()?std::move(openParticle):std::move(browser.openParticle);
     frame.playParticleEntity=playParticle;
     frame.createDecal=browser.createDecal;frame.decalFolder=std::move(browser.decalFolder);frame.openDecal=browser.openDecal.empty()?std::move(openDecal):std::move(browser.openDecal);
-    frame.createMaterial=browser.createMaterial;frame.materialFolder=std::move(browser.materialFolder);
+    frame.createMaterial=browser.createMaterial;frame.createBlendMaterial=browser.createBlendMaterial;frame.materialFolder=std::move(browser.materialFolder);
     frame.openMaterial=browser.openMaterial.empty()?std::move(openMaterial):std::move(browser.openMaterial);
     if (browser.newScene) request(Pending::New,{},document,settings.camera,renderer);
     if (!browser.openScene.empty()) request(Pending::Open,browser.openScene,document,settings.camera,renderer);

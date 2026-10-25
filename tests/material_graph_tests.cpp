@@ -471,11 +471,25 @@ void heightTessellationPersistence() {
         "New materials must have disabled tessellation and a neutral Height fallback.");
     const auto image=node(graph,MaterialNodeKind::Texture2D);findMaterialNode(graph,image)->texture.role=MaterialTextureRole::Data;
     findMaterialNode(graph,image)->texture.image.id=canonicalAssetId("assets/textures/height.png");
-    rejects([&]{connectMaterialNodes(graph,image,MaterialPin::R,out,MaterialPin::Height);},"Disabled Height accepted a new connection.");
+    const auto dormantValues=materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
+    const auto link=connectMaterialNodes(graph,image,MaterialPin::RGB,out,MaterialPin::Height);
+    const auto inactive=materialGraphOrder(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
+    require(materialInputLink(graph,out,MaterialPin::Height)->id==link&&std::find(inactive.begin(),inactive.end(),image)==inactive.end()&&
+        materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==initialTopology&&
+        materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==dormantValues&&materialRuntimeTextureMappings(graph).empty(),
+        "Authoring Height with tessellation disabled activated runtime work or changed the surface's shader identity.");
+    findMaterialNode(graph,image)->texture.image.id=canonicalAssetId("assets/textures/unused-height-edit.png");
+    require(materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==initialTopology&&
+        materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==dormantValues&&materialRuntimeTextureMappings(graph).empty(),
+        "Editing an authored but unused Height image invalidated or sampled the ordinary surface.");
+    findMaterialNode(graph,image)->texture.image.id=canonicalAssetId("assets/textures/height.png");
     materialOutputNode(graph).output.tessellation.enabled=true;
     require(!materialGraphFixedSurface(graph)&&materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)!=initialTopology,
         "Enabling tessellation failed to select a graph shader topology.");
-    const auto link=connectMaterialNodes(graph,image,MaterialPin::RGB,out,MaterialPin::Height);
+    const auto active=materialGraphOrder(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
+    const auto demand=materialRuntimeTextureMappings(graph);
+    require(std::find(active.begin(),active.end(),image)!=active.end()&&demand.size()==1&&demand.front().node==image,
+        "Enabling tessellation failed to demand the previously authored Height branch and its runtime sampler.");
     require(materialOutputType(graph,image,MaterialPin::RGB)==MaterialValueType::Color,"Height changed its authored RGB source pin.");
     const auto enabledTopology=materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
     const auto values=materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);

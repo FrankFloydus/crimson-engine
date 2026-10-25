@@ -102,15 +102,20 @@ MaterialGraph materialGraphFromLegacy(const ModelMaterial& surface,MaterialShadi
 ModelMaterial materialGraphLegacySurface(const MaterialGraph& graph,const std::string& name) {return materialGraphLegacySurfaceData(graph,name,material_graph_image_policy().valid_image);}
 std::optional<ModelMaterial> materialGraphFixedSurface(const MaterialGraph& graph) {return materialGraphFixedSurfaceData(graph,material_graph_image_policy().valid_image);}
 void canonicalizeMaterialAsset(MaterialAsset& material) {
-    if(material.graph.empty())material.graph=materialGraphFromLegacy(material.surface,material.shading,material.blend);
-    validateMaterialGraph(material.graph);
     material.id=canonicalAssetId(material.id);material.originModel=canonicalAssetId(material.originModel);
+    if(material.blendDefinition) {
+        rewrite_blend_material_textures(*material.blendDefinition,[](const auto& id,MaterialTextureRole){return canonicalAssetId(id);});
+        rewrite_blend_material_materials(*material.blendDefinition,[](const auto& id){return canonicalAssetId(id);});
+        material.graph=lower_blend_material_definition(*material.blendDefinition,material_graph_image_policy());
+    } else if(material.graph.empty())material.graph=materialGraphFromLegacy(material.surface,material.shading,material.blend);
+    validateMaterialGraph(material.graph);
     for(auto& node:material.graph.nodes)if(node.kind==MaterialNodeKind::Texture2D||node.kind==MaterialNodeKind::ImageInput)node.texture.image.id=canonicalAssetId(node.texture.image.id);
     for(auto& node:material.graph.nodes)if(node.kind==MaterialNodeKind::MaterialReference)node.material.id=canonicalAssetId(node.material.id);
     const auto& output=materialOutputNode(material.graph).output;material.shading=output.shading;material.blend=output.blend;
     material.surface=materialGraphLegacySurface(material.graph,material.name);
 }
 std::vector<std::string> materialTextureReferences(const MaterialAsset& material) {
+    if(material.blendDefinition)return blend_material_texture_references(*material.blendDefinition);
     if(!material.graph.empty())return materialGraphTextureReferences(material.graph);
     std::vector<std::string> result;
     for(const auto* slot:{&material.surface.baseColorTexture,&material.surface.metallicRoughnessTexture,&material.surface.normalTexture,&material.surface.occlusionTexture,&material.surface.emissiveTexture})
@@ -118,13 +123,46 @@ std::vector<std::string> materialTextureReferences(const MaterialAsset& material
     return result;
 }
 std::vector<std::string> materialMaterialReferences(const MaterialAsset& material) {
+    if(material.blendDefinition)return blend_material_material_references(*material.blendDefinition);
     return materialGraphMaterialReferences(material.graph);
+}
+void visitMaterialAssetTextures(const MaterialAsset& material,
+    const std::function<void(const std::string&,MaterialTextureRole)>& visitor) {
+    if(material.blendDefinition){visit_blend_material_textures(*material.blendDefinition,visitor);return;}
+    if(!material.graph.empty()) {
+        for(const auto& node:material.graph.nodes)if((node.kind==MaterialNodeKind::Texture2D||node.kind==MaterialNodeKind::ImageInput)&&!node.texture.image.empty())
+            visitor(node.texture.image.id,node.texture.role);
+        return;
+    }
+    for(const auto* slot:{&material.surface.baseColorTexture,&material.surface.metallicRoughnessTexture,&material.surface.normalTexture,&material.surface.occlusionTexture,&material.surface.emissiveTexture})
+        if(!slot->image.empty())visitor(slot->image.id,slot==&material.surface.normalTexture?MaterialTextureRole::Normal:
+            slot==&material.surface.baseColorTexture||slot==&material.surface.emissiveTexture?MaterialTextureRole::Color:MaterialTextureRole::Data);
+}
+bool rewriteMaterialAssetReferences(MaterialAsset& material,
+    const std::function<std::string(const std::string&,MaterialTextureRole)>& texture,
+    const std::function<std::string(const std::string&)>& source) {
+    auto candidate=material;bool changed=false;
+    const auto replaceTexture=[&](const std::string& id,MaterialTextureRole role) {
+        const auto replacement=texture?texture(id,role):id;changed|=replacement!=id;return replacement;
+    };
+    const auto replaceMaterial=[&](const std::string& id) {
+        const auto replacement=source?source(id):id;changed|=replacement!=id;return replacement;
+    };
+    if(candidate.blendDefinition) {
+        rewrite_blend_material_textures(*candidate.blendDefinition,replaceTexture);
+        rewrite_blend_material_materials(*candidate.blendDefinition,replaceMaterial);
+    } else {
+        rewriteMaterialGraphTextures(candidate.graph,replaceTexture);
+        for(auto& node:candidate.graph.nodes)if(node.kind==MaterialNodeKind::MaterialReference&&!node.material.empty())node.material.id=replaceMaterial(node.material.id);
+    }
+    if(changed){canonicalizeMaterialAsset(candidate);validateMaterialAsset(candidate);material=std::move(candidate);}
+    return changed;
 }
 bool blendMaterialSourceCompatible(const MaterialAsset& material) {
     try {
         const auto graph=material.graph.empty()?materialGraphFromLegacy(material.surface,material.shading,material.blend):material.graph;
         validateMaterialGraph(graph);const auto& output=materialOutputNode(graph).output;
-        return output.shading==MaterialShading::StandardPbr&&output.blend==MaterialBlend::Opaque&&!output.tessellation.enabled&&
+        return !material.blendDefinition&&output.shading==MaterialShading::StandardPbr&&output.blend==MaterialBlend::Opaque&&
             std::none_of(graph.nodes.begin(),graph.nodes.end(),[](const auto& node){return node.kind==MaterialNodeKind::MaterialReference;});
     } catch(const std::exception&) {return false;}
 }
@@ -165,10 +203,11 @@ MaterialAsset defaultParticleMaterialAsset() {
     canonicalizeMaterialAsset(material);return material;
 }
 bool particleMaterialCompatible(const MaterialAsset& material) {
-    return (material.graph.empty()?material.shading:materialOutputNode(material.graph).output.shading)!=MaterialShading::BlendPbr&&modelMaterialCompatible(material);
+    return !material.blendDefinition&&(material.graph.empty()?material.shading:materialOutputNode(material.graph).output.shading)!=MaterialShading::BlendPbr&&modelMaterialCompatible(material);
 }
 bool modelMaterialCompatible(const MaterialAsset& material) {
     try {
+        if(material.blendDefinition){validateMaterialAsset(material);validateMaterialGraph(lower_blend_material_definition(*material.blendDefinition,material_graph_image_policy()));return true;}
         if((material.graph.empty()?material.shading:materialOutputNode(material.graph).output.shading)==MaterialShading::Decal)return false;
         if(!material.graph.empty())validateMaterialGraph(material.graph);
         else {validateMaterialAsset(material);(void)materialGraphFromLegacy(material.surface,material.shading,material.blend);}
@@ -177,14 +216,15 @@ bool modelMaterialCompatible(const MaterialAsset& material) {
 }
 
 bool decalMaterialCompatible(const MaterialAsset& material) {
-    try {validateMaterialAsset(material);return (material.graph.empty()?material.shading:materialOutputNode(material.graph).output.shading)==MaterialShading::Decal;}
+    try {validateMaterialAsset(material);return !material.blendDefinition&&(material.graph.empty()?material.shading:materialOutputNode(material.graph).output.shading)==MaterialShading::Decal;}
     catch(const std::exception&){return false;}
 }
 
 void validateMaterialAsset(const MaterialAsset& a) {
     if(a.id.empty()||a.name.empty()||a.name.size()>1024)throw std::runtime_error("Material contains invalid identity or name.");
-    if(!a.graph.empty()){
-        validateMaterialGraph(a.graph);
+    if(a.blendDefinition||!a.graph.empty()){
+        if(a.blendDefinition)validate_blend_material_definition(*a.blendDefinition,material_graph_image_policy());
+        else validateMaterialGraph(a.graph);
         for(const auto& id:materialMaterialReferences(a)) {
             if(canonicalAssetId(id)==canonicalAssetId(a.id))throw std::runtime_error("A material cannot reference itself.");
             if(!isAssetUuid(id)) {
@@ -213,6 +253,10 @@ void validateMaterialAsset(const MaterialAsset& a) {
 }
 std::string serializeMaterialAsset(const MaterialAsset& a) {
     validateMaterialAsset(a);auto canonical=a;canonicalizeMaterialAsset(canonical);
+    if(!canonical.blendDefinition&&canonical.shading==MaterialShading::BlendPbr)
+        canonical.blendDefinition=migrate_blend_material_graph(canonical.graph);
+    if(canonical.blendDefinition)return Json{{"version",7},{"type","crimson-material"},{"id",canonical.id},{"name",a.name},{"originModel",canonical.originModel},
+        {"blend",Json::parse(serialize_blend_material_definition(*canonical.blendDefinition,material_graph_image_policy()))}}.dump(2)+"\n";
     return Json{{"version",6},{"type","crimson-material"},{"id",canonical.id},{"name",a.name},{"originModel",canonical.originModel},
         {"graph",Json::parse(serializeMaterialGraph(canonical.graph))}}.dump(2)+"\n";
 }
@@ -226,9 +270,18 @@ MaterialAsset loadMaterialAsset(const std::filesystem::path& root,const std::str
     const auto file=materialPath(root,isEngineAssetId(canonicalId)?canonicalId:id);if(std::filesystem::file_size(file)>1024u*1024u)throw std::runtime_error("Material file exceeds 1 MiB.");
     std::ifstream input(file,std::ios::binary);if(!input)throw std::runtime_error("Cannot read material asset.");const auto j=Json::parse(input);
     (void)materialPath(root,j.at("id").get<std::string>());
-    if(!j.at("version").is_number_integer()||(j.at("version")!=1&&j.at("version")!=2&&j.at("version")!=3&&j.at("version")!=4&&j.at("version")!=5&&j.at("version")!=6)||j.at("type")!="crimson-material"||canonicalAssetId(j.at("id").get<std::string>())!=canonicalId)throw std::runtime_error("Material type, version or identity is invalid.");
+    if(!j.at("version").is_number_integer()||(j.at("version")!=1&&j.at("version")!=2&&j.at("version")!=3&&j.at("version")!=4&&j.at("version")!=5&&j.at("version")!=6&&j.at("version")!=7)||j.at("type")!="crimson-material"||canonicalAssetId(j.at("id").get<std::string>())!=canonicalId)throw std::runtime_error("Material type, version or identity is invalid.");
     MaterialAsset a;a.id=canonicalId;a.name=j.at("name").get<std::string>();a.originModel=canonicalAssetId(j.value("originModel",std::string{}));auto& m=a.surface;m.name=a.name;
-    if(j.at("version")==4||j.at("version")==5||j.at("version")==6){a.graph=parseMaterialGraph(j.at("graph").dump());canonicalizeMaterialAsset(a);validateMaterialAsset(a);return a;}
+    if(j.at("version")==7) {
+        if(j.contains("graph"))throw std::runtime_error("A Blend material cannot contain a second authored graph.");
+        a.blendDefinition=parse_blend_material_definition(j.at("blend").dump(),material_graph_image_policy());
+        canonicalizeMaterialAsset(a);validateMaterialAsset(a);return a;
+    }
+    if(j.at("version")==4||j.at("version")==5||j.at("version")==6){
+        a.graph=parseMaterialGraph(j.at("graph").dump());
+        if(materialOutputNode(a.graph).output.shading==MaterialShading::BlendPbr)a.blendDefinition=migrate_blend_material_graph(a.graph);
+        canonicalizeMaterialAsset(a);validateMaterialAsset(a);return a;
+    }
     m.baseColor=j.at("baseColor").get<Vec4>();m.metallic=j.at("metallic").get<float>();m.roughness=j.at("roughness").get<float>();m.normalScale=j.at("normalScale").get<float>();
     m.occlusionStrength=j.at("occlusionStrength").get<float>();m.emissive=j.at("emissive").get<Vec3>();m.alphaMask=j.at("alphaMask").get<bool>();m.doubleSided=j.at("doubleSided").get<bool>();m.alphaCutoff=j.at("alphaCutoff").get<float>();
     if(j.at("version")==1)a.blend=m.alphaMask?MaterialBlend::Mask:MaterialBlend::Opaque;
@@ -260,6 +313,12 @@ MaterialAsset createMaterialAsset(const std::filesystem::path& root,const std::s
     constexpr float midgrayLinear=.21404114f;material.surface.baseColor={midgrayLinear,midgrayLinear,midgrayLinear,1};
     material.surface.sharedSampler=ModelSampler{ModelWrap::Repeat,ModelWrap::Repeat,ModelFilter::LinearMipmapLinear,ModelFilter::Linear};
     canonicalizeMaterialAsset(material);
+    saveMaterialAsset(root,material);return material;
+}
+MaterialAsset createBlendMaterialAsset(const std::filesystem::path& root,const std::string& name) {
+    if(!contentStorageReady(root))initializeContentStorage(root);
+    MaterialAsset material;material.id=uniqueId(root);material.name=uniqueName(root,name);
+    material.blendDefinition=default_blend_material_definition();canonicalizeMaterialAsset(material);
     saveMaterialAsset(root,material);return material;
 }
 MaterialAsset copyMaterialAsset(const std::filesystem::path& root,const MaterialAsset& source,const std::string& name) {

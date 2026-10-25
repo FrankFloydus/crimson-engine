@@ -37,6 +37,7 @@ void MaterialEditor::finishInteraction(AssetLibrary* assets) {
         suppressFinalizedUpdate_=true;
     }
     propertyEditing_=false;graph_.finishInteraction();colorEditor_.cancel();emissionEditor_.cancel();alphaEditor_.cancel();gradientEditor_.cancel();
+    for(auto& state:blendColorEditors_)state.cancel();
     if(assets)publish(*assets);
 }
 void MaterialEditor::request(Pending pending,std::string id,AssetLibrary* assets) {
@@ -55,6 +56,9 @@ void MaterialEditor::requestOpen(std::string id,AssetLibrary& assets) {
 }
 void MaterialEditor::requestCreate(std::string folder,AssetLibrary& assets) {
     pendingFolder_=std::move(folder);request(Pending::Create,{},&assets);
+}
+void MaterialEditor::requestCreateBlend(std::string folder,AssetLibrary& assets) {
+    pendingFolder_=std::move(folder);request(Pending::CreateBlend,{},&assets);
 }
 void MaterialEditor::perform(AssetLibrary& assets) {
     const auto pending=pending_;
@@ -75,8 +79,8 @@ void MaterialEditor::perform(AssetLibrary& assets) {
             if(!std::filesystem::exists(materialAssetPath(assets.projectRoot(),pendingId_),error))loaded=document_.loadStaged(*staged);
         }
     }
-    if(pending==Pending::Create) {
-        loaded=document_.create();
+    if(pending==Pending::Create || pending==Pending::CreateBlend) {
+        loaded=pending==Pending::CreateBlend?document_.createBlend():document_.create();
         if(loaded) {
             assets.noteAssetWrite(document_.assetId());assets.refreshMaterials();
             try {
@@ -89,6 +93,7 @@ void MaterialEditor::perform(AssetLibrary& assets) {
         }
     }
     if(loaded) {
+        blendPreview_.reset();blendImageGraph_.reset();blendChannelGraphs_={};blendImageRevision_=0;blendLayer_=0;
         graph_.clearPreview();texturePickerNode_=0;
         assets.protectMaterialDocument(document_.assetId());publishedRevision_=0;
         reconcileReferences(assets,true);
@@ -113,7 +118,7 @@ bool MaterialEditor::reconcileReferences(AssetLibrary& assets,bool force) {
 void MaterialEditor::publish(AssetLibrary& assets) {
     if(!document_.isOpen()) return;
     if(!reconcileReferences(assets))return;
-    auto textures=materialGraphTextureReferences(document_.definition().graph);
+    auto textures=materialTextureReferences(document_.definition());
     assets.setMaterialDocumentReferences(std::move(textures),document_.historicalTextureReferences(),
         materialMaterialReferences(document_.definition()),document_.historicalMaterialReferences());
     if(publishedRevision_!=document_.revision() || publishedId_!=document_.assetId()) {
@@ -255,7 +260,7 @@ void MaterialEditor::properties(AssetLibrary& assets,Renderer& renderer) {
         if(ImGui::TreeNodeEx("Material",ImGuiTreeNodeFlags_DefaultOpen|ImGuiTreeNodeFlags_SpanAvailWidth)) {
             int model=static_cast<int>(materialOutputNode(document_.definition().graph).output.shading);
             ImGui::BeginDisabled(!editable);
-            const bool changedModel=resettableProperty(model,static_cast<int>(defaults.output.shading),[&]{return ImGui::Combo("Shader Model",&model,"Lit (PBR)\0Unlit\0Decal\0Blend Shader\0");});
+            const bool changedModel=resettableProperty(model,static_cast<int>(defaults.output.shading),[&]{return ImGui::Combo("Shader Model",&model,"Lit (PBR)\0Unlit\0Decal\0");});
             ImGui::EndDisabled();
             if(changedModel&&editable&&!canceled) {finish();document_.edit("Change shader model",[&](auto& asset){
                 materialOutputNode(asset.graph).output.shading=static_cast<MaterialShading>(model);
@@ -331,7 +336,7 @@ void MaterialEditor::properties(AssetLibrary& assets,Renderer& renderer) {
                 control("Change default opacity",[defaults](auto& n){return resettableProperty(n.output.opacity,defaults.output.opacity,[&]{return ImGui::SliderFloat("Opacity",&n.output.opacity,0,1,"%.3f");});});
             if(materialPinActive(output.shading,output.blend,MaterialPin::OpacityMask) && disconnected(MaterialPin::OpacityMask))
                 control("Change default opacity mask",[defaults](auto& n){return resettableProperty(n.output.opacityMask,defaults.output.opacityMask,[&]{return ImGui::SliderFloat("Opacity Mask",&n.output.opacityMask,0,1,"%.3f");});});
-            if(output.shading!=MaterialShading::Decal && output.tessellation.enabled && disconnected(MaterialPin::Height))
+            if(output.shading==MaterialShading::StandardPbr && disconnected(MaterialPin::Height))
                 control("Change default height",[defaults](auto& n){return resettableProperty(n.output.height,defaults.output.height,[&]{return ImGui::SliderFloat("Height",&n.output.height,0,1,"%.3f");});});
             if(materialRefractionActive(output)) {
                 if(disconnected(MaterialPin::Transmission))control("Change default transmission",[defaults](auto& n){return resettableProperty(n.output.transmission,defaults.output.transmission,[&]{return ImGui::SliderFloat("Transmission",&n.output.transmission,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
@@ -529,7 +534,7 @@ void MaterialEditor::properties(AssetLibrary& assets,Renderer& renderer) {
             ImGui::SeparatorText("Material");
             const auto assign=[&](const std::string& id) {
                 if(!id.empty()) {const auto source=assets.findMaterial(id);
-                    if(id==document_.assetId()||!source||!blendMaterialSourceCompatible(*source)) {message_="Choose a solid Lit material without tessellation.";return;}}
+                    if(id==document_.assetId()||!source||!blendMaterialSourceCompatible(*source)) {message_="Choose an ordinary Lit, Opaque material.";return;}}
                 finish();if(!document_.edit("Assign blend material",[&](auto& asset){if(auto* n=findMaterialNode(asset.graph,selected))n->material.id=id;}))message_=document_.status();
                 else message_.clear();
             };
@@ -679,7 +684,7 @@ void MaterialEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManage
     }
     if(!isOpen()){
         if(!imageDocument_.empty())assets.releaseMaterialNodeImagePreviews(imageDocument_);
-        imageGraph_.reset();imageDocument_.clear();graph_.releaseImages();preview_.release(renderer);modals(assets);return;
+        imageGraph_.reset();imageDocument_.clear();blendChannelGraphs_={};blendImageGraph_.reset();blendPreview_.reset();graph_.releaseImages();preview_.release(renderer);modals(assets);return;
     }
     if(!imageGraph_||imageDocument_!=document_.assetId()||imageRevision_!=document_.previewRevision()) {
         if(!imageDocument_.empty()&&imageDocument_!=document_.assetId())assets.releaseMaterialNodeImagePreviews(imageDocument_);
@@ -692,7 +697,7 @@ void MaterialEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManage
     ImGui::SetNextWindowSize({1200,760},ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints({860,480},{FLT_MAX,FLT_MAX});
     bool visible=true;
-    const auto title="Material Editor - "+document_.definition().name+(document_.dirty()?" *":"")+"###SpriteMaterial";
+    const auto title=std::string(document_.definition().blendDefinition?"Blend Material Editor - ":"Material Editor - ")+document_.definition().name+(document_.dirty()?" *":"")+"###SpriteMaterial";
     const bool contents=ImGui::Begin(title.c_str(),&visible,DocumentEditorWindowFlags);
     if(!visible)request(Pending::Close,{},&assets);
     if(contents && isOpen()) {
@@ -707,7 +712,8 @@ void MaterialEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManage
         case DocumentEditorAction::Redo:redo();break;
         case DocumentEditorAction::None:break;
         }
-        if(isOpen() && ImGui::BeginTable("Material workspace",2,ImGuiTableFlags_Resizable|ImGuiTableFlags_BordersInnerV)) {
+        if(isOpen() && document_.definition().blendDefinition)blendWorkspace(assets,renderer,resources,dt);
+        else if(isOpen() && ImGui::BeginTable("Material workspace",2,ImGuiTableFlags_Resizable|ImGuiTableFlags_BordersInnerV)) {
             ImGui::TableSetupColumn("Preview and properties",ImGuiTableColumnFlags_WidthFixed,340);
             ImGui::TableSetupColumn("Graph",ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableNextColumn();

@@ -6,6 +6,8 @@
 #include "resources/ResourceManager.h"
 #include "resources/ImageDecoder.h"
 #include <crimson/renderer/forward/MeshPaint.h>
+#include <crimson/renderer/forward/BlendMaterial.h>
+#include <crimson/renderer/forward/MaterialGraphImageBake.h>
 #include "GpuTestBackend.h"
 #include <SDL3/SDL.h>
 #include <lodepng.h>
@@ -19,6 +21,7 @@
 #include <memory>
 #include <stdexcept>
 #include <thread>
+#include <unordered_map>
 
 namespace {
 using namespace crimson;
@@ -189,8 +192,110 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const std::fi
     expect(gameImage,settings.camera,{-.55f,0,0},Colors[3],"Game overwrote or reused Scene paint");expect(gameImage,settings.camera,{.55f,0,0},Colors[2],"Game second occurrence lost independent paint");
     save(output,"independent-scene",sceneImage);save(output,"independent-game",gameImage);
     renderer.render(scene);check(renderer.meshInstancingStats(RenderViewPurpose::Scene).instancedInstances==0,"Blend surfaces entered fixed-material instancing.");check(renderer.meshInstancingStats(RenderViewPurpose::Scene).uploadBytes==0,"Unchanged paint uploaded its stream again.");tick();
+    // Exercise the structured Inline path using actual baked packed images,
+    // shader compilation and GPU bindings. Distinct texture values ensure this
+    // cannot pass by accidentally binding the old fixture's normal everywhere.
+    std::vector<std::unique_ptr<Texture>> inlineTextures;
+    std::unordered_map<std::string,std::shared_ptr<const DecodedImage>> inlineImages;
+    const std::array<std::array<std::uint8_t,4>,2> inlineColors{{{{128,64,32,255}},{{32,96,160,255}}}};
+    const std::array<std::array<std::uint8_t,4>,2> inlineNormals{{{{191,153,0,255}},{{153,179,0,255}}}};
+    const std::array<std::uint8_t,2> inlineHeights{{64,192}};
+    MaterialAsset inlineMaterial;inlineMaterial.id="native-inline-blend";inlineMaterial.name="Native Inline Blend";
+    inlineMaterial.blendDefinition=default_blend_material_definition();
+    for(unsigned layer=0;layer<2;++layer) {
+        auto& definition=inlineMaterial.blendDefinition->layers[layer];
+        const auto source=[&](const char* channel,std::array<std::uint8_t,4> pixels){
+            const auto id="assets/textures/inline-"+std::to_string(layer)+"-"+channel+".png";
+            inlineImages.emplace(id,std::make_shared<const DecodedImage>(DecodedImage{1,1,std::vector<std::uint8_t>(pixels.begin(),pixels.end())}));return id;
+        };
+        definition.channels[0].mode=BlendChannelMode::Texture;definition.channels[0].image.id=source("color",inlineColors[layer]);
+        definition.channels[3].mode=BlendChannelMode::Texture;definition.channels[3].image.id=source("normal",inlineNormals[layer]);
+        definition.channels[5].mode=BlendChannelMode::Texture;definition.channels[5].image.id=source("height",{inlineHeights[layer],inlineHeights[layer],inlineHeights[layer],255});
+        definition.channels[1].mode=BlendChannelMode::Generated;definition.channels[1].generatedFrom=BlendMaterialChannel::Height;
+        definition.channels[2].value={layer?.8f:.2f,0,0,1};definition.channels[4].value={layer?.7f:.3f,0,0,1};
+        definition.channels[6].value={.04f,.08f,.12f,1};
+        auto& adjust=definition.adjustments;adjust.colorBrightness=1.2f;adjust.colorContrast=.6f;adjust.colorSaturation=.35f;adjust.colorTint={.9f,.8f,.7f};
+        adjust.roughnessBrightness=1.2f;adjust.roughnessContrast=.5f;adjust.metallicBrightness=.8f;adjust.metallicContrast=.6f;
+        adjust.normalStrength=layer?.35f:.6f;adjust.normalFlipY=layer==0;adjust.occlusionStrength=.65f;adjust.emissionIntensity=layer?.5f:2.f;
+        definition.appearance.roughnessScale=layer?.8f:.9f;
+    }
+    const auto prepareInline=[&](const MaterialAsset& material) {
+        const auto generated=generateMaterialGraphShaderData(material);
+        check(generated.meshPaint&&!generated.tessellation.enabled&&generated.textures.size()==6,"Inline Blend did not produce three packed textures per layer.");
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(90);MaterialGraphProgramResult result;
+        do{tick();result=programs.request(generated);if(!result.current&&!result.compiling&&!result.diagnostic.empty())throw std::runtime_error(result.diagnostic);if(!result.current)std::this_thread::sleep_for(std::chrono::milliseconds(1));}while(!result.current&&std::chrono::steady_clock::now()<deadline);
+        check(result.current&&result.programs,"Inline Blend shader publication timed out.");
+        auto packet=std::make_shared<PreparedGraphMaterial>();packet->programs=result.programs;packet->uniforms=generated.uniforms;packet->sources=generated.textures;
+        packet->shading=MaterialShading::BlendPbr;packet->blend=MaterialBlend::Opaque;packet->signature=result.programs->signature;packet->receiveFog=false;
+        for(const auto& binding:generated.textures) {
+            check(binding.resize.has_value()&&binding.resize->graph,"Inline fixture did not retain immutable generated-image origins.");
+            const auto image=bakeMaterialCachedImage(*binding.resize->graph,binding.resize->node,[&](const std::string& id){
+                const auto found=inlineImages.find(id);if(found==inlineImages.end())throw std::runtime_error("Unknown Inline GPU image: "+id);return found->second;
+            });
+            check(image.width==1&&image.height==1&&image.rgba.size()==4,"Known one-pixel Inline recipes changed their output lattice.");
+            auto texture=std::make_unique<Texture>();
+            texture->handle=bgfx::createTexture2D(1,1,false,1,bgfx::TextureFormat::RGBA32F,0,bgfx::copy(image.rgba.data(),static_cast<std::uint32_t>(image.rgba.size()*sizeof(float))));
+            check(bgfx::isValid(texture->handle),"Inline floating-point texture upload failed.");
+            packet->textures[binding.slot]=texture->handle;packet->flags[binding.slot]=BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT|BGFX_SAMPLER_MIP_POINT;
+            inlineTextures.push_back(std::move(texture));
+        }
+        return packet;
+    };
+    const auto adjustedColor=[&](unsigned layer) {
+        const auto& a=inlineMaterial.blendDefinition->layers[layer].adjustments;Vec3 result{};
+        for(unsigned c=0;c<3;++c)result[c]=(decoded(inlineColors[layer][c])-.5f)*a.colorContrast+.5f;
+        const auto luminance=result[0]*.2126f+result[1]*.7152f+result[2]*.0722f;
+        for(unsigned c=0;c<3;++c)result[c]=(luminance+(result[c]-luminance)*a.colorSaturation)*a.colorBrightness*a.colorTint[c];return result;
+    };
+    const auto adjustedNormal=[&](unsigned layer) {
+        const auto& a=inlineMaterial.blendDefinition->layers[layer].adjustments;
+        const float x=2*inlineNormals[layer][0]/255.f-1,y=(2*inlineNormals[layer][1]/255.f-1)*(a.normalFlipY?-1.f:1.f);
+        const float z=std::sqrt(std::max(0.f,1-x*x-y*y));return math::normalized(Vec3{x*a.normalStrength,y*a.normalStrength,1+(z-1)*a.normalStrength});
+    };
+    const auto scalarChannels=[&](unsigned layer) {
+        const auto& definition=inlineMaterial.blendDefinition->layers[layer];const auto& a=definition.adjustments;
+        return Vec3{((inlineHeights[layer]/255.f-.5f)*a.roughnessContrast+.5f)*a.roughnessBrightness*definition.appearance.roughnessScale,
+            ((definition.channels[2].value[0]-.5f)*a.metallicContrast+.5f)*a.metallicBrightness,
+            1+(definition.channels[4].value[0]-1)*a.occlusionStrength};
+    };
+    auto mixedWeights=makeMeshPaintPayload(static_cast<std::uint32_t>(plain.geometry->vertices.size()));std::vector<MeshPaintChange> mixedChanges;
+    for(std::uint32_t vertex=0;vertex<plain.geometry->vertices.size();++vertex)mixedChanges.push_back({vertex,{128,0,0}});
+    mixedWeights=updateMeshPaintPayload(mixedWeights,mixedChanges);
+    const std::array<std::shared_ptr<const MeshPaintPayload>,3> inlinePaint{{weights(*plain.geometry,0),weights(*plain.geometry,1),mixedWeights}};
+    constexpr std::array<float,3> redWeights{{0,1,128.f/255.f}};
+    const auto mixVector=[](Vec3 a,Vec3 b,float red){for(unsigned c=0;c<3;++c)a[c]=a[c]*(1-red)+b[c]*red;return a;};
+    instances.resize(1);instances[0].model.transform=ModelIdentity;instances[0].model.asset=plain.model;scene.instances=instances;++scene.meshPopulationRevision;
+    settings.directional.enabled=false;for(auto& light:settings.points)light.enabled=false;settings.proceduralSun.enabled=false;
+    settings.environment.enabled=false;settings.environment.ambientLight.source=AmbientLightSource::Disabled;
+    bindings[0].graph=prepareInline(inlineMaterial);
+    for(unsigned sample=0;sample<inlinePaint.size();++sample) {
+        assign(plain,inlinePaint[sample]);const auto red=redWeights[sample];const auto scalar=mixVector(scalarChannels(0),scalarChannels(1),red);
+        renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Albedo);const auto albedo=capture();expect(albedo,settings.camera,{},mixVector(adjustedColor(0),adjustedColor(1),red),"Inline adjusted color "+std::to_string(sample));
+        renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Roughness);const auto rough=capture();expect(rough,settings.camera,{},Vec3{scalar[0],scalar[0],scalar[0]},"Inline generated roughness "+std::to_string(sample));
+        renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Metal);const auto metal=capture();expect(metal,settings.camera,{},Vec3{scalar[1],scalar[1],scalar[1]},"Inline adjusted metallic "+std::to_string(sample));
+        const auto normalValue=math::normalized(mixVector(adjustedNormal(0),adjustedNormal(1),red));Vec3 normalColor{};for(unsigned c=0;c<3;++c)normalColor[c]=normalValue[c]*.5f+.5f;
+        renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Normal);const auto normalImage=capture();expect(normalImage,settings.camera,{},normalColor,"Inline packed XY normal and strength/Flip Y "+std::to_string(sample),5);
+        const auto emission=mixVector(Vec3{.08f,.16f,.24f},Vec3{.02f,.04f,.06f},red);
+        renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Lit);const auto emissionImage=capture();expect(emissionImage,settings.camera,{},emission,"Inline emission intensity "+std::to_string(sample),5);
+        save(output,"inline-albedo-"+std::to_string(sample),albedo);save(output,"inline-roughness-"+std::to_string(sample),rough);save(output,"inline-metal-"+std::to_string(sample),metal);save(output,"inline-normal-"+std::to_string(sample),normalImage);save(output,"inline-emission-"+std::to_string(sample),emissionImage);
+    }
+    // A color-only ambient source has no environment specular contribution, so
+    // its diffuse ratio isolates AO independently of the rest of the BRDF.
+    settings.environment.ambientLight.source=AmbientLightSource::Color;settings.environment.ambientLight.color={.7f,.7f,.7f};
+    renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::IndirectLighting);
+    std::array<DecodedImage,3> occluded;
+    for(unsigned sample=0;sample<inlinePaint.size();++sample){assign(plain,inlinePaint[sample]);occluded[sample]=capture();}
+    auto neutralAo=inlineMaterial;for(auto& layer:neutralAo.blendDefinition->layers)layer.adjustments.occlusionStrength=0;
+    bindings[0].graph=prepareInline(neutralAo);
+    for(unsigned sample=0;sample<inlinePaint.size();++sample) {
+        assign(plain,inlinePaint[sample]);const auto unoccluded=capture();const auto at=(std::size_t(center[1])*Size+center[0])*4;
+        float originalLight{},fullLight{};for(unsigned c=0;c<3;++c){originalLight+=decoded(occluded[sample].rgba[at+c]);fullLight+=decoded(unoccluded.rgba[at+c]);}
+        const auto expected=scalarChannels(0)[2]*(1-redWeights[sample])+scalarChannels(1)[2]*redWeights[sample];
+        check(fullLight>.025f&&std::abs(originalLight/fullLight-expected)<.045f,"Inline AO strength or painted AO blend did not reach GPU indirect lighting.");
+        save(output,"inline-ao-"+std::to_string(sample),occluded[sample]);
+    }
     scene.instances={};game.instances={};bindings[0].graph.reset();resources.stop();frame=renderer.drainPending(frame);
-    std::cout<<"Native "<<renderer.backendName()<<" Blend endpoints/default/tint, quad and trapezoid bilinear interpolation, normal maps, ROI picking, independent occurrences/views and warm stream reuse passed.\n";
+    std::cout<<"Native "<<renderer.backendName()<<" Blend endpoints/default/tint, quad and trapezoid interpolation, normals, ROI picking, independent views, warm streams and Inline generated PBR/normal/AO/emission passed.\n";
 }
 }
 int main(int argc,char** argv) {

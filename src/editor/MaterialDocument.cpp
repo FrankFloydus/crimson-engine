@@ -66,16 +66,8 @@ bool MaterialDocument::reconcileTextureReferences(const TextureReferenceResolver
         auto history=history_;auto transaction=transaction_;
         auto committed=committed_;
         const auto rewrite=[&](MaterialAsset& material) {
-            bool changed=false;
-            for(auto& node:material.graph.nodes)if((node.kind==MaterialNodeKind::Texture2D||node.kind==MaterialNodeKind::ImageInput) && !node.texture.image.empty()) {
-                auto replacement=resolve(node.texture.image.id,node.texture.role);
-                if(replacement!=node.texture.image.id){node.texture.image.id=std::move(replacement);changed=true;}
-            }
-            if(resolveMaterial)for(auto& node:material.graph.nodes)if(node.kind==MaterialNodeKind::MaterialReference&&!node.material.empty()) {
-                auto replacement=resolveMaterial(node.material.id);
-                if(replacement!=node.material.id){node.material.id=std::move(replacement);changed=true;}
-            }
-            if(changed){canonicalizeMaterialAsset(material);validateMaterialAsset(material);}
+            const bool changed=rewriteMaterialAssetReferences(material,resolve,resolveMaterial);
+            if(changed)validateMaterialAsset(material);
             return changed;
         };
         const bool workingChanged=rewrite(working),savedChanged=rewrite(saved);
@@ -130,6 +122,11 @@ bool MaterialDocument::create(const std::string& name) {
     if (transaction_) { status_="Finish the current material edit before creating another material."; return false; }
     try { install(createMaterialAsset(root_,name),true); status_="Created "+working_.name+"."; return true; }
     catch (const std::exception& error) { status_="Could not create material: "+std::string(error.what()); return false; }
+}
+bool MaterialDocument::createBlend(const std::string& name) {
+    if(transaction_){status_="Finish the current material edit before creating another material.";return false;}
+    try {install(createBlendMaterialAsset(root_,name),true);status_="Created "+working_.name+".";return true;}
+    catch(const std::exception& error){status_="Could not create Blend material: "+std::string(error.what());return false;}
 }
 bool MaterialDocument::load(const std::string& id) {
     if (transaction_) { status_="Finish the current material edit before opening another material."; return false; }

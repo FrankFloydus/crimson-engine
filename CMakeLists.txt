@@ -281,7 +281,7 @@ add_executable(crimson-renderer WIN32
     src/tools/ParticleGradientEditor.cpp
     src/tools/ColorGradientEditor.cpp
     src/tools/HdrColorEditor.cpp
-    src/tools/MaterialEditor.cpp src/tools/MaterialGraphEditor.cpp src/tools/TextureAssetField.cpp src/tools/DecalEditor.cpp
+    src/tools/MaterialEditor.cpp src/tools/BlendMaterialEditor.cpp src/tools/MaterialGraphEditor.cpp src/tools/TextureAssetField.cpp src/tools/DecalEditor.cpp
     src/tools/NavigationAgentProfileEditor.cpp src/tools/CollisionLayersEditor.cpp src/tools/GameplayEffectEditor.cpp src/tools/AnimationEditor.cpp src/tools/RagdollEditor.cpp src/tools/RagdollBodyGizmo.cpp
     src/input/Navigation.h src/input/Navigation.cpp
     src/assets/AssetLibrary.h src/assets/AssetLibrary.cpp src/assets/AssetLibraryDecals.cpp
@@ -400,7 +400,7 @@ if(BUILD_TESTING)
         src/editor/EditorRenderFrame.cpp src/editor/AssetPreviews.cpp src/editor/AssetPreviewCache.cpp
         src/editor/MaterialPreview.cpp src/editor/MaterialDocument.cpp
         src/editor/ViewportAssetDrop.cpp src/tools/DecalEditor.cpp src/tools/TextureAssetField.cpp
-        src/tools/MaterialEditor.cpp src/tools/MaterialGraphEditor.cpp src/tools/ScenePanels.cpp src/tools/AssetBrowser.cpp
+        src/tools/MaterialEditor.cpp src/tools/BlendMaterialEditor.cpp src/tools/MaterialGraphEditor.cpp src/tools/ScenePanels.cpp src/tools/AssetBrowser.cpp
         src/tools/AssetBrowserFileDrop.cpp
         src/resources/ShaderReloadSession.cpp src/resources/ProjectMaterialCache.cpp
         src/crimson-renderer/MaterialGraphGpu.cpp src/crimson-renderer/MaterialGraphShader.cpp)
@@ -918,6 +918,10 @@ if(BUILD_TESTING)
     target_link_libraries(blend_material_host_tests PRIVATE crimson-material-shaders)
     target_compile_options(blend_material_host_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME blend_material_host_core COMMAND blend_material_host_tests)
+    add_executable(blend_material_workflow_tests tests/blend_material_workflow_tests.cpp)
+    target_link_libraries(blend_material_workflow_tests PRIVATE crimson-material-shaders)
+    target_compile_options(blend_material_workflow_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME blend_material_workflow_core COMMAND blend_material_workflow_tests)
     add_executable(light_authoring_tests tests/light_authoring_tests.cpp)
     target_link_libraries(light_authoring_tests PRIVATE crimson-scene)
     target_compile_options(light_authoring_tests PRIVATE /W4 /permissive- /utf-8)

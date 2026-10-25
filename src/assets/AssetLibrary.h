@@ -113,6 +113,7 @@ public:
     void protectMaterialDocument(std::string id) { materialDocumentId_=std::move(id); }
     void refreshMaterials();
     std::shared_ptr<const MaterialAsset> createMaterial(const std::string& name="New Material");
+    std::shared_ptr<const MaterialAsset> createBlendMaterial(const std::string& name="New Blend Material");
     std::shared_ptr<const MaterialAsset> copyMaterial(const std::string& id,const std::string& name={});
     void setParticleDocumentReferences(std::vector<std::string> active,std::vector<std::string> history) {
         if(active!=particleDocumentReferences_||history!=particleDocumentHistory_)++catalogRevision_;

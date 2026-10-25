@@ -24,6 +24,7 @@ public:
     void requestExit();
     void requestOpen(std::string id,AssetLibrary&);
     void requestCreate(std::string folder,AssetLibrary&);
+    void requestCreateBlend(std::string folder,AssetLibrary&);
     void save(AssetLibrary&,bool saveAs=false);
     void undo();
     void redo();
@@ -35,16 +36,24 @@ public:
     void draw(AssetLibrary&,Renderer&,ResourceManager&,double dt);
     void setAntiAliasing(AntiAliasing value) { preview_.setAntiAliasing(value); }
     void filesChanged(std::span<const std::filesystem::path>);
-    void cancelInteraction() { document_.cancel();preview_.cancelInteraction();graph_.cancelInteraction();propertyEditing_=false;colorEditor_.cancel();emissionEditor_.cancel();alphaEditor_.cancel();gradientEditor_.cancel(); }
+    void cancelInteraction() { document_.cancel();preview_.cancelInteraction();graph_.cancelInteraction();propertyEditing_=false;colorEditor_.cancel();emissionEditor_.cancel();alphaEditor_.cancel();gradientEditor_.cancel();for(auto& state:blendColorEditors_)state.cancel(); }
 private:
-    enum class Pending { None,Open,Create,Close,Exit };
+    enum class Pending { None,Open,Create,CreateBlend,Close,Exit };
     MaterialDocument document_;
     MaterialPreview preview_;
     MaterialGraphEditor graph_;
     std::shared_ptr<const MaterialGraph> imageGraph_;
     std::string imageDocument_;
     std::uint64_t imageRevision_{};
+    std::shared_ptr<const MaterialGraph> blendImageGraph_;
+    std::array<std::shared_ptr<const MaterialGraph>,28> blendChannelGraphs_;
+    std::optional<MaterialGraphPreviewTarget> blendPreview_;
+    std::size_t blendLayer_{};
+    std::size_t blendPreviewChannel_{};
+    std::uint32_t blendControlId_{};
+    std::uint64_t blendImageRevision_{},blendSourceRevision_{};
     HdrColorEditorState colorEditor_,emissionEditor_,alphaEditor_;
+    std::array<HdrColorEditorState,84> blendColorEditors_;
     ColorGradientEditorState gradientEditor_;
     MaterialNodeId propertyNode_{};
     MaterialNodeId texturePickerNode_{};
@@ -62,5 +71,6 @@ private:
     bool reconcileReferences(AssetLibrary&,bool force=false);
     void modals(AssetLibrary&);
     void properties(AssetLibrary&,Renderer&);
+    void blendWorkspace(AssetLibrary&,Renderer&,ResourceManager&,double dt);
 };
 }

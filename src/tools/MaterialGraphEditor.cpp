@@ -195,6 +195,10 @@ ImVec4 pinColor(MaterialValueType type) {
     default:return ImGui::GetStyleColorVec4(ImGuiCol_Text);
     }
 }
+bool authorableOutputPin(const MaterialOutputNode& output,MaterialPin pin) {
+    return (pin==MaterialPin::Height&&output.shading==MaterialShading::StandardPbr)||
+        materialPinActive(output.shading,output.blend,pin,output.tessellation.enabled,output.refraction);
+}
 std::vector<MaterialPinDefinition> visibleInputs(const MaterialGraph& graph,const MaterialNode& node,const MaterialOutputNode& output) {
     if(node.kind==MaterialNodeKind::Output) {
         if(output.shading==MaterialShading::Decal||output.shading==MaterialShading::BlendPbr)return materialNodeInputs(graph,node,output.shading,output.blend);
@@ -831,7 +835,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         for(std::size_t row=0;row<std::max(inputs.size(),outputs.size());++row) {
             const float x=ImGui::GetCursorPosX(),y=ImGui::GetCursorPosY();
             const auto drawPin=[&](const MaterialPinDefinition& definition,bool input) {
-                const bool active=!input || node.kind!=MaterialNodeKind::Output || materialPinActive(output.shading,output.blend,definition.pin,output.tessellation.enabled,output.refraction);
+                const bool active=!input || node.kind!=MaterialNodeKind::Output || authorableOutputPin(output,definition.pin);
                 const auto* incoming=input?materialInputLink(graph,node.id,definition.pin):nullptr;
                 const auto signalType=incoming?materialOutputType(graph,incoming->fromNode,incoming->fromPin):definition.type;
                 const bool redConversion=incoming&&definition.type==MaterialValueType::Scalar&&
@@ -909,7 +913,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
             };
             if(row<inputs.size()) {
                 const auto& definition=inputs[row];drawPin(definition,true);
-                const bool active=node.kind!=MaterialNodeKind::Output || materialPinActive(output.shading,output.blend,definition.pin,output.tessellation.enabled,output.refraction);
+                const bool active=node.kind!=MaterialNodeKind::Output || authorableOutputPin(output,definition.pin);
                 if(active && !materialInputLink(graph,node.id,definition.pin) && definition.type!=MaterialValueType::Normal && definition.type!=MaterialValueType::Mapping &&
                     !(node.kind==MaterialNodeKind::Panner&&definition.pin==MaterialPin::Time)&&
                     !(node.kind==MaterialNodeKind::MaterialReference&&definition.pin==MaterialPin::Height)) {
@@ -970,7 +974,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         const auto inputs=visibleInputs(graph,*target,output);
         if(std::none_of(inputs.begin(),inputs.end(),[&](const auto& p){return p.pin==link.toPin;}))continue;
         auto color=pinColor(materialOutputType(graph,link.fromNode,link.fromPin));
-        if(target->kind==MaterialNodeKind::Output && !materialPinActive(output.shading,output.blend,link.toPin,output.tessellation.enabled,output.refraction))color.w=.3f;
+        if(target->kind==MaterialNodeKind::Output && !authorableOutputPin(output,link.toPin))color.w=.3f;
         ed::Link(s.link(link.id),s.pin(link.fromNode,link.fromPin,false),s.pin(link.toNode,link.toPin,true),color,2);
     }
     if(disconnect)s.breakLinks(document,disconnect);
@@ -989,7 +993,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                     auto from=a->second,to=b->second;if(from.input)std::swap(from,to);
                     try {
                         if(from.input || !to.input)throw std::runtime_error("Connect an output to an input.");
-                        if(findMaterialNode(graph,to.node)->kind==MaterialNodeKind::Output && !materialPinActive(output.shading,output.blend,to.pin,output.tessellation.enabled,output.refraction))throw std::runtime_error("This input is unavailable for the current material settings.");
+                        if(findMaterialNode(graph,to.node)->kind==MaterialNodeKind::Output && !authorableOutputPin(output,to.pin))throw std::runtime_error("This input is unavailable for the current material settings.");
                         const auto connection=inspectMaterialGraphConnection(document.definition().graph,from.node,from.pin,to.node,to.pin);
                         if(connection.kind==MaterialGraphConnectionKind::Invalid)throw std::runtime_error(connection.diagnostic);
                         if(connection.kind==MaterialGraphConnectionKind::RedChannel){ed::Suspend();ImGui::SetTooltip("Reads the Red channel (R) from RGB/RGBA.");ed::Resume();}

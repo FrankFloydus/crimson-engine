@@ -27,6 +27,13 @@ ModelMaterial materialGraphLegacySurface(const MaterialGraph&,const std::string&
 std::optional<ModelMaterial> materialGraphFixedSurface(const MaterialGraph&);
 std::vector<std::string> materialTextureReferences(const MaterialAsset&);
 std::vector<std::string> materialMaterialReferences(const MaterialAsset&);
+void visitMaterialAssetTextures(const MaterialAsset&,
+    const std::function<void(const std::string&,MaterialTextureRole)>&);
+// Visit the authored representation, including dormant generated-map sources
+// and preserved expressions. Rebuild derived transport after replacements.
+bool rewriteMaterialAssetReferences(MaterialAsset&,
+    const std::function<std::string(const std::string&,MaterialTextureRole)>&,
+    const std::function<std::string(const std::string&)>& = {});
 bool blendMaterialSourceCompatible(const MaterialAsset&);
 void initializeBlendMaterialGraph(MaterialGraph&);
 
@@ -51,6 +58,7 @@ void saveMaterialAsset(const std::filesystem::path& projectRoot, const MaterialA
 // Copies retain
 // authored factors/slots but receive a new identity and no imported origin.
 MaterialAsset createMaterialAsset(const std::filesystem::path& projectRoot, const std::string& name="New Material");
+MaterialAsset createBlendMaterialAsset(const std::filesystem::path& projectRoot, const std::string& name="New Blend Material");
 MaterialAsset copyMaterialAsset(const std::filesystem::path& projectRoot, const MaterialAsset& source, const std::string& name={});
 // Import creates a missing native sidecar once. Existing sidecars are authored
 // authority, including imported-origin materials; reload/reimport never resets

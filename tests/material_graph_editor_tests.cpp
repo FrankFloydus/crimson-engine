@@ -1,6 +1,7 @@
 #include "resources/AssetId.h"
 #include "editor/MaterialDocument.h"
 #include "editor/MaterialGraphActions.h"
+#include "editor/MaterialTextureDemand.h"
 #include "tools/MaterialGraphEditor.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -1033,10 +1034,11 @@ void blendLayerSourcesAndHeightAssignment() {
 }
 
 void heightInputActivationAndFallback() {
-    GraphUi ui;MaterialNodeId output{},scalar{};
+    GraphUi ui;MaterialNodeId output{},heightMap{};
     require(ui.document.edit("Height UI fixture",[&](auto& asset) {
         asset.graph={};output=addMaterialNode(asset.graph,MaterialNodeKind::Output,{350,-140}).id;
-        scalar=addMaterialNode(asset.graph,MaterialNodeKind::Scalar,{-250,-100}).id;
+        heightMap=addMaterialNode(asset.graph,MaterialNodeKind::Texture2D,{-250,-100}).id;
+        auto& texture=findMaterialNode(asset.graph,heightMap)->texture;texture.role=MaterialTextureRole::Data;texture.image.id=GrayTextureId;
         materialOutputNode(asset.graph).output.height=.35f;
     })&&ui.document.save(),"Could not configure Height UI fixture.");ui.frame(5);
     const auto active=[&] {
@@ -1046,25 +1048,35 @@ void heightInputActivationAndFallback() {
     const auto field=[&] {
         return std::any_of(ui.editor.presentation().fields.begin(),ui.editor.presentation().fields.end(),[&](const auto& item){return item.node==output&&item.pin==MaterialPin::Height;});
     };
-    require(!active()&&!field(),"Disabled tessellation exposed an active Height fallback.");
-    const auto disabled=ui.snapshot();ui.drag(ui.pin(scalar,MaterialPin::Value,false),ui.pin(output,MaterialPin::Height,true));
-    require(ui.snapshot()==disabled&&!materialInputLink(ui.document.definition().graph,output,MaterialPin::Height),"A graph gesture connected disabled Height.");
-    require(ui.document.edit("Enable tessellation",[](auto& asset){materialOutputNode(asset.graph).output.tessellation.enabled=true;}),"Could not enable tessellation.");ui.frame(3);
-    require(active()&&field(),"Enabling tessellation failed to expose the Height fallback.");
+    require(active()&&field()&&!materialOutputNode(ui.document.definition().graph).output.tessellation.enabled,
+        "Lit Height could not be authored without enabling geometric tessellation.");
+    const auto topology=materialGraphTopologyHash(ui.document.definition().graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
     for(const auto& item:ui.editor.presentation().fields)if(item.node==output&&item.pin==MaterialPin::Height) {
         const ImVec2 p{item.minimum[0]+25,(item.minimum[1]+item.maximum[1])*.5f};const auto before=ui.snapshot();
         ui.drag(p,{p.x+20,p.y});require(materialOutputNode(ui.document.definition().graph).output.height>.35f,"Height inline value could not be edited.");
         ui.oneUndo(before);break;
     }
     const auto fallback=materialOutputNode(ui.document.definition().graph).output.height;
-    ui.drag(ui.pin(scalar,MaterialPin::Value,false),ui.pin(output,MaterialPin::Height,true));
+    const auto values=materialGraphValueHash(ui.document.definition().graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
+    const auto beforeConnection=ui.snapshot();ui.drag(ui.pin(heightMap,MaterialPin::R,false),ui.pin(output,MaterialPin::Height,true));
     const auto* link=materialInputLink(ui.document.definition().graph,output,MaterialPin::Height);
-    require(link&&link->fromNode==scalar&&!field()&&materialOutputNode(ui.document.definition().graph).output.height==fallback,
-        "Connecting Height did not hide and retain its authored fallback.");
+    require(link&&link->fromNode==heightMap&&active()&&!field()&&materialOutputNode(ui.document.definition().graph).output.height==fallback,
+        "Connecting Height with tessellation off did not hide and retain its authored fallback.");
     const auto identity=link->id;
+    ui.oneUndo(beforeConnection);
+    const auto inactive=materialGraphOrder(ui.document.definition().graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
+    require(std::find(inactive.begin(),inactive.end(),heightMap)==inactive.end()&&materialRuntimeTextureMappings(ui.document.definition().graph).empty()&&
+        materialGraphTopologyHash(ui.document.definition().graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==topology&&
+        materialGraphValueHash(ui.document.definition().graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==values,
+        "Connecting an authorable Height map activated runtime work while tessellation was disabled.");
+    require(ui.document.edit("Enable tessellation",[](auto& asset){materialOutputNode(asset.graph).output.tessellation.enabled=true;}),"Could not enable tessellation.");ui.frame(3);
+    const auto demand=materialRuntimeTextureMappings(ui.document.definition().graph);
+    require(active()&&!field()&&demand.size()==1&&demand.front().node==heightMap&&
+        materialInputLink(ui.document.definition().graph,output,MaterialPin::Height)->id==identity,
+        "Enabling tessellation failed to activate the existing Height map without changing its authored connection.");
     require(ui.document.edit("Disable tessellation",[](auto& asset){materialOutputNode(asset.graph).output.tessellation.enabled=false;}),"Could not disable tessellation.");ui.frame(3);
-    require(!active()&&!field()&&materialInputLink(ui.document.definition().graph,output,MaterialPin::Height)->id==identity,"Disabling tessellation lost Height wiring.");
-    require(ui.document.undo(),"Could not undo tessellation disable.");ui.frame(3);
+    require(active()&&!field()&&materialInputLink(ui.document.definition().graph,output,MaterialPin::Height)->id==identity&&materialRuntimeTextureMappings(ui.document.definition().graph).empty(),
+        "Disabling tessellation removed Height authoring, lost its wiring or retained a runtime texture request.");
     ui.move(ui.pin(output,MaterialPin::Height,true));ImGui::GetIO().AddKeyEvent(ImGuiMod_Alt,true);ui.frame();ui.click(ui.pin(output,MaterialPin::Height,true));
     ImGui::GetIO().AddKeyEvent(ImGuiMod_Alt,false);ui.frame(3);
     require(active()&&field()&&!materialInputLink(ui.document.definition().graph,output,MaterialPin::Height)&&materialOutputNode(ui.document.definition().graph).output.height==fallback,
