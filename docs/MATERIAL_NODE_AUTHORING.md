@@ -93,7 +93,7 @@ For each new node, cover CPU typing/validation, persistence and undo/redo, unifo
 ## Image and channel node foundation
 
 See [Image and channel nodes](MATERIAL_IMAGE_NODES.md) for the thirteen added nodes,
-explicit Color4/RGBA contract, artist controls and spatial sampling. Current graph schema 16 retains [Resize](MATERIAL_RESIZE.md), optical Output inputs and the reusable image operations described there, including the material stylization and painterly/color-selection nodes.
+explicit Color4/RGBA contract, artist controls and spatial sampling. Current graph schema 20 retains [Resize](MATERIAL_RESIZE.md), optical Output inputs and the reusable image operations described there, including the material stylization and painterly/color-selection nodes. Native material v6 readers accept graph schemas 1–20; node introduction versions do not change existing identities. Material ABI39 and the pass-specific source revisions follow the [shader/cache contract](MATERIAL_SHADER_STARTUP.md).
 Preserve all four independently wired split outputs, transparent RGB, disconnected
 defaults and per-output previews. Image adjustments preserve alpha. Noise Detail
 amount is Clouds-only; never expose it as material roughness.

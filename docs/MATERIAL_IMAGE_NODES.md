@@ -6,7 +6,7 @@ Alpha Split and Alpha Merge. They are ordinary editable nodes, available from
 the graph add/search menu and compatible typed-pin creation. Existing links,
 node/pin IDs, document history and the default ImGui style are retained.
 
-Current graph schema 16 retains [Resize](MATERIAL_RESIZE.md) and the reusable image operations below, including the schema 15 Kuwahara, Gradient Map and Color Range Mask nodes, and appends Detail Balance without renumbering existing nodes. Readers accept schemas 1–16 within native material v6. Empty adaptable image inputs show grayscale/color capability; connected inputs, outputs and wires show their resolved types. Compatible endpoints connect directly, including RGB/RGBA-to-fixed-Scalar links, without automatic conversion nodes. Scalar receivers retain the existing first-channel rule and its R badge.
+Current graph schema 20 retains [Resize](MATERIAL_RESIZE.md) and the reusable image operations below. Kuwahara, Gradient Map and Color Range Mask were introduced in schema 15, and Detail Balance in schema 16, without renumbering existing nodes. Readers accept schemas 1–20 within native material v6. Empty adaptable image inputs show grayscale/color capability; connected inputs, outputs and wires show their resolved types. Compatible endpoints connect directly, including RGB/RGBA-to-fixed-Scalar links, without automatic conversion nodes. Scalar receivers retain the existing first-channel rule and its R badge.
 
 ## Artist workflow
 
@@ -138,12 +138,14 @@ control (Parabolic Gradient uses **Tiling**): higher values add smaller, more
 numerous details. Detail below the
 authored raster's resolution is filtered toward its mean.
 
-Graph schema 12 converts earlier Clouds frequency values to reciprocal Scale
-in memory, preserving existing authored materials. Saving emits the current
-representation; merely loading does not rewrite or dirty assets. Other pattern
-settings, native material v6, shader generator v33 and uniform ABI 32 retain
-their existing contracts. `material_procedural::algorithm_revision = 2`
-invalidates generated sources and their display images.
+Graph schema 12 introduced in-memory conversion of earlier Clouds frequency
+values to reciprocal Scale, preserving existing authored materials. Current
+schema 20 readers retain that conversion; saving emits the current representation,
+while loading never rewrites or dirties assets. The original conversion checkpoint
+retained shader source33/ABI32; current material ABI39 and pass-specific source
+revisions follow the [shader/cache contract](MATERIAL_SHADER_STARTUP.md).
+`material_procedural::algorithm_revision = 2` identifies the changed generated
+pixels and their display images independently of shader program identity.
 
 Resolution **Custom** opens Width (px) and Height (px), each in 1–4096. Merely
 opening those controls retains the current resolution and document history.
@@ -255,9 +257,12 @@ this change does not claim to solve that separate displacement limitation.
 ## Storage, ownership and validation
 
 Graph schema 9 introduced these kinds, Color4 and RGBA pin without renumbering old
-identities. The current schema 12 writer retains Resize and adds the reusable image operations; readers retain schemas 1–12 and supply defaults without rewriting
-loaded files. Native material files remain v6, generated material ABI remains 32,
-and the existing twelve-sampler and uniform budgets remain in force.
+identities. The current schema 20 writer retains Resize and the reusable image
+operations; readers accept schemas 1–20 and supply defaults without rewriting
+loaded files. Native material files remain v6, generated material ABI remains39,
+and the twelve-sampler/208-vec4 budgets remain in force. Fragment, node-preview
+and native-domain source revisions are separate compiler-input contracts;
+advance only affected entries, as described in [shader/cache ownership](MATERIAL_SHADER_STARTUP.md).
 
 Reusable graph/evaluation/shader code belongs to the canonical renderer;
 Engine owns document persistence adapters, editor controls and transactions.
