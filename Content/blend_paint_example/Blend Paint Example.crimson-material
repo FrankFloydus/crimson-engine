@@ -116,16 +116,16 @@
           "transmission": 1.0
         },
         "position": [
-          480.0,
-          200.0
+          515.0,
+          401.0
         ]
       },
       {
         "blendLayer": {
-          "blendSoftness": 0.18,
+          "blendSoftness": 0.18000000715255737,
           "colorInfluence": 1.0,
           "heightBlend": false,
-          "heightInfluence": 0.9,
+          "heightInfluence": 0.8999999761581421,
           "heightMidpoint": 0.5,
           "heightScale": 1.25,
           "mapping": {
@@ -170,12 +170,12 @@
       },
       {
         "blendLayer": {
-          "blendSoftness": 0.25,
+          "blendSoftness": 0.6240000128746033,
           "colorInfluence": 1.0,
           "heightBlend": true,
-          "heightInfluence": 0.9,
+          "heightInfluence": 0.8709999918937683,
           "heightMidpoint": 0.5,
-          "heightScale": 0.45,
+          "heightScale": 0.44999998807907104,
           "mapping": {
             "mode": 0,
             "offset": [
@@ -197,7 +197,7 @@
           },
           "mappingOverride": false,
           "metallicInfluence": 1.0,
-          "normalInfluence": 0.7,
+          "normalInfluence": 0.699999988079071,
           "occlusionInfluence": 1.0,
           "roughnessInfluence": 1.0,
           "roughnessScale": 1.0,
@@ -212,18 +212,18 @@
         "material": "a98c9d63-efed-5f84-b13a-9273b13b1734",
         "name": "str_stonebrk2",
         "position": [
-          180.0,
+          163.0,
           350.0
         ]
       },
       {
         "blendLayer": {
-          "blendSoftness": 0.3,
+          "blendSoftness": 0.6159999966621399,
           "colorInfluence": 1.0,
           "heightBlend": true,
-          "heightInfluence": 0.9,
+          "heightInfluence": 0.6389999985694885,
           "heightMidpoint": 0.5,
-          "heightScale": 0.45,
+          "heightScale": 0.44999998807907104,
           "mapping": {
             "mode": 0,
             "offset": [
@@ -245,10 +245,10 @@
           },
           "mappingOverride": false,
           "metallicInfluence": 1.0,
-          "normalInfluence": 0.6,
+          "normalInfluence": 0.6000000238418579,
           "occlusionInfluence": 1.0,
           "roughnessInfluence": 1.0,
-          "roughnessScale": 0.8,
+          "roughnessScale": 0.800000011920929,
           "tint": [
             1.0,
             1.0,
@@ -260,18 +260,18 @@
         "material": "80e5ff16-d4ec-5cd2-82d1-44533377a593",
         "name": "str_metalflr3",
         "position": [
-          180.0,
-          500.0
+          163.0,
+          558.0
         ]
       },
       {
         "blendLayer": {
-          "blendSoftness": 0.2,
+          "blendSoftness": 0.20000000298023224,
           "colorInfluence": 1.0,
           "heightBlend": true,
-          "heightInfluence": 0.9,
+          "heightInfluence": 0.8999999761581421,
           "heightMidpoint": 0.5,
-          "heightScale": 0.3,
+          "heightScale": 0.30000001192092896,
           "mapping": {
             "mode": 0,
             "offset": [
@@ -308,8 +308,8 @@
         "material": "85a9cae6-eac4-529c-8c39-ac09f521b84c",
         "name": "str_metalpan4",
         "position": [
-          180.0,
-          650.0
+          177.0,
+          659.0
         ]
       },
       {

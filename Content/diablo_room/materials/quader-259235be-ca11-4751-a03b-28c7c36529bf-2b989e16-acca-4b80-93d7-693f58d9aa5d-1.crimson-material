@@ -11,48 +11,27 @@
       {
         "fromNode": 3,
         "fromPin": 1,
-        "id": 5,
-        "toNode": 6,
+        "id": 2,
+        "toNode": 5,
         "toPin": 8
       },
       {
-        "fromNode": 6,
+        "fromNode": 4,
+        "fromPin": 1,
+        "id": 3,
+        "toNode": 5,
+        "toPin": 9
+      },
+      {
+        "fromNode": 5,
         "fromPin": 0,
-        "id": 12,
-        "toNode": 9,
-        "toPin": 8
-      },
-      {
-        "fromNode": 9,
-        "fromPin": 0,
-        "id": 13,
-        "toNode": 1,
-        "toPin": 11
-      },
-      {
-        "fromNode": 6,
-        "fromPin": 0,
-        "id": 14,
-        "toNode": 10,
-        "toPin": 8
-      },
-      {
-        "fromNode": 10,
-        "fromPin": 6,
-        "id": 15,
-        "toNode": 1,
-        "toPin": 6
-      },
-      {
-        "fromNode": 3,
-        "fromPin": 27,
-        "id": 16,
+        "id": 4,
         "toNode": 1,
         "toPin": 10
       }
     ],
-    "nextLinkId": 17,
-    "nextNodeId": 11,
+    "nextLinkId": 5,
+    "nextNodeId": 6,
     "nodes": [
       {
         "id": 1,
@@ -72,6 +51,14 @@
             1.0
           ],
           "blend": 0,
+          "decalColorEnabled": true,
+          "decalColorStrength": 1.0,
+          "decalMetallicEnabled": false,
+          "decalMetallicStrength": 1.0,
+          "decalNormalEnabled": false,
+          "decalNormalStrength": 1.0,
+          "decalRoughnessEnabled": false,
+          "decalRoughnessStrength": 1.0,
           "doubleSided": false,
           "emission": [
             0.0,
@@ -80,7 +67,7 @@
           ],
           "height": 0.5,
           "ior": 1.5,
-          "metallic": 1.0,
+          "metallic": 0.0,
           "occlusion": 1.0,
           "occlusionStrength": 1.0,
           "opacity": 1.0,
@@ -101,8 +88,8 @@
           "transmission": 1.0
         },
         "position": [
-          739.0,
-          96.0
+          650.0,
+          50.0
         ]
       },
       {
@@ -110,8 +97,8 @@
         "kind": 1,
         "name": "UV",
         "position": [
-          -715.0,
-          51.0
+          -650.0,
+          80.0
         ],
         "uv": {
           "mode": 0,
@@ -138,8 +125,8 @@
         "kind": 2,
         "name": "Texture 2D",
         "position": [
-          -397.0,
-          -92.0
+          -400.0,
+          0.0
         ],
         "texture": {
           "image": "eab5ac34-d725-5e66-b46d-5b60667e8770",
@@ -154,115 +141,24 @@
         }
       },
       {
-        "alpha": {
-          "type": 0,
-          "value": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ]
-        },
         "color": [
-          0.0,
-          0.0,
-          0.0,
+          1.0,
+          1.0,
+          1.0,
           1.0
         ],
-        "id": 6,
-        "image": {
-          "blendMode": 0,
-          "brightness": 0.0,
-          "contrast": 0.0,
-          "featureSize": 12.0,
-          "gamma": 1.0,
-          "grayMode": 0,
-          "inputBlack": 0.0,
-          "inputWhite": 1.0,
-          "noiseContrast": 0.5,
-          "noisePattern": 0,
-          "normalFlipY": false,
-          "normalStrength": 1.0,
-          "opacity": 1.0,
-          "outputBlack": 0.0,
-          "outputWhite": 1.0,
-          "radius": 0.0009765625,
-          "roughness": 0.5,
-          "seed": 0,
-          "sharpen": 1.0
-        },
-        "kind": 23,
-        "left": {
-          "type": 5,
-          "value": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ]
-        },
-        "name": "Grayscale",
+        "id": 4,
+        "kind": 4,
+        "name": "Base Color factor",
         "position": [
-          -61.79998779296875,
-          397.5999755859375
-        ],
-        "right": {
-          "type": 0,
-          "value": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ]
-        }
+          -380.0,
+          105.0
+        ]
       },
       {
-        "atomic": {
-          "amount": 0.0,
-          "angle": 0.0,
-          "bothDirections": false,
-          "contrast": 0.0,
-          "coverage": 0.921999990940094,
-          "depth": 0.10000000149011612,
-          "direction": 4,
-          "enabled": true,
-          "radius": 0.009999999776482582,
-          "strength": 1.0
-        },
-        "color": [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ],
-        "id": 9,
-        "kind": 37,
+        "id": 5,
+        "kind": 5,
         "left": {
-          "type": 0,
-          "value": [
-            0.0,
-            0.0,
-            0.0,
-            0.0
-          ]
-        },
-        "name": "Histogram Scan",
-        "position": [
-          339.0,
-          550.0
-        ],
-        "right": {
-          "type": 0,
-          "value": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ]
-        }
-      },
-      {
-        "alpha": {
           "type": 0,
           "value": [
             1.0,
@@ -271,48 +167,10 @@
             1.0
           ]
         },
-        "color": [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ],
-        "id": 10,
-        "image": {
-          "blendMode": 0,
-          "brightness": 0.0,
-          "contrast": 0.0,
-          "featureSize": 12.0,
-          "gamma": 1.0,
-          "grayMode": 0,
-          "inputBlack": 0.0,
-          "inputWhite": 1.0,
-          "noiseContrast": 0.5,
-          "noisePattern": 0,
-          "normalFlipY": false,
-          "normalStrength": 2.1029999256134033,
-          "opacity": 1.0,
-          "outputBlack": 0.0,
-          "outputWhite": 1.0,
-          "radius": 0.0009765625,
-          "roughness": 0.5,
-          "seed": 0,
-          "sharpen": 1.0
-        },
-        "kind": 28,
-        "left": {
-          "type": 0,
-          "value": [
-            0.0,
-            0.0,
-            0.0,
-            0.0
-          ]
-        },
-        "name": "Height to Normal",
+        "name": "Multiply",
         "position": [
-          343.5999755859375,
-          198.4000244140625
+          0.0,
+          0.0
         ],
         "right": {
           "type": 0,
@@ -325,7 +183,7 @@
         }
       }
     ],
-    "version": 13
+    "version": 20
   },
   "id": "80e5ff16-d4ec-5cd2-82d1-44533377a593",
   "name": "str_metalflr3",

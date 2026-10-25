@@ -79,7 +79,15 @@
             1.0
           ],
           "blend": 0,
-          "doubleSided": true,
+          "decalColorEnabled": true,
+          "decalColorStrength": 1.0,
+          "decalMetallicEnabled": false,
+          "decalMetallicStrength": 1.0,
+          "decalNormalEnabled": false,
+          "decalNormalStrength": 1.0,
+          "decalRoughnessEnabled": false,
+          "decalRoughnessStrength": 1.0,
+          "doubleSided": false,
           "emission": [
             0.0,
             0.0,
@@ -145,8 +153,8 @@
         "kind": 2,
         "name": "Texture 2D",
         "position": [
-          -701.0,
-          -55.0
+          -400.0,
+          0.0
         ],
         "texture": {
           "image": "85dfbfbf-7720-5f7f-bd86-230b61b17035",
@@ -207,8 +215,8 @@
         "kind": 2,
         "name": "Texture 2D",
         "position": [
-          -621.0,
-          512.0
+          -400.0,
+          240.0
         ],
         "texture": {
           "image": "ce5567e1-9463-54f7-aa04-fdcfa20c9d21",
@@ -227,8 +235,8 @@
         "kind": 3,
         "name": "Roughness factor",
         "position": [
-          -15.0,
-          541.0
+          -380.0,
+          345.0
         ],
         "range": [
           0.0,
@@ -264,7 +272,7 @@
         }
       }
     ],
-    "version": 13
+    "version": 20
   },
   "id": "27f1509b-1479-56ab-9a33-463c614fee03",
   "name": "Default Material",

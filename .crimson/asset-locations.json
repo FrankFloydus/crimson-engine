@@ -3379,6 +3379,7 @@
     "616fed63-6dbc-58a6-933c-218f29e9e28d": "Content/Cylinder_001 collision-85e7371d.crimson-model/buffers/0.bin",
     "618dc739-a4ff-5f75-b738-9ea01ae8dfe4": "Content/Box_005-fce09806.crimson-model/manifest.json",
     "61d3e5d9-2733-5bd2-9db7-2e28959d91c5": "Content/models/quader-719baff31ab15277c3f0d5acbfd30bc21e72e8635cdde4bbee42d63dc831742f/source.gltf",
+    "61e7eb9b-f476-5edb-8a3d-00a102cc6d3a": "Content/materials/61e7eb9b-f476-5edb-8a3d-00a102cc6d3a.crimson-material",
     "61f55426-1b40-59ce-9411-5c30547df45d": "Content/models/quader-a19f1faa67b84dfb15b71ee402812951c66223b8f3aa8ad0ccb6a1f0d66f4b9a/manifest.json",
     "61fddfb6-0c81-5019-8d29-2760943228c5": "Content/models/quader-fd933ee896f90dc0a549aa653ae98af29578a6780594a28d482c1c51d8967286/manifest.json",
     "621c362f-bdba-58a4-835f-9087608a78c5": "Content/Box_004 collision-7b271998.crimson-model/buffers/0.bin",
@@ -3426,6 +3427,7 @@
     "67e20a33-66b7-5b81-ac63-633fc07e64b7": "Content/Box_005 collision-4957c89c.crimson-model/manifest.json",
     "68011f04-64c3-4596-b6dc-1f12047863ba": "Content/68011f04-64c3-4596-b6dc-1f12047863ba.crimson-decal",
     "6822c0ba-202e-5c92-898b-76a6aec6f36a": "Content/models/quader-ad3da102d15776058deca420042b637f07a422f04c0751022786021217a00358/buffers/0.bin",
+    "6841561c-ae7c-401c-95ac-8e9bceb37c8a": "Content/exec-b2a25808-779a-4391-8d85-286c9a570090.png",
     "6852161c-c899-5b88-be2c-782c0049ebec": "Content/models/quader-4680de06e036dccb674e963da1f465a06845b931e390b639d4f861c864ea6924/source.gltf",
     "68a766de-c125-517a-a4ea-c047dbe2b759": "Content/Box_005 collision-b54788df.crimson-model/model.gltf",
     "68e1c613-6d3c-5e7f-9952-5a8550a35484": "Content/models/quader-91b910f22df133ca8c698a6aeb046e160dfd7aa08e748813143384ff2a56b6b7/model.gltf",
@@ -3920,6 +3922,7 @@
     "a11f7335-289c-5822-b096-3c600811a1f2": "Content/models/quader-0c1d8fff0d18af05c44258f3770f383e55e3810c3e6d037b86201433ac271c05/buffers/0.bin",
     "a138cb40-f3dd-5f28-82b1-436e19f718ca": "Content/Box_1 collision-8cd49afc.crimson-model/source.gltf",
     "a149fc58-f946-5ae3-ba5c-c0f8885dcff0": "Content/models/quader-a92a2b311bd353660c10f212d46c0e3092f704a1a2eea59eeb7c12dd9068f565/buffers/0.bin",
+    "a1a1e37a-ae19-4c0d-a03a-1a799e047a4b": "Content/a1a1e37a-ae19-4c0d-a03a-1a799e047a4b.crimson-decal",
     "a1b0631e-0ce2-5b69-a04c-4181f5067087": "Content/diablo_room/textures/quader-514ab4cb4fed044f98a6f65d514b4ccbf39eed0fc901be229e6f640ab49d2925.png",
     "a1b0a0bf-20b1-5385-8f85-720149c2c479": "Content/quader-4de84ffb6362c656d9cb4587a8af3ea31a4ff7ff3d06c82165928524bc611775-3.png",
     "a1d4ced9-de18-5164-88fc-eb6fa3650148": "Content/Fire.crimson-material",
@@ -4045,6 +4048,7 @@
     "b0fef104-ca31-5487-9b02-a69f5ae7c736": "Content/tomb/gothic+tomb+3d+model-a2c9d840.crimson-model/source.glb",
     "b1024116-0034-5cf1-9dcb-10b9af85ee8f": "Content/models/model-38065318670800-6/manifest.json",
     "b14b431c-ab28-5d98-bd99-70462c1d14bf": "Content/Pillar_7 collision-13ba56-1.crimson-model/manifest.json",
+    "b1baf989-9a2b-46e0-8149-a9be465b01c0": "Content/decals/bloody_pentacle_01.png",
     "b1d2cde9-32bf-5a30-b719-f3e6ff0691cd": "Content/models/model-36358454676700-1/images/0.jpg",
     "b20fe575-8f21-551a-b8fc-8ad67c2392e4": "Content/Box_012 collision-1dbf8ac0.crimson-model/manifest.json",
     "b214586c-f0b4-581d-a29d-9ec35651e587": "Content/models/quader-47f0c3acb73a63ed6c699a1060f469a108d593a98594fc6cace1051a5ce1c612/model.gltf",
@@ -4699,7 +4703,7 @@
     "ffe67bd8-acf6-5d5b-ac6b-4fd7b4804d60": "Content/Box_005 collision-5b635f0f.crimson-model/source.gltf",
     "ffe852b4-ad1b-5ef9-b90c-cd37a201113e": ".crimson/cache/quader-imports/a8695214-0c58-5bed-bd3b-77a26ce5f828/ffe852b4-ad1b-5ef9-b90c-cd37a201113e/manifest.json"
   },
-  "revision": 435,
+  "revision": 440,
   "uuidReferences": true,
   "version": 1
 }

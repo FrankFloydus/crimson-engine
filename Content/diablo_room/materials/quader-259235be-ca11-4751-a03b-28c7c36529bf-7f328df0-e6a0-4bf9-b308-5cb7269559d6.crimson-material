@@ -51,6 +51,14 @@
             1.0
           ],
           "blend": 0,
+          "decalColorEnabled": true,
+          "decalColorStrength": 1.0,
+          "decalMetallicEnabled": false,
+          "decalMetallicStrength": 1.0,
+          "decalNormalEnabled": false,
+          "decalNormalStrength": 1.0,
+          "decalRoughnessEnabled": false,
+          "decalRoughnessStrength": 1.0,
           "doubleSided": false,
           "emission": [
             0.0,
@@ -175,7 +183,7 @@
         }
       }
     ],
-    "version": 13
+    "version": 20
   },
   "id": "7e9ffe7b-01d1-5099-90fd-764b2591666c",
   "name": "str_stoneflr4",

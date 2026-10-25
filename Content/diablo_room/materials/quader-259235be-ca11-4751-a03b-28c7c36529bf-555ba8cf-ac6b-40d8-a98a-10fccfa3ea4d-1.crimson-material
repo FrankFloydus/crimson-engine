@@ -28,59 +28,10 @@
         "id": 4,
         "toNode": 1,
         "toPin": 10
-      },
-      {
-        "fromNode": 2,
-        "fromPin": 7,
-        "id": 9,
-        "toNode": 8,
-        "toPin": 7
-      },
-      {
-        "fromNode": 3,
-        "fromPin": 1,
-        "id": 23,
-        "toNode": 13,
-        "toPin": 8
-      },
-      {
-        "fromNode": 13,
-        "fromPin": 0,
-        "id": 26,
-        "toNode": 14,
-        "toPin": 8
-      },
-      {
-        "fromNode": 14,
-        "fromPin": 0,
-        "id": 27,
-        "toNode": 10,
-        "toPin": 8
-      },
-      {
-        "fromNode": 15,
-        "fromPin": 6,
-        "id": 30,
-        "toNode": 1,
-        "toPin": 6
-      },
-      {
-        "fromNode": 10,
-        "fromPin": 0,
-        "id": 31,
-        "toNode": 15,
-        "toPin": 8
-      },
-      {
-        "fromNode": 10,
-        "fromPin": 0,
-        "id": 32,
-        "toNode": 1,
-        "toPin": 11
       }
     ],
-    "nextLinkId": 33,
-    "nextNodeId": 17,
+    "nextLinkId": 5,
+    "nextNodeId": 6,
     "nodes": [
       {
         "id": 1,
@@ -100,6 +51,14 @@
             1.0
           ],
           "blend": 0,
+          "decalColorEnabled": true,
+          "decalColorStrength": 1.0,
+          "decalMetallicEnabled": false,
+          "decalMetallicStrength": 1.0,
+          "decalNormalEnabled": false,
+          "decalNormalStrength": 1.0,
+          "decalRoughnessEnabled": false,
+          "decalRoughnessStrength": 1.0,
           "doubleSided": false,
           "emission": [
             0.0,
@@ -119,18 +78,18 @@
           "shading": 0,
           "specular": 0.5,
           "tessellation": {
-            "amount": 0.1809999942779541,
+            "amount": 0.10000000149011612,
             "enabled": false,
-            "heightLod": 5.079999923706055,
-            "maxFactor": 33,
-            "midpoint": 0.2540000081062317
+            "heightLod": 0.0,
+            "maxFactor": 8,
+            "midpoint": 0.5
           },
           "thickness": 0.0,
           "transmission": 1.0
         },
         "position": [
-          1059.0,
-          -63.0
+          650.0,
+          50.0
         ]
       },
       {
@@ -138,8 +97,8 @@
         "kind": 1,
         "name": "UV",
         "position": [
-          -827.0,
-          -77.0
+          -650.0,
+          80.0
         ],
         "uv": {
           "mode": 0,
@@ -166,8 +125,8 @@
         "kind": 2,
         "name": "Texture 2D",
         "position": [
-          -589.0,
-          -401.0
+          -400.0,
+          0.0
         ],
         "texture": {
           "image": "103dec5a-3bc8-5975-9496-48fb6897138d",
@@ -192,8 +151,8 @@
         "kind": 4,
         "name": "Base Color factor",
         "position": [
-          -735.0,
-          305.0
+          -380.0,
+          105.0
         ]
       },
       {
@@ -210,310 +169,9 @@
         },
         "name": "Multiply",
         "position": [
-          115.0,
-          -323.0
-        ],
-        "right": {
-          "type": 0,
-          "value": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ]
-        }
-      },
-      {
-        "id": 8,
-        "kind": 2,
-        "name": "Texture 2D",
-        "position": [
-          -125.75,
-          445.75
-        ],
-        "texture": {
-          "image": "18bdef7c-9a45-4cc7-bb40-c46175fd4d84",
-          "normalStrength": 1.0,
-          "role": 1,
-          "sampler": {
-            "magFilter": 0,
-            "minFilter": 5,
-            "wrapU": 0,
-            "wrapV": 0
-          }
-        }
-      },
-      {
-        "alpha": {
-          "type": 0,
-          "value": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ]
-        },
-        "color": [
           0.0,
-          0.0,
-          0.0,
-          1.0
+          0.0
         ],
-        "id": 10,
-        "image": {
-          "blendMode": 0,
-          "brightness": 0.0,
-          "contrast": 0.0,
-          "featureSize": 12.0,
-          "gamma": 1.284999966621399,
-          "grayMode": 0,
-          "inputBlack": 0.0,
-          "inputWhite": 0.21699999272823334,
-          "noiseContrast": 0.5,
-          "noisePattern": 0,
-          "normalFlipY": false,
-          "normalStrength": 1.0,
-          "opacity": 1.0,
-          "outputBlack": 0.0,
-          "outputWhite": 1.0,
-          "radius": 0.0009765625,
-          "roughness": 0.5,
-          "seed": 0,
-          "sharpen": 1.0
-        },
-        "kind": 20,
-        "left": {
-          "type": 0,
-          "value": [
-            0.0,
-            0.0,
-            0.0,
-            0.0
-          ]
-        },
-        "name": "Levels",
-        "position": [
-          275.0,
-          33.3333740234375
-        ],
-        "right": {
-          "type": 0,
-          "value": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ]
-        }
-      },
-      {
-        "id": 13,
-        "kind": 33,
-        "left": {
-          "type": 0,
-          "value": [
-            0.0,
-            0.0,
-            0.0,
-            0.0
-          ]
-        },
-        "name": "Resize",
-        "position": [
-          -333.0,
-          -445.0
-        ],
-        "resize": {
-          "filter": 1,
-          "height": 1024,
-          "width": 1024
-        }
-      },
-      {
-        "alpha": {
-          "type": 0,
-          "value": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ]
-        },
-        "color": [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ],
-        "id": 14,
-        "image": {
-          "blendMode": 0,
-          "brightness": 0.0,
-          "contrast": 0.0,
-          "featureSize": 12.0,
-          "gamma": 1.0,
-          "grayMode": 0,
-          "inputBlack": 0.0,
-          "inputWhite": 1.0,
-          "noiseContrast": 0.5,
-          "noisePattern": 0,
-          "normalFlipY": false,
-          "normalStrength": 1.0,
-          "opacity": 1.0,
-          "outputBlack": 0.0,
-          "outputWhite": 1.0,
-          "radius": 0.0009765625,
-          "roughness": 0.5,
-          "seed": 0,
-          "sharpen": 1.0
-        },
-        "kind": 23,
-        "left": {
-          "type": 5,
-          "value": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ]
-        },
-        "name": "Grayscale",
-        "position": [
-          -87.33331298828125,
-          33.33332824707031
-        ],
-        "right": {
-          "type": 0,
-          "value": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ]
-        }
-      },
-      {
-        "alpha": {
-          "type": 0,
-          "value": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ]
-        },
-        "color": [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ],
-        "id": 15,
-        "image": {
-          "blendMode": 0,
-          "brightness": 0.0,
-          "contrast": 0.0,
-          "featureSize": 12.0,
-          "gamma": 1.0,
-          "grayMode": 0,
-          "inputBlack": 0.0,
-          "inputWhite": 1.0,
-          "noiseContrast": 0.5,
-          "noisePattern": 0,
-          "normalFlipY": false,
-          "normalStrength": 0.527999997138977,
-          "opacity": 1.0,
-          "outputBlack": 0.0,
-          "outputWhite": 1.0,
-          "radius": 0.0009765625,
-          "roughness": 0.5,
-          "seed": 0,
-          "sharpen": 1.0
-        },
-        "kind": 28,
-        "left": {
-          "type": 0,
-          "value": [
-            0.0,
-            0.0,
-            0.0,
-            0.0
-          ]
-        },
-        "name": "Height to Normal",
-        "position": [
-          691.25,
-          394.75
-        ],
-        "right": {
-          "type": 0,
-          "value": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ]
-        }
-      },
-      {
-        "atomic": {
-          "amount": 0.0,
-          "angle": 0.0,
-          "bothDirections": false,
-          "contrast": 0.0,
-          "coverage": 0.5,
-          "depth": 0.10000000149011612,
-          "direction": 4,
-          "enabled": true,
-          "radius": 0.009999999776482582,
-          "strength": 1.0
-        },
-        "color": [
-          1.0,
-          1.0,
-          1.0,
-          1.0
-        ],
-        "id": 16,
-        "kind": 40,
-        "left": {
-          "type": 0,
-          "value": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ]
-        },
-        "name": "Procedural Texture",
-        "position": [
-          529.0,
-          -607.0
-        ],
-        "procedural": {
-          "angle": 0.0,
-          "angleRandom": 0.0,
-          "contribution": 1.600000023841858,
-          "detailBalance": 0.5,
-          "disorder": 0.0,
-          "fibersAngleSpread": 180.0,
-          "height": 2048,
-          "nonSquareExpansion": true,
-          "pattern": 3,
-          "patternAmount": 1.0,
-          "patternSize": [
-            1.0,
-            1.0
-          ],
-          "patternSizeRandom": [
-            0.0,
-            0.0
-          ],
-          "scale": 9.199999809265137,
-          "seed": 0,
-          "threads": 16.0,
-          "width": 2048
-        },
         "right": {
           "type": 0,
           "value": [
@@ -525,7 +183,7 @@
         }
       }
     ],
-    "version": 13
+    "version": 20
   },
   "id": "8bbc4fed-ae99-5080-a32b-e96dbe088c08",
   "name": "str_stoneflr1",
