@@ -1,5 +1,7 @@
 #include "DecalInternal.h"
 #include "DecalPolygon.h"
+#include "DecalContactCells.h"
+#include "DecalEndpointIndex.h"
 #include "DecalSourceContacts.h"
 #include "DecalSampling.h"
 #include <chrono>
@@ -28,6 +30,7 @@ Box bounds(const Polygon&p){Box b{p.front(),p.front()};for(D3 v:p){b.lo={std::mi
 bool overlaps(const Box&a,const Box&b,double e){for(size_t k=0;k<3;++k)if(a.lo[k]>b.hi[k]+e||b.lo[k]>a.hi[k]+e)return false;return true;}
 struct Cut {Plane plane;Box support;};
 struct Segment {D3 a,b;};
+bool positionLess(D3 a,D3 b){return std::tie(a.x,a.y,a.z)<std::tie(b.x,b.y,b.z);}
 void addPlane(std::vector<Cut>&v,D3 n,D3 p,const Box&support){if(length(n)>1e-15){n=unit(n);v.push_back({{n,dot(n,p)},support});}}
 bool boundarySegment(const Source&s,D3 p,D3 q,double tol){for(size_t i=0;i<3;++i){const D3 a=s.p[i],e=s.p[(i+1)%3]-a;const double len=length(e);if(len<=1e-15)continue;const D3 n=e/len;const double u=dot(p-a,n),v=dot(q-a,n);if(length(p-a-n*u)<=tol&&length(q-a-n*v)<=tol&&std::min(u,v)>=-tol&&std::max(u,v)<=len+tol)return true;}return false;}
 // Return coplanar overlap separately: overlapping sources must participate in
@@ -91,7 +94,7 @@ AnalysisPatch buildTopology(const DecalSurfaceSnapshot&snapshot,const DecalBuild
     // Analysis includes a sampling halo and original source boundaries that
     // disappear when the chart is clipped to the image. Its allowance must be
     // independent of the final output cap, while remaining strictly bounded.
-    const size_t analysisLimit=static_cast<size_t>(std::min<uint64_t>(1'000'000,uint64_t(r.limits.maximumTriangles)*4+patch.sources.size()));
+    constexpr size_t analysisLimit=1'000'000;
     std::vector<std::vector<Cut>> cuts(patch.sources.size());std::vector<std::vector<Segment>> barriers(patch.sources.size());Dsu sourceSheets(patch.sources.size());std::vector<Box> boxes;for(const auto&s:patch.sources)boxes.push_back(bounds(s));std::vector<size_t> order(patch.sources.size());std::iota(order.begin(),order.end(),size_t{});
     Box sourceBounds=boxes.front();for(const auto& box:boxes){sourceBounds.lo={std::min(sourceBounds.lo.x,box.lo.x),std::min(sourceBounds.lo.y,box.lo.y),std::min(sourceBounds.lo.z,box.lo.z)};sourceBounds.hi={std::max(sourceBounds.hi.x,box.hi.x),std::max(sourceBounds.hi.y,box.hi.y),std::max(sourceBounds.hi.z,box.hi.z)};}
     size_t sweepAxis=0;for(size_t axis=1;axis<3;++axis)if(sourceBounds.hi[axis]-sourceBounds.lo[axis]>sourceBounds.hi[sweepAxis]-sourceBounds.lo[sweepAxis])sweepAxis=axis;
@@ -111,35 +114,70 @@ AnalysisPatch buildTopology(const DecalSurfaceSnapshot&snapshot,const DecalBuild
     // cuts and barrier segments, but do not tessellate an entire unrelated mesh
     // merely to rediscover that it cannot join the seed sheet.
     const size_t seedSheet=sourceSheets.find(seedSource);
-    const double eps=std::max(1e-11,patch.scale*1e-10),weld=std::min(tol,std::max(1e-9,patch.scale*1e-7));std::vector<AnalysisFace> allFaces;std::map<std::tuple<int64_t,int64_t,int64_t>,std::vector<size_t>> buckets;
-    const auto node=[&](D3 p){const int64_t ix=static_cast<int64_t>(std::floor((p.x-o.x)/weld)),iy=static_cast<int64_t>(std::floor((p.y-o.y)/weld)),iz=static_cast<int64_t>(std::floor((p.z-o.z)/weld));size_t found=SIZE_MAX;double nearest=weld;
-        for(int dx=-1;dx<=1;++dx)for(int dy=-1;dy<=1;++dy)for(int dz=-1;dz<=1;++dz){auto it=buckets.find({ix+dx,iy+dy,iz+dz});if(it!=buckets.end())for(size_t id:it->second){double d=length(p-patch.positions[id]);if(d<nearest||(d==nearest&&id<found)){found=id;nearest=d;}}}
-        if(found!=SIZE_MAX)return found;const size_t id=patch.positions.size();patch.positions.push_back(p);buckets[{ix,iy,iz}].push_back(id);return id;};
-    struct Cell {Polygon polygon;size_t source;};std::vector<Cell> allCells;
+    const double eps=std::max(1e-11,patch.scale*1e-10),weld=std::min(tol,std::max(1e-9,patch.scale*1e-7));std::vector<AnalysisFace> allFaces;
+    struct Cell {Polygon polygon;size_t source;double weldRadius;std::vector<size_t> corners;};std::vector<Cell> allCells;size_t baseTriangles=0;
     for(size_t si=0;si<patch.sources.size();++si){cancelled(stop);if(sourceSheets.find(si)!=seedSheet)continue;const Source&s=patch.sources[si];Polygon poly{s.p[0],s.p[1],s.p[2]};for(size_t k=0;k<3;++k){D3 n{};if(k==0)n.x=1;if(k==1)n.y=1;if(k==2)n.z=1;poly=clip(poly,{n,o[k]+radius},eps);poly=clip(poly,{n*-1,-o[k]+radius},eps);if(poly.size()<3)break;}if(poly.size()<3)continue;
         const size_t omittedAxis=std::abs(patch.seedNormal.x)>std::abs(patch.seedNormal.y)?(std::abs(patch.seedNormal.x)>std::abs(patch.seedNormal.z)?0:2):(std::abs(patch.seedNormal.y)>std::abs(patch.seedNormal.z)?1:2);
         // Establish the common grid first. A short contact may split the cells
         // it touches, never extend hundreds of infinite planes across a wall.
         double maximumEdge=0;for(size_t edge=0;edge<poly.size();++edge)maximumEdge=std::max(maximumEdge,length(poly[(edge+1)%poly.size()]-poly[edge]));
-        std::vector<Polygon> cells{std::move(poly)};std::vector<Cut> planes;for(size_t k=0;k<3;++k){if(k==omittedAxis)continue;D3 n{};if(k==0)n.x=1;if(k==1)n.y=1;if(k==2)n.z=1;
+        const Box initialBounds=bounds(poly);ContactCells<Polygon,Box> cells(std::move(poly),initialBounds);std::vector<Cut> planes;for(size_t k=0;k<3;++k){if(k==omittedAxis)continue;D3 n{};if(k==0)n.x=1;if(k==1)n.y=1;if(k==2)n.z=1;
             // Already fine source triangles need no second sampling grid. The
             // seed still needs both planes through its exact position. Contact
             // cuts and the shared-endpoint pass below maintain conformity.
             const int steps=maximumEdge>spacing?static_cast<int>(std::ceil(radius/spacing)):0;
             if(steps||si==seedSource)for(int j=-steps;j<=steps;++j)planes.push_back({{n,o[k]+j*spacing},roi});}
         planes.insert(planes.end(),cuts[si].begin(),cuts[si].end());
-        for(const Cut&cut:planes){cancelled(stop);std::vector<Polygon> next;for(auto&cell:cells){if(!overlaps(bounds(cell),cut.support,tol)){next.push_back(std::move(cell));continue;}const Plane&plane=cut.plane;bool positive=false,negative=false;for(D3 p:cell){double d=distance(plane,p);positive|=d>eps;negative|=d< -eps;}if(positive&&negative){auto a=clip(cell,plane,eps),b=clip(cell,{plane.n*-1,-plane.d},eps);if(a.size()>=3)next.push_back(std::move(a));if(b.size()>=3)next.push_back(std::move(b));}else next.push_back(std::move(cell));}cells=std::move(next);if(cells.size()+allCells.size()>analysisLimit)throw Failure(DecalPatchStatus::LimitExceeded,"Analysis triangle budget exceeded.");}
-        for(auto&cell:cells){for(D3 p:cell)node(p);allCells.push_back({std::move(cell),si});if(allCells.size()>analysisLimit)throw Failure(DecalPatchStatus::LimitExceeded,"Analysis triangle budget exceeded.");}
+        for(const Cut&cut:planes){cancelled(stop);cells.apply(cut.support,[&](const Box&a,const Box&b){return overlaps(a,b,tol);},[](const Polygon&p){return bounds(p);},[&](const Polygon&cell,auto&&emit){
+            const Plane&plane=cut.plane;bool positive=false,negative=false;for(D3 p:cell){const double d=distance(plane,p);positive|=d>eps;negative|=d< -eps;}if(!positive||!negative)return false;
+            auto a=clip(cell,plane,eps),b=clip(cell,{plane.n*-1,-plane.d},eps);if(a.size()>=3)emit(std::move(a));if(b.size()>=3)emit(std::move(b));return true;
+        },[&]{cancelled(stop);});if(cells.size()+allCells.size()>analysisLimit)throw Failure(DecalPatchStatus::LimitExceeded,"Analysis triangle budget exceeded.");}
+        cells.forEach([&](Polygon&cell){cancelled(stop);
+            // Charge the exact minimum triangulation work before allocating
+            // node requests. Shared-edge insertion is charged again at emission.
+            if(cell.size()-2>analysisLimit-baseTriangles)throw Failure(DecalPatchStatus::LimitExceeded,"Analysis triangle budget exceeded.");baseTriangles+=cell.size()-2;
+            // A global positional tolerance must not flatten a real thin cell
+            // or merge its distinct corners. Bound movement by its local edge
+            // and vertex-to-nonincident-edge separation. Exact collinear chains
+            // carry no additional width constraint; retain their IDs below.
+            double feature=INFINITY;
+            for(size_t i=0;i<cell.size();++i){
+                feature=std::min(feature,length(cell[(i+1)%cell.size()]-cell[i]));
+                for(size_t j=0;j<cell.size();++j){if(i==j||i==(j+1)%cell.size())continue;const D3 a=cell[j],e=cell[(j+1)%cell.size()]-a;const double squared=dot(e,e);if(squared==0)continue;const double t=std::clamp(dot(cell[i]-a,e)/squared,0.,1.);const double separation=length(cell[i]-a-e*t);if(separation>0)feature=std::min(feature,separation);}
+            }
+            const double cellWeld=std::min(weld,feature*.125);
+            allCells.push_back({std::move(cell),si,cellWeld,{}});if(allCells.size()>analysisLimit)throw Failure(DecalPatchStatus::LimitExceeded,"Analysis triangle budget exceeded.");
+        });
+    }
+    struct NodeRequest {size_t cell,corner;double radius;};std::vector<NodeRequest> requests;requests.reserve(baseTriangles+2*allCells.size());
+    for(size_t i=0;i<allCells.size();++i){auto&cell=allCells[i];cell.corners.resize(cell.polygon.size());for(size_t j=0;j<cell.polygon.size();++j)requests.push_back({i,j,cell.weldRadius});}
+    // Register the most constrained features first. A later coarse cell cannot
+    // absorb their nodes under a larger tolerance, and registration is performed
+    // once before building the immutable shared-endpoint search lists.
+    std::stable_sort(requests.begin(),requests.end(),[](const NodeRequest&a,const NodeRequest&b){return a.radius<b.radius;});
+    std::map<std::tuple<int64_t,int64_t,int64_t>,std::vector<size_t>> buckets;std::vector<double> nodeRadii;
+    for(const auto&request:requests){cancelled(stop);auto&cell=allCells[request.cell];const D3 p=cell.polygon[request.corner];const int64_t ix=static_cast<int64_t>(std::floor((p.x-o.x)/weld)),iy=static_cast<int64_t>(std::floor((p.y-o.y)/weld)),iz=static_cast<int64_t>(std::floor((p.z-o.z)/weld));size_t found=SIZE_MAX;double nearest=weld;
+        for(int dx=-1;dx<=1;++dx)for(int dy=-1;dy<=1;++dy)for(int dz=-1;dz<=1;++dz){auto it=buckets.find({ix+dx,iy+dy,iz+dz});if(it!=buckets.end())for(size_t id:it->second){const double d=length(p-patch.positions[id]);if(d<=std::min(request.radius,nodeRadii[id])&&(d<nearest||(d==nearest&&id<found))){found=id;nearest=d;}}}
+        if(found==SIZE_MAX){found=patch.positions.size();patch.positions.push_back(p);nodeRadii.push_back(request.radius);buckets[{ix,iy,iz}].push_back(found);}else nodeRadii[found]=std::min(nodeRadii[found],request.radius);
+        cell.corners[request.corner]=found;
     }
     // Local cuts can end on a neighboring cell's edge. Insert every welded
     // endpoint on that edge before triangulation, preserving a conforming mesh.
-    std::array<std::vector<size_t>,3> sortedNodes;for(size_t axis=0;axis<3;++axis){auto&ids=sortedNodes[axis];ids.resize(patch.positions.size());std::iota(ids.begin(),ids.end(),size_t{});std::stable_sort(ids.begin(),ids.end(),[&](size_t a,size_t b){return patch.positions[a][axis]<patch.positions[b][axis];});}
+    const EndpointIndex endpointIndex(patch.positions);
     for(const auto&cell:allCells){cancelled(stop);std::vector<size_t> boundary;
-        for(size_t j=0;j<cell.polygon.size();++j){const size_t first=node(cell.polygon[j]),last=node(cell.polygon[(j+1)%cell.polygon.size()]);if(first==last)continue;const D3 a=patch.positions[first],b=patch.positions[last],e=b-a;const double len=length(e);if(len<=eps)continue;const D3 direction=e/len;size_t axis=0;for(size_t k=1;k<3;++k)if(std::abs(e[k])>std::abs(e[axis]))axis=k;std::vector<std::pair<double,size_t>> points{{0,first}};
-            const auto&ids=sortedNodes[axis];const double lo=std::min(a[axis],b[axis])-weld,hi=std::max(a[axis],b[axis])+weld;auto it=std::lower_bound(ids.begin(),ids.end(),lo,[&](size_t id,double x){return patch.positions[id][axis]<x;});
-            for(;it!=ids.end()&&patch.positions[*it][axis]<=hi;++it){if(*it==first||*it==last)continue;const D3 q=patch.positions[*it];const double t=dot(q-a,direction);if(t>weld&&t<len-weld&&length(q-a-direction*t)<=eps*4)points.push_back({t,*it});}
-            std::sort(points.begin(),points.end());for(const auto&[t,id]:points)if(boundary.empty()||boundary.back()!=id)boundary.push_back(id);
+        struct Endpoint {size_t id,edge;double along,distanceSquared;};std::vector<Endpoint> endpoints;
+        std::vector<std::vector<std::pair<double,size_t>>> edgePoints(cell.corners.size());
+        std::vector<std::array<D3,2>> edgeKeys(cell.corners.size());
+        for(size_t j=0;j<cell.polygon.size();++j){const size_t first=cell.corners[j],last=cell.corners[(j+1)%cell.polygon.size()];if(first==last)continue;const D3 a=patch.positions[first],b=patch.positions[last],e=b-a;const double len=length(e);if(len==0)continue;const bool reverse=positionLess(b,a);const D3 origin=reverse?b:a,direction=(reverse?e*-1:e)/len;edgeKeys[j]={origin,reverse?a:b};edgePoints[j].push_back({0,first});
+            endpointIndex.querySegment(a,b,std::min(eps*4,cell.weldRadius),[&](size_t id){if(std::find(cell.corners.begin(),cell.corners.end(),id)!=cell.corners.end())return;const D3 q=patch.positions[id];const double along=dot(q-origin,direction),t=reverse?len-along:along;const D3 residual=q-origin-direction*along;const double squared=dot(residual,residual),limit=std::min({eps*4,cell.weldRadius,nodeRadii[id]});if(t>0&&t<len&&squared<=limit*limit)endpoints.push_back({id,j,t,squared});});
         }
+        // Thin cells can place the same endpoint within the tolerance bands of
+        // two converging edges. It belongs to its closest boundary edge once;
+        // inserting it twice creates a backtracking spur and destroys the cell.
+        // Original cell corners already own their two incident edges.
+        std::sort(endpoints.begin(),endpoints.end(),[&](const Endpoint&a,const Endpoint&b){if(a.id!=b.id)return a.id<b.id;if(a.distanceSquared!=b.distanceSquared)return a.distanceSquared<b.distanceSquared;for(size_t i=0;i<2;++i){const D3 x=edgeKeys[a.edge][i],y=edgeKeys[b.edge][i];if(positionLess(x,y))return true;if(positionLess(y,x))return false;}return a.edge<b.edge;});
+        for(size_t i=0;i<endpoints.size();){const auto&endpoint=endpoints[i];edgePoints[endpoint.edge].push_back({endpoint.along,endpoint.id});const size_t id=endpoint.id;do{++i;}while(i<endpoints.size()&&endpoints[i].id==id);}
+        for(auto&points:edgePoints){std::sort(points.begin(),points.end());for(const auto&[t,id]:points)if(boundary.empty()||boundary.back()!=id)boundary.push_back(id);}
         if(boundary.size()>1&&boundary.front()==boundary.back())boundary.pop_back();
         if(boundary.size()<3)continue;double area=0;for(size_t j=1;j+1<boundary.size();++j)area+=dot(cross(patch.positions[boundary[j]]-patch.positions[boundary[0]],patch.positions[boundary[j+1]]-patch.positions[boundary[0]]),patch.sources[cell.source].geometricNormal);if(std::abs(area)<=eps*eps)continue;
         if(!triangulateConvexPolygon(boundary,patch.positions,patch.sources[cell.source].geometricNormal,eps,[&](std::array<size_t,3> triangle){allFaces.push_back({triangle,cell.source});if(allFaces.size()>analysisLimit)throw Failure(DecalPatchStatus::LimitExceeded,"Analysis triangle budget exceeded.");}))throw Failure(DecalPatchStatus::InvalidChart,"Contact cell triangulation failed.");

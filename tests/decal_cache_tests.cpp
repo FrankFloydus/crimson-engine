@@ -46,6 +46,8 @@ void proofs(const std::filesystem::path&root){
     invalid=original;for(size_t i=0;i<sizeof(Vec2);++i)std::swap(invalid[92+i],invalid[128+i]);reseal(invalid);store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Folded cache UV orientation accepted.");
     auto upsideDown=patch;for(auto&chunk:upsideDown.chunks)for(auto&vertex:chunk.vertices)vertex.uv[1]=1-vertex.uv[1];
     check(writeDecalCache(file,recipe,upsideDown,buildRequest.limits)&&!readDecalCache(file,recipe,surface,buildRequest),"Obsolete upward raster V escaped cache orientation validation.");
+    auto erased=patch;for(auto&chunk:erased.chunks)for(auto&vertex:chunk.vertices)vertex.uv={.5f,.5f};
+    check(writeDecalCache(file,recipe,erased,buildRequest.limits)&&!readDecalCache(file,recipe,surface,buildRequest),"Collapsed UVs on a finite-area source escaped cache metric validation.");
     invalid=original;replace(invalid,72,uint32_t{0xffffffff});store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Unbounded vertex allocation accepted.");
     invalid=original;replace(invalid,76,uint32_t{0xffffffff});store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Unbounded index allocation accepted.");
     invalid=original;replace(invalid,52,uint32_t{0xffffffff});store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Unbounded receiver allocation accepted.");

@@ -2,6 +2,13 @@
 #include "decals/DecalResolve.h"
 #include "decal_arch_fixture.h"
 #include "decal_polygon_fixture.h"
+#include "decal_unfold_fixture.h"
+#include "decal_saved_contact_fixture.h"
+#include "decal_contact_cells_fixture.h"
+#include "decal_polygon_intervals_fixture.h"
+#include "decal_orientation_fixture.h"
+#include "decal_endpoint_index_fixture.h"
+#include <algorithm>
 #include <iostream>
 #include <cmath>
 #include <stdexcept>
@@ -55,6 +62,23 @@ void translatedPlanePrecision(){
 DecalSurfaceSnapshot corner(float y0=-1,float y1=1,float gap=0){return {{quad(1,{-1,-1,0},{0,-1,0},{0,1,0},{-1,1,0}),quad(2,{gap,y1,0},{gap,y0,0},{gap,y0,1},{gap,y1,1})}};}
 double uvArea(const DecalPatch&patch){
     double area=0;for(const auto&chunk:patch.chunks)for(size_t i=0;i<chunk.indices.size();i+=3){const auto a=chunk.vertices[chunk.indices[i]].uv,b=chunk.vertices[chunk.indices[i+1]].uv,c=chunk.vertices[chunk.indices[i+2]].uv;area+=.5*std::abs((double(b[0])-a[0])*(double(c[1])-a[1])-(double(b[1])-a[1])*(double(c[0])-a[0]));}return area;
+}
+void savedContactCells(){
+    namespace saved=test::saved_contact;
+    for(const bool ceiling:{true,false}) {
+        const auto original=ceiling?saved::ceilingSurface():saved::pillarSurface();
+        const auto r=ceiling?saved::ceilingRequest():saved::pillarRequest();
+        double baselineArea{};
+        for(const bool reversed:{false,true}) {
+            auto surface=original;
+            if(reversed){std::reverse(surface.receivers.begin(),surface.receivers.end());for(auto& receiver:surface.receivers)std::reverse(receiver.triangles.begin(),receiver.triangles.end());}
+            const auto patch=build(surface,r,ceiling?"saved four-triangle ceiling contact":"saved 33-triangle pillar contact");
+            require(patch.usable()&&patch.statistics.outputTriangles>0,"Exact saved contact topology rejected valid source geometry: "+patch.message);
+            provenance(surface,patch);const double area=uvArea(patch);
+            require(area>(ceiling?.5:1e-6),"Saved contact correction lost the seed-connected image region.");
+            if(reversed)require(std::abs(area-baselineArea)<1e-5,"Source enumeration changed saved contact image coverage.");else baselineArea=area;
+        }
+    }
 }
 void resizedArch(){
     const auto[boundarySurface,boundaryRequest]=test::bloodDecalArchFixture();
@@ -187,4 +211,4 @@ void closedBuiltinCylinder(){
 }
 void failures(){DecalSurfaceSnapshot s{{quad(1,{-1,-1,0},{1,-1,0},{1,1,0},{-1,1,0})}};auto r=request();std::stop_source stop;stop.request_stop();require(buildDecalPatch(s,r,stop.get_token()).status==DecalPatchStatus::Cancelled,"Cancellation ignored");r.limits.maximumTriangles=5;require(buildDecalPatch(s,r).status==DecalPatchStatus::LimitExceeded,"Geometry cap silently truncated");r=request();r.frame.at(0,0)=0;require(buildDecalPatch(s,r).status==DecalPatchStatus::InvalidInput,"Singular frame accepted");r=request();r.seed.receiver.entity=99;require(buildDecalPatch(s,r).status==DecalPatchStatus::MissingSeed,"Missing seed invented surface");}
 }
-int main(){try{test::runPolygonProofs();planeAndAffine();imageOrientation();translatedPlanePrecision();resizedArch();localDevelopableFootprint();seams();boundedConnectedPreparation();denseSourceAndFootprintBudgets();narrowFootprints();curved();nondevelopable();closedBuiltinCylinder();failures();std::cout<<"All decal CPU surface proofs passed\n";return 0;}catch(const std::exception&e){std::cerr<<"DECAL PROOF FAILED: "<<e.what()<<'\n';return 1;}}
+int main(){try{test::runOrientationProofs();test::runEndpointIndexProofs();test::runContactCellsProofs();test::runPolygonIntervalsProofs();test::runPolygonProofs();test::runUnfoldProofs();planeAndAffine();imageOrientation();translatedPlanePrecision();resizedArch();localDevelopableFootprint();seams();boundedConnectedPreparation();denseSourceAndFootprintBudgets();narrowFootprints();curved();nondevelopable();closedBuiltinCylinder();failures();savedContactCells();std::cout<<"All decal CPU surface proofs passed\n";return 0;}catch(const std::exception&e){std::cerr<<"DECAL PROOF FAILED: "<<e.what()<<'\n';return 1;}}

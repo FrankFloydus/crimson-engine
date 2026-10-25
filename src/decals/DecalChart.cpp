@@ -76,15 +76,19 @@ bool developableChart(const AnalysisPatch&a,std::vector<D2>&chart,std::vector<bo
         for(size_t j=0;j<3;++j){const size_t va=v[j],vb=v[(j+1)%3],vc=v[(j+2)%3];const auto&uses=edges[std::minmax(va,vb)];if(uses.size()!=2)continue;
             const Use next=uses[0].face==f?uses[1]:uses[0];const auto&nv=a.faces[next.face].v;const size_t vd=nv[(next.edge+2)%3];
             D2 delta=chart[vb]-chart[va];const double l=std::sqrt(delta.x*delta.x+delta.y*delta.y);if(l<1e-12)return false;
-            const double ad=length(a.positions[vd]-a.positions[va]),bd=length(a.positions[vd]-a.positions[vb]);const double x=(ad*ad-bd*bd+l*l)/(2*l),y2=ad*ad-x*x;
-            if(y2< -tolerance*tolerance)return false;
-            const double sign=cross2(delta,chart[vc]-chart[va])>0?-1:1;const double y=std::sqrt(std::max(0.,y2))*sign;
+            // Work in the source edge frame. Subtracting squared lengths loses
+            // the altitude of narrow contact triangles and can corrupt an
+            // otherwise exact development around a shared-vertex cycle.
+            const D3 edge=a.positions[vb]-a.positions[va],diagonal=a.positions[vd]-a.positions[va];const double sourceLength=length(edge);
+            if(sourceLength<1e-12)return false;
+            const double x=dot(diagonal,edge/sourceLength);
+            const double sign=cross2(delta,chart[vc]-chart[va])>0?-1:1;const double y=length(cross(edge/sourceLength,diagonal))*sign;
             const D2 proposed=chart[va]+D2{delta.x/l,delta.y/l}*x+D2{-delta.y/l,delta.x/l}*y;
             // Test the face's own proposed development before assigning its
             // third vertex. An irrelevant neighbor cannot pollute a later
             // image-interior cycle through a shared vertex.
             if(!intersectsImage({chart[va],chart[vb],proposed}))continue;
-            if(std::abs(l-length(a.positions[vb]-a.positions[va]))>tolerance)return false;
+            if(std::abs(l-sourceLength)>tolerance)return false;
             if(assigned[vd]){D2 error=chart[vd]-proposed;if(std::sqrt(error.x*error.x+error.y*error.y)>tolerance)return false;}
             else{chart[vd]=proposed;assigned[vd]=true;}
             if(!selected[next.face]){selected[next.face]=true;queue.push(next.face);}

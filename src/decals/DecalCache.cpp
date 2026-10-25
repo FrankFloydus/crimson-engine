@@ -1,4 +1,6 @@
 #include "DecalCache.h"
+#include "DecalInternal.h"
+#include "DecalOrientation.h"
 #include "resources/CacheIO.h"
 #include <cmath>
 #include <cstring>
@@ -31,6 +33,44 @@ Vec3 sourceNormal(const SourceReference&source,Vec3 bary){
     Vec3 result{};for(size_t i=0;i<3;++i)result=result+math::normalized(math::transformDirection(source.normal,math::normalized(t.normals[i],geometric)))*bary[i];
     return math::normalized(result,math::normalized(math::transformDirection(source.normal,geometric)));
 }
+double roundingRadius(float value){
+    const float above=std::nextafter(value,std::numeric_limits<float>::infinity()),below=std::nextafter(value,-std::numeric_limits<float>::infinity());
+    const double upper=std::isfinite(above)?double(above)-value:0,lower=std::isfinite(below)?double(value)-below:0;
+    return .5*std::max(upper,lower);
+}
+struct QuantizedArea {double value,error;};
+QuantizedArea quantizedArea(float ax,float ay,float bx,float by,float cx,float cy){
+    const double ex=double(bx)-ax,ey=double(by)-ay,fx=double(cx)-ax,fy=double(cy)-ay;
+    const double exError=roundingRadius(bx)+roundingRadius(ax),eyError=roundingRadius(by)+roundingRadius(ay);
+    const double fxError=roundingRadius(cx)+roundingRadius(ax),fyError=roundingRadius(cy)+roundingRadius(ay);
+    const double error=std::abs(ex)*fyError+std::abs(fy)*exError+exError*fyError+
+        std::abs(ey)*fxError+std::abs(fx)*eyError+eyError*fxError+
+        32*std::numeric_limits<double>::epsilon()*(std::abs(ex*fy)+std::abs(ey*fx));
+    return {detail::robustOrient2D(ax,ay,bx,by,cx,cy),error};
+}
+bool validTriangle(const DecalPatchVertex&a,const DecalPatchVertex&b,const DecalPatchVertex&c,
+    const SourceReference&source,double frameParity,double frameArea,double maximumStretch){
+    const auto uv=quantizedArea(a.uv[0],a.uv[1],b.uv[0],b.uv[1],c.uv[0],c.uv[1]);
+    const auto bary=quantizedArea(a.barycentrics[1],a.barycentrics[2],b.barycentrics[1],b.barycentrics[2],c.barycentrics[1],c.barycentrics[2]);
+    const auto&m=source.receiver->localToWorld;const auto&t=*source.triangle;
+    const double parity=detail::dot(detail::column(m,0),detail::cross(detail::column(m,1),detail::column(m,2)));
+    // Validate resolved signs in source coordinates. Reader-side float world
+    // reprojection can collapse a valid subpixel triangle independently of UV.
+    // Half-ULP intervals distinguish a genuine fold from quantization to zero.
+    if(std::abs(uv.value)>uv.error&&std::abs(bary.value)>bary.error){
+        bool positive=(uv.value>0)==(bary.value>0);if(parity<0)positive=!positive;if(frameParity<0)positive=!positive;
+        if(positive)return false;
+    }
+    const auto p=detail::point(m,detail::d3(t.positions[0])),q=detail::point(m,detail::d3(t.positions[1])),r=detail::point(m,detail::d3(t.positions[2]));
+    const double sourceArea=detail::length(detail::cross(q-p,r-p));if(!std::isfinite(sourceArea)||sourceArea<=0)return false;
+    const double worldLow=std::max(0.,std::abs(bary.value)-bary.error)*sourceArea,worldHigh=(std::abs(bary.value)+bary.error)*sourceArea;
+    const double chartLow=std::max(0.,std::abs(uv.value)-uv.error)*frameArea,chartHigh=(std::abs(uv.value)+uv.error)*frameArea;
+    const double stretchSquared=maximumStretch*maximumStretch,roundoff=32*std::numeric_limits<double>::epsilon()*std::max(worldHigh,chartHigh);
+    // A collapsed UV must still correspond to a source triangle small enough
+    // to collapse within that precision. Large erased/folded cache triangles
+    // remain invalid even when their quantized orientation is indeterminate.
+    return worldLow<=chartHigh*stretchSquared+roundoff&&chartLow<=worldHigh*stretchSquared+roundoff;
+}
 }
 std::filesystem::path decalCachePath(const std::filesystem::path&root,uint64_t recipe){return root/".crimson"/"cache"/"decals"/(io::hex(recipe)+".bin");}
 std::optional<DecalPatch> readDecalCache(const std::filesystem::path&path,uint64_t recipe,const DecalSurfaceSnapshot&snapshot,const DecalBuildRequest&request,std::stop_token stop){
@@ -46,8 +86,8 @@ std::optional<DecalPatch> readDecalCache(const std::filesystem::path&path,uint64
         result.statistics.maximumStretch=reader.take<double>();if(!std::isfinite(result.statistics.maximumStretch)||result.statistics.maximumStretch<1-1e-6||result.statistics.maximumStretch>request.limits.maximumStretch+1e-6)return {};
         const auto chunks=reader.take<uint32_t>();if(!chunks||chunks>request.limits.maximumTriangles||chunks>snapshot.receivers.size())return {};
         const auto sources=indexSources(snapshot,request.limits,stop);const auto seed=sources.find({request.seed.receiver,request.seed.triangle});if(seed==sources.end()||!math::isAffine(request.frame))return {};
-        const auto&seedTriangle=*seed->second.triangle;const auto seedNormal=math::normalized(math::transformDirection(seed->second.normal,math::cross(seedTriangle.positions[1]-seedTriangle.positions[0],seedTriangle.positions[2]-seedTriangle.positions[0])));
-        const double frameParity=math::dot(math::cross(math::transformDirection(request.frame,{1,0,0}),math::transformDirection(request.frame,{0,1,0})),seedNormal);if(!std::isfinite(frameParity)||std::abs(frameParity)<1e-12)return {};
+        const auto&seedTriangle=*seed->second.triangle;const auto seedNormal=detail::normal(seed->second.receiver->localToWorld,detail::cross(detail::d3(seedTriangle.positions[1])-detail::d3(seedTriangle.positions[0]),detail::d3(seedTriangle.positions[2])-detail::d3(seedTriangle.positions[0])));
+        const double frameParity=detail::dot(detail::cross(detail::column(request.frame,0),detail::column(request.frame,1)),seedNormal),frameArea=std::abs(frameParity);if(!std::isfinite(frameParity)||frameArea<1e-12)return {};
         std::set<ReceiverId>seen;uint64_t totalVertices=0,totalIndices=0;
         for(uint32_t chunkIndex=0;chunkIndex<chunks;++chunkIndex){cancelled(stop);DecalPatchChunk chunk;chunk.receiver={reader.take<uint64_t>(),reader.take<uint32_t>(),reader.take<uint32_t>()};if(!seen.insert(chunk.receiver).second)return {};
             const auto vertices=reader.take<uint32_t>(),indices=reader.take<uint32_t>();totalVertices+=vertices;totalIndices+=indices;
@@ -64,10 +104,8 @@ std::optional<DecalPatch> readDecalCache(const std::filesystem::path&path,uint64
                 chunk.generation=source->second.receiver->generation;chunk.vertices.push_back(vertex);
             }
             for(uint32_t i=0;i<indices;++i){const auto index=reader.take<uint32_t>();if(index>=vertices)return {};chunk.indices.push_back(index);}
-            for(size_t i=0;i<indices;i+=3){const auto&a=chunk.vertices[chunk.indices[i]],&b=chunk.vertices[chunk.indices[i+1]],&c=chunk.vertices[chunk.indices[i+2]];if(a.sourceTriangle!=b.sourceTriangle||a.sourceTriangle!=c.sourceTriangle)return {};const auto x=b.uv[0]-a.uv[0],y=b.uv[1]-a.uv[1],xx=c.uv[0]-a.uv[0],yy=c.uv[1]-a.uv[1];const double uvArea=double(x)*yy-double(y)*xx;if(std::abs(uvArea)<1e-14)return {};
-                const auto&source=sources.at({chunk.receiver,a.sourceTriangle});const auto&t=*source.triangle;const auto normal=math::transformDirection(source.normal,math::cross(t.positions[1]-t.positions[0],t.positions[2]-t.positions[0]));
-                // Raster V opposes authored local +Y, including mirrored frames.
-                if(math::dot(math::cross(b.position-a.position,c.position-a.position),normal)*uvArea*frameParity>=0)return {};
+            for(size_t i=0;i<indices;i+=3){const auto&a=chunk.vertices[chunk.indices[i]],&b=chunk.vertices[chunk.indices[i+1]],&c=chunk.vertices[chunk.indices[i+2]];if(a.sourceTriangle!=b.sourceTriangle||a.sourceTriangle!=c.sourceTriangle)return {};
+                if(!validTriangle(a,b,c,sources.at({chunk.receiver,a.sourceTriangle}),frameParity,frameArea,request.limits.maximumStretch))return {};
             }
             result.chunks.push_back(std::move(chunk));
         }

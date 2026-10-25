@@ -1,6 +1,7 @@
 #include "decals/DecalModelSurface.h"
 #include "decals/DecalResolve.h"
 #include "decals/DecalPaintSurface.h"
+#include "decal_probe_snapshot.h"
 #include <crimson/renderer/forward/MeshPaint.h>
 #include <crimson/renderer/forward/ModelData.h>
 #include <nlohmann/json.hpp>
@@ -85,7 +86,22 @@ struct Gltf {
 };
 Json readJson(const fs::path& file) {std::ifstream stream(file);require(bool(stream),"Cannot read scene probe JSON.");Json value;stream>>value;return value;}
 Mat4 jsonMatrix(const Json& value) {Mat4 result;require(value.size()==16,"Invalid scene probe affine matrix.");for(size_t i=0;i<16;++i)result[i]=value.at(i).get<float>();return result;}
-void sceneProbe(const fs::path& sceneFile,const std::string& name) {
+struct ProbeOptions {fs::path exportFile;bool exportOnly{},filteredOnly{},expectFrontSide{},expectFullImage{};std::optional<uint64_t> onlyEntity;};
+ProbeOptions probeOptions(int argc,char** argv,int first) {
+    ProbeOptions result;
+    for(int i=first;i<argc;++i) {
+        const std::string argument=argv[i];
+        if(argument=="--export"){require(i+1<argc,"--export requires a file.");result.exportFile=argv[++i];}
+        else if(argument=="--export-only")result.exportOnly=true;
+        else if(argument=="--filtered-only")result.filteredOnly=true;
+        else if(argument=="--expect-front-side")result.expectFrontSide=true;
+        else if(argument=="--expect-full-image")result.expectFullImage=true;
+        else if(argument=="--entity"){require(i+1<argc,"--entity requires a hexadecimal entity ID.");result.onlyEntity=std::stoull(argv[++i],nullptr,16);}
+        else throw std::runtime_error("Unknown scene/snapshot probe argument: "+argument);
+    }
+    require(!result.exportOnly||!result.exportFile.empty(),"--export-only requires --export.");return result;
+}
+void sceneProbe(const fs::path& sceneFile,const std::string& name,const ProbeOptions& options) {
     const auto root=sceneFile.parent_path().parent_path();const auto scene=readJson(sceneFile),locations=readJson(root/".crimson/asset-locations.json").at("assets");
     std::map<std::string,Json> entities;for(const auto& entity:scene.at("entities"))entities.emplace(entity.at("id").get<std::string>(),entity);
     const auto world=[&](auto&& self,const Json& entity)->Mat4 {const auto local=jsonMatrix(entity.at("local"));const auto parent=entities.find(entity.value("parent",std::string{}));return parent==entities.end()?local:self(self,parent->second)*local;};
@@ -111,12 +127,28 @@ void sceneProbe(const fs::path& sceneFile,const std::string& name) {
     std::cout<<"scene="<<sceneFile.string()<<" decal="<<name<<" radius="<<radius<<" seed="<<seedSource->name<<" center="<<origin[0]<<','<<origin[1]<<','<<origin[2]<<'\n';
     for(const auto& source:sources)for(const auto& draw:source.surface.draws){const auto indices=querySurfaceTriangles(draw,source.world,{origin-extent,origin+extent,true});if(indices.empty())continue;std::cout<<"candidate="<<source.name<<" entity="<<std::hex<<source.entity<<std::dec<<" draw="<<draw.surface.id.draw<<" triangles="<<indices.size()<<'\n';auto receiver=draw.surface;receiver.id.entity=source.entity;receiver.localToWorld=source.world*receiver.localToWorld;receiver.triangles.clear();for(const auto index:indices)receiver.triangles.push_back(draw.surface.triangles[index]);count+=indices.size();snapshot.receivers.push_back(std::move(receiver));}
     request.limits.maximumTriangles=static_cast<uint32_t>(std::clamp<size_t>(count*2,16384,65536));std::cout<<"broadphase="<<count<<" oldHostRejected="<<(count>request.limits.maximumInputTriangles)<<'\n'<<std::flush;
-    const auto started=std::chrono::steady_clock::now();const auto patch=buildDecalPatch(snapshot,request);std::cout<<"unfilteredStatus="<<decalPatchStatusName(patch.status)<<" input="<<patch.statistics.inputTriangles<<" analysis="<<patch.statistics.analysisTriangles<<" output="<<patch.statistics.outputTriangles<<" ms="<<std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count()<<" message="<<patch.message<<'\n';
+    std::optional<DecalPatch> patch;
+    if(!options.filteredOnly&&!options.exportOnly){const auto started=std::chrono::steady_clock::now();patch=buildDecalPatch(snapshot,request);std::cout<<"unfilteredStatus="<<decalPatchStatusName(patch->status)<<" input="<<patch->statistics.inputTriangles<<" analysis="<<patch->statistics.analysisTriangles<<" output="<<patch->statistics.outputTriangles<<" ms="<<std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count()<<" message="<<patch->message<<'\n'<<std::flush;}
     const auto query=decalSourceQuery(seedSource->surface,seedSource->world,request);DecalSurfaceSnapshot filtered;size_t selected{};
     for(const auto& source:sources)for(const auto& draw:source.surface.draws){const auto indices=querySurfaceTriangles(draw,source.world,query);if(indices.empty())continue;auto receiver=draw.surface;receiver.id.entity=source.entity;receiver.localToWorld=source.world*receiver.localToWorld;receiver.triangles.clear();for(const auto index:indices)receiver.triangles.push_back(draw.surface.triangles[index]);selected+=indices.size();filtered.receivers.push_back(std::move(receiver));}
-    require(selected<=request.limits.maximumInputTriangles,"Exact scene source selection still exceeds the input budget.");request.limits.maximumTriangles=static_cast<uint32_t>(std::clamp<size_t>(selected*2,16384,65536));const auto filteredStart=std::chrono::steady_clock::now();const auto output=buildDecalPatch(filtered,request);
+    require(selected<=request.limits.maximumInputTriangles,"Exact scene source selection still exceeds the input budget.");request.limits.maximumTriangles=static_cast<uint32_t>(std::clamp<size_t>(selected*2,16384,65536));
+    if(options.onlyEntity)std::erase_if(filtered.receivers,[&](const auto& receiver){return receiver.id.entity!=*options.onlyEntity;});
+    std::cout<<"exactSelected="<<selected<<" seedEntity="<<std::hex<<request.seed.receiver.entity<<std::dec<<" seedTriangle="<<request.seed.triangle<<'\n'<<std::flush;
+    if(!options.exportFile.empty())decal_probe::writeSnapshot(options.exportFile,filtered,request,{{"scene",sceneFile.generic_string()},{"decal",name},{"seedSource",seedSource->name},{"savedDecal",*decal}});
+    if(options.exportOnly)return;
+    const auto filteredStart=std::chrono::steady_clock::now();const auto output=buildDecalPatch(filtered,request);
     std::cout<<"selected="<<selected<<" status="<<decalPatchStatusName(output.status)<<" input="<<output.statistics.inputTriangles<<" analysis="<<output.statistics.analysisTriangles<<" output="<<output.statistics.outputTriangles<<" ms="<<std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-filteredStart).count()<<" message="<<output.message<<'\n';
-    require(output.status==patch.status&&output.statistics.inputTriangles==patch.statistics.inputTriangles&&output.statistics.outputTriangles==patch.statistics.outputTriangles,"Exact source selection changed scene chart behavior.");
+    decal_probe::reportCoverage(filtered,request,output,options.expectFrontSide,options.expectFullImage);
+    if(patch&&!options.onlyEntity)require(output.status==patch->status&&output.statistics.inputTriangles==patch->statistics.inputTriangles&&output.statistics.outputTriangles==patch->statistics.outputTriangles,"Exact source selection changed scene chart behavior.");
+}
+void snapshotProbe(const fs::path& file,const ProbeOptions& options) {
+    auto [snapshot,request]=decal_probe::snapshotInput(readJson(file));
+    if(options.onlyEntity)std::erase_if(snapshot.receivers,[&](const auto& receiver){return receiver.id.entity!=*options.onlyEntity;});
+    if(!options.exportFile.empty())decal_probe::writeSnapshot(options.exportFile,snapshot,request,{{"snapshot",file.generic_string()}});
+    if(options.exportOnly)return;
+    const auto started=std::chrono::steady_clock::now();const auto output=buildDecalPatch(snapshot,request);
+    std::cout<<"snapshot="<<file.string()<<" status="<<decalPatchStatusName(output.status)<<" input="<<output.statistics.inputTriangles<<" analysis="<<output.statistics.analysisTriangles<<" output="<<output.statistics.outputTriangles<<" ms="<<std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count()<<" message="<<output.message<<'\n'<<std::flush;
+    decal_probe::reportCoverage(snapshot,request,output,options.expectFrontSide,options.expectFullImage);
 }
 Mat4 roomWorld() {
     Mat4 result;const std::array<float,16> values{{5.960464477539063e-08f,0,-.9999999403953552f,0,
@@ -154,7 +186,8 @@ void run(const ModelAsset& original,unsigned level,const std::vector<float>& siz
 }
 int main(int argc,char** argv) {
     try {
-        if(argc>=3&&std::string(argv[1])=="--scene"){sceneProbe(argv[2],argc>3?argv[3]:"pentacle");return 0;}
+        if(argc>=3&&std::string(argv[1])=="--scene"){const bool named=argc>3&&std::string(argv[3]).find("--")!=0;sceneProbe(argv[2],named?argv[3]:"pentacle",probeOptions(argc,argv,named?4:3));return 0;}
+        if(argc>=3&&std::string(argv[1])=="--snapshot"){snapshotProbe(argv[2],probeOptions(argc,argv,3));return 0;}
         require(argc>=2,"Usage: decal_room_probe source.gltf [level=5] [square-size-metres ...] [--proxy] [--adaptive-budget]");
         const unsigned level=argc>2?static_cast<unsigned>(std::stoul(argv[2])):5;
         require(level<=MaximumMeshPaintLevel,"Invalid subdivision level.");

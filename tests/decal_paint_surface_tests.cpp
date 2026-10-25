@@ -1,9 +1,14 @@
 #include "decals/DecalPaintSurface.h"
 #include "decals/DecalModelSurface.h"
+#include "decals/DecalCache.h"
+#include "decal_saved_contact_fixture.h"
+#include "decal_saved_contact_models.h"
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+#include <unordered_map>
 
 using namespace crimson;
 using namespace crimson::decals;
@@ -64,7 +69,99 @@ void invalidAndCancellation(){
     fails([&]{simplifyDecalPaintPrimitive(incompatible,*geometry);},"Incompatible source provenance was silently accepted.");
     std::stop_source stop;stop.request_stop();fails([&]{simplifyDecalPaintPrimitive(source,*geometry,stop.get_token());},"Cancelled decal surface preparation continued.");
 }
+void savedMainContactWorkflows(){
+    namespace saved=crimson::decals::test::saved_contact;
+    struct Source {uint64_t entity;Mat4 world;ModelSurface surface;};
+    const auto prepare=[](ModelAsset original) {
+        for(auto& primitive:original.primitives) {
+            const auto geometry=buildMeshPaintGeometry(primitive,5);
+            const auto proxy=simplifyDecalPaintPrimitive(primitive,*geometry);
+            primitive=proxy?*proxy:meshPaintRenderPrimitive(primitive,*geometry);
+        }
+        return buildModelSurface(original,1,SourceNormals::UseMeshNormals);
+    };
+    const auto minimal=saved::ceilingSurface();
+    const std::array<Source,2> sources{{
+        {0x6f1f1f91d24b1ed1ull,minimal.receivers[0].localToWorld,prepare(saved::roomModel())},
+        {0x70793cb67cef2449ull,minimal.receivers[1].localToWorld,prepare(saved::pillarModel())}
+    }};
+    struct TemporaryCache {
+        std::filesystem::path file=std::filesystem::temp_directory_path()/("crimson-saved-contact-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+".bin");
+        ~TemporaryCache(){std::error_code ignored;std::filesystem::remove(file,ignored);}
+    } cache;
+    bool cacheFailure=false;
+    for(const unsigned scenario:{0u,1u,2u}) {
+        const bool ceiling=scenario==0,includeRoom=scenario!=1;
+        const char* label=ceiling?"Saved ceiling":includeRoom?"Saved pillar with room barrier":"Saved pillar without room barrier";
+        auto request=ceiling?saved::ceilingRequest():saved::pillarRequest();
+        const auto& seed=ceiling?sources[0]:sources[1];
+        const auto query=decalSourceQuery(seed.surface,seed.world,request);
+        DecalSurfaceSnapshot snapshot;size_t selected{};
+        for(const auto& source:sources)if(includeRoom||source.entity==seed.entity)for(const auto& draw:source.surface.draws) {
+            const auto indices=querySurfaceTriangles(draw,source.world,query);if(indices.empty())continue;
+            auto receiver=draw.surface;receiver.id.entity=source.entity;receiver.localToWorld=source.world*receiver.localToWorld;receiver.triangles.clear();
+            for(const auto index:indices)receiver.triangles.push_back(draw.surface.triangles[index]);selected+=indices.size();snapshot.receivers.push_back(std::move(receiver));
+        }
+        require(selected==(ceiling?11532u:includeRoom?8025u:6050u),"Saved fixture stopped reproducing the actual level5 source selection.");
+        request.limits.maximumTriangles=static_cast<uint32_t>(std::clamp<size_t>(selected*2,16384,65536));
+        const auto patch=buildDecalPatch(snapshot,request);
+        if(!patch.usable())throw std::runtime_error(std::string(label)+": "+patch.message);
+        require(patch.statistics.inputTriangles==selected&&patch.statistics.analysisTriangles<100000&&patch.statistics.outputTriangles<=request.limits.maximumTriangles,
+            "Saved source preparation exceeded its bounded work/publication contract.");
+        double area{},frontArea{},sideArea{},maximumError{};const auto front=math::normalized(math::transformDirection(request.frame,{0,0,1}));
+        for(const auto& chunk:patch.chunks) {
+            const auto receiver=std::find_if(snapshot.receivers.begin(),snapshot.receivers.end(),[&](const auto& value){return value.id==chunk.receiver;});
+            require(receiver!=snapshot.receivers.end()&&receiver->generation==chunk.generation,"Saved source receiver identity/generation changed.");
+            std::unordered_map<uint32_t,const SurfaceTriangle*> triangles;for(const auto& triangle:receiver->triangles)triangles.emplace(triangle.triangle,&triangle);
+            for(const auto& vertex:chunk.vertices) {
+                const auto source=triangles.find(vertex.sourceTriangle);require(source!=triangles.end(),"Saved source triangle identity changed.");
+                Vec3 local;for(size_t i=0;i<3;++i)local=local+source->second->positions[i]*vertex.barycentrics[i];
+                maximumError=std::max(maximumError,math::length(math::transformPoint(receiver->localToWorld,local)-vertex.position));
+                require(vertex.uv[0]>=0&&vertex.uv[0]<=1&&vertex.uv[1]>=0&&vertex.uv[1]<=1,"Saved source emitted UVs beyond the image.");
+            }
+            for(size_t i=0;i<chunk.indices.size();i+=3) {
+                const auto& a=chunk.vertices.at(chunk.indices[i]);const auto& b=chunk.vertices.at(chunk.indices[i+1]);const auto& c=chunk.vertices.at(chunk.indices[i+2]);
+                area+=.5*std::abs((double(b.uv[0])-a.uv[0])*(double(c.uv[1])-a.uv[1])-(double(b.uv[1])-a.uv[1])*(double(c.uv[0])-a.uv[0]));
+                if(chunk.receiver==request.seed.receiver){const auto cross=math::cross(b.position-a.position,c.position-a.position);const auto normal=math::normalized(cross,{0,0,0},0);const double worldArea=.5*math::length(cross),dot=math::dot(normal,front);if(dot>.9)frontArea+=worldArea;if(std::abs(dot)<.1){sideArea+=worldArea;if(!ceiling&&includeRoom&&worldArea>1e-14)require(normal[2]<-.99f,"Saved pillar crossed its opposite-normal coplanar room-wall barrier.");}}
+            }
+        }
+        std::cout<<label<<" input="<<selected<<" analysis="<<patch.statistics.analysisTriangles<<" output="<<patch.statistics.outputTriangles
+            <<" UVarea="<<area<<" frontArea="<<frontArea<<" sideArea="<<sideArea<<" provenanceError="<<maximumError<<'\n';
+        // At Z=25.75 the full room has an opposite-normal wall over the pillar
+        // side. That multiplicity must stop traversal. The visible side starts
+        // at the other front corner; derive its retained width from the saved
+        // placement, rather than demanding a bridge across the blocked side.
+        double expectedArea=1,expectedSide=.5;
+        if(!ceiling&&includeRoom) {
+            const auto visibleCorner=math::transformPoint(seed.world,{.5f,0,-.5f});
+            const auto origin=math::transformPoint(request.frame,{}),axis=math::normalized(math::transformDirection(request.frame,{1,0,0}));
+            expectedSide=.5*math::length(math::transformDirection(request.frame,{1,0,0}))-math::dot(origin-visibleCorner,axis);
+            expectedArea=.5+expectedSide;
+            require(patch.status==DecalPatchStatus::Incomplete,"Opposite-normal coplanar overlap stopped reporting its genuine incomplete footprint.");
+            for(const auto& chunk:patch.chunks)require(chunk.receiver==request.seed.receiver,"Saved pillar unexpectedly crossed its room-wall ambiguity barrier.");
+        }
+        require(std::abs(area-expectedArea)<.005,"Saved decal lost part of its available image coverage or bridged an ambiguity barrier.");
+        require(maximumError<2e-5,"Saved decal moved away from its original painted surface.");
+        if(!ceiling)require(std::abs(frontArea-.5)<.02&&std::abs(sideArea-expectedSide)<.02,"Saved pillar decal failed to cover its available front and side surfaces.");
+        const uint64_t recipe=0xc3111a9u+scenario;
+        require(writeDecalCache(cache.file,recipe,patch,request.limits),"Repaired saved decal could not publish its disposable cache.");
+        const auto restored=readDecalCache(cache.file,recipe,snapshot,request);
+        if(!restored) {
+            const auto diagnostic=std::filesystem::path(__FILE__).parent_path().parent_path()/"build"/"decal-cache-diagnostics"/("saved-contact-"+std::to_string(scenario)+".bin");
+            std::filesystem::create_directories(diagnostic.parent_path());std::filesystem::copy_file(cache.file,diagnostic,std::filesystem::copy_options::overwrite_existing);
+            std::cerr<<label<<" cache read rejected diagnostic="<<diagnostic.string()<<'\n';cacheFailure=true;continue;
+        }
+        require(restored->chunks.size()==patch.chunks.size()&&restored->statistics.outputTriangles==patch.statistics.outputTriangles,"Repaired saved decal cache changed publication size.");
+        for(size_t c=0;c<patch.chunks.size();++c) {
+            const auto& a=patch.chunks[c];const auto& b=restored->chunks[c];
+            require(a.receiver==b.receiver&&a.generation==b.generation&&a.indices==b.indices&&a.vertices.size()==b.vertices.size(),"Saved decal cache changed receiver topology.");
+            for(size_t v=0;v<a.vertices.size();++v)require(a.vertices[v].uv==b.vertices[v].uv&&a.vertices[v].sourceTriangle==b.vertices[v].sourceTriangle&&a.vertices[v].barycentrics==b.vertices[v].barycentrics,
+                "Saved decal cache changed image coordinates or original-source correspondence.");
+        }
+    }
+    require(!cacheFailure,"Repaired saved decal failed its real cache round trip.");
 }
-int main(){try{exactPlane();mixedGeometryAndNormals();shadingAliasesAndTriangle();invalidAndCancellation();
+}
+int main(){try{exactPlane();mixedGeometryAndNormals();shadingAliasesAndTriangle();invalidAndCancellation();savedMainContactWorkflows();
     std::cout<<"decal_paint_surface: exact planar refinement removal, mixed warped/normal fields, aliases, affine seed recovery and immutability passed\n";return 0;
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
