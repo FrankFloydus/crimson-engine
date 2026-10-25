@@ -21,13 +21,7 @@ struct PreviewDependencies {
     std::vector<std::filesystem::path> files;
     std::vector<uint64_t> sourceFingerprints;
     std::shared_ptr<const CachedAssetPreview> cachedPreview;
-    std::optional<uint64_t> sourceFingerprint(const std::filesystem::path& source) const {
-        if (files.size()!=sourceFingerprints.size()) return std::nullopt;
-        const auto normalized=source.lexically_normal();
-        for (size_t i=0;i<files.size();++i)
-            if (files[i].lexically_normal()==normalized) return sourceFingerprints[i];
-        return std::nullopt;
-    }
+    std::optional<uint64_t> sourceFingerprint(const std::filesystem::path& source) const;
     bool sourceMatches(const std::filesystem::path& source,uint64_t gpuFingerprint) const {
         const auto expected=sourceFingerprint(source);
         return gpuFingerprint && expected && *expected==gpuFingerprint;
@@ -108,6 +102,8 @@ public:
     void invalidate(const std::string& id);
     void invalidateFile(const std::filesystem::path& file);
     const std::string& status() const;
+    // Read-only preparation stage/error for diagnostics; no UI or retry changes.
+    std::string diagnostic(const std::string& id) const;
     AssetPreviewStats stats() const;
 private:
     struct Impl;

@@ -160,20 +160,25 @@ string(SHA256 CC_ENGINE_PROFILE_SOURCE_SHA256 "${CC_ENGINE_PROFILE_DIGEST_INPUT}
 # Capture the compiler's renderer identities at configure time; reading a
 # subsequently updated checkout at runtime could misidentify an older binary.
 set(CC_PROFILE_RENDERER_MANIFEST "${CC_RENDERER_SOURCE_DIR}/renderer-manifest.json")
-set(CC_PROFILE_MATERIAL_GENERATOR "${CC_RENDERER_SOURCE_DIR}/src/forward/MaterialGraphShader.cpp")
+set(CC_PROFILE_MATERIAL_REVISIONS "${CC_RENDERER_SOURCE_DIR}/src/forward/MaterialGraphSourceRevisions.h")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${CC_PROFILE_RENDERER_MANIFEST}" "${CC_PROFILE_MATERIAL_GENERATOR}")
+    "${CC_PROFILE_RENDERER_MANIFEST}" "${CC_PROFILE_MATERIAL_REVISIONS}")
 file(READ "${CC_PROFILE_RENDERER_MANIFEST}" CC_PROFILE_RENDERER_MANIFEST_JSON)
 string(JSON CC_ENGINE_PROFILE_MATERIAL_ABI GET "${CC_PROFILE_RENDERER_MANIFEST_JSON}" shader_abis material)
-file(STRINGS "${CC_PROFILE_MATERIAL_GENERATOR}" CC_PROFILE_MATERIAL_GENERATOR_MARKERS
-    REGEX "crimson-material-graph-generator-v[0-9]+")
-list(LENGTH CC_PROFILE_MATERIAL_GENERATOR_MARKERS CC_PROFILE_MATERIAL_GENERATOR_MARKER_COUNT)
-if(NOT CC_PROFILE_MATERIAL_GENERATOR_MARKER_COUNT EQUAL 1)
-    message(FATAL_ERROR "Profiling identity requires one canonical material graph generator version marker.")
+file(STRINGS "${CC_PROFILE_MATERIAL_REVISIONS}" CC_PROFILE_MATERIAL_REVISION_ENTRIES
+    REGEX "std::uint16_t [a-z_]+\\{[0-9]+\\};")
+if(NOT CC_PROFILE_MATERIAL_REVISION_ENTRIES)
+    message(FATAL_ERROR "Profiling identity requires the canonical per-pass material source revisions.")
 endif()
-string(REGEX MATCH "crimson-material-graph-generator-v([0-9]+)" CC_PROFILE_MATERIAL_GENERATOR_MATCH
-    "${CC_PROFILE_MATERIAL_GENERATOR_MARKERS}")
-set(CC_ENGINE_PROFILE_MATERIAL_GENERATOR "${CMAKE_MATCH_1}")
+# A compact diagnostic family maximum is not a compiler-input stamp. Individual
+# passes/previews/domains keep their own revisions and unaffected warm keys.
+set(CC_ENGINE_PROFILE_MATERIAL_GENERATOR 0)
+foreach(CC_PROFILE_MATERIAL_REVISION_ENTRY IN LISTS CC_PROFILE_MATERIAL_REVISION_ENTRIES)
+    string(REGEX MATCH "\\{([0-9]+)\\}" CC_PROFILE_MATERIAL_REVISION_MATCH "${CC_PROFILE_MATERIAL_REVISION_ENTRY}")
+    if(CMAKE_MATCH_1 GREATER CC_ENGINE_PROFILE_MATERIAL_GENERATOR)
+        set(CC_ENGINE_PROFILE_MATERIAL_GENERATOR "${CMAKE_MATCH_1}")
+    endif()
+endforeach()
 if(NOT CC_ENGINE_PROFILE_MATERIAL_ABI GREATER 0 OR NOT CC_ENGINE_PROFILE_MATERIAL_GENERATOR GREATER 0)
     message(FATAL_ERROR "Profiling identity could not resolve the canonical material ABI and generator versions.")
 endif()
@@ -1022,6 +1027,13 @@ if(BUILD_TESTING)
     target_link_libraries(shader_compiler_tests PRIVATE crimson-material-shaders crimson-resources)
     add_test(NAME shader_compiler_core COMMAND shader_compiler_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
 
+    add_executable(shader_cache_concurrency_tests tests/shader_cache_concurrency_tests.cpp)
+    target_compile_definitions(shader_cache_concurrency_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(shader_cache_concurrency_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(shader_cache_concurrency_tests PRIVATE crimson-material-shaders crimson-resources)
+    add_test(NAME shader_cache_concurrency_core COMMAND shader_cache_concurrency_tests)
+    set_tests_properties(shader_cache_concurrency_core PROPERTIES TIMEOUT 45)
+
     add_executable(gpu_streaming_tests tests/gpu_streaming_tests.cpp src/resources/TextureStreamer.cpp)
     target_include_directories(gpu_streaming_tests PRIVATE src)
     target_compile_definitions(gpu_streaming_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -1156,6 +1168,10 @@ if(BUILD_TESTING)
         crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace assimp::assimp)
     add_test(NAME asset_deletion_runtime_core COMMAND asset_deletion_runtime_tests)
     set_tests_properties(asset_deletion_runtime_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 180)
+    add_test(NAME material_browser_thumbnail_render_core COMMAND asset_deletion_runtime_tests --material-thumbnails)
+    add_test(NAME material_browser_thumbnail_render_dx11_core COMMAND asset_deletion_runtime_tests --material-thumbnails)
+    set_tests_properties(material_browser_thumbnail_render_core material_browser_thumbnail_render_dx11_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 180)
+    set_tests_properties(material_browser_thumbnail_render_dx11_core PROPERTIES ENVIRONMENT "CRIMSON_TEST_RENDERER=dx11")
 
     get_target_property(CC_DECAL_ACCEPTANCE_SOURCES asset_deletion_runtime_tests SOURCES)
     list(REMOVE_ITEM CC_DECAL_ACCEPTANCE_SOURCES tests/asset_deletion_runtime_tests.cpp)

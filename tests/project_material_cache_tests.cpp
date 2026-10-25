@@ -4,6 +4,7 @@
 #include "assets/MaterialAsset.h"
 #include "assets/ContentStorage.h"
 #include "crimson-renderer/MaterialGraphShader.h"
+#include "crimson-renderer/MaterialGraphCompilePolicy.h"
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -67,6 +68,26 @@ void coverageStageIdentityChecks(const crimson::ShaderCompileConfig& config) {
         }
     }
 }
+void firstUseCatalogReady(const crimson::ShaderCompileConfig& config,std::span<const crimson::MaterialAsset> materials) {
+    using namespace crimson;
+    ShaderCacheReadSession cache(config);
+    const auto before=shaderCompilerMetrics().compilerInvocations;
+    for(const auto& material:materials) {
+        const auto shader=generateMaterialGraphShader(material);
+        for(const auto& variant:shader.variants) {
+            check(cache.find(variant.vertexName).has_value(),"First-use boundary omitted a required vertex stage.");
+            auto recipe=materialGraphShaderRecipe(config,shader,variant);
+            auto domain=variant.tessellation?materialGraphDomainShaderRecipe(config,shader,variant):ShaderCompileRecipe{};
+            if(materialGraphInteractivePass(variant.pass)) {
+                check(!cache.find(recipe),"An O3 surface was prepared before the complete cold first-use catalog.");
+                recipe.optimization=ShaderCompileOptimization::Interactive;domain.optimization=ShaderCompileOptimization::Interactive;
+            }
+            check(cache.find(recipe).has_value(),"A later material was still missing its first usable fragment when optimization began.");
+            if(variant.tessellation)check(cache.find(domain).has_value(),"First-use Height fragment and native domain were not published together.");
+        }
+    }
+    check(cache.unchanged()&&shaderCompilerMetrics().compilerInvocations==before,"Reading the first-use catalog queued compilation or mixed source epochs.");
+}
 void heightCacheChecks(const std::filesystem::path& root,const crimson::ShaderCompileConfig& base) {
     using namespace crimson;
     std::filesystem::create_directories(root/"assets/materials");
@@ -84,23 +105,26 @@ void heightCacheChecks(const std::filesystem::path& root,const crimson::ShaderCo
     const std::vector files{root/"assets/materials/height-a.crimson-material",root/material.id};
     const auto authored=fingerprintFiles(files);
     auto config=base;config.cacheDirectory=root/"assets/cache/shaders";
-    std::set<std::string> vertices,generated;
+    std::set<std::string> vertices,generated,interactive;
     std::size_t domains{};
     for(const auto& asset:{material,defaultMaterialAsset(),defaultParticleMaterialAsset()}) {
         const auto shader=generateMaterialGraphShader(asset);
         for(const auto& pass:shader.variants) {
             vertices.insert(pass.vertexName);generated.insert(materialGraphShaderRecipe(config,shader,pass).name);
+            if(materialGraphInteractivePass(pass.pass))interactive.insert(materialGraphShaderRecipe(config,shader,pass).name);
             if(pass.tessellation) {
                 ++domains;const auto recipe=materialGraphDomainShaderRecipe(config,shader,pass);
                 check(recipe.raw&&recipe.stage==ShaderStage::Domain,"Height did not request a native domain recipe.");
                 generated.insert(recipe.name);
+                if(materialGraphInteractivePass(pass.pass))interactive.insert(recipe.name);
             }
         }
     }
     check(domains>0,"Enabled material height did not produce tessellation stages.");
     const auto expected=vertices.size()+generated.size();
-    const auto first=prepareProjectMaterialCache(root,config);
-    if(first.failed||first.prepared!=3||first.topologies!=3||first.stages!=expected||first.metrics.compilerInvocations!=expected)
+    const std::array firstUseMaterials{material,defaultMaterialAsset(),defaultParticleMaterialAsset()};bool firstUseObserved=false;
+    const auto first=prepareProjectMaterialCache(root,config,[&]{firstUseCatalogReady(config,firstUseMaterials);firstUseObserved=true;});
+    if(!firstUseObserved||first.presentationPrepared!=3||first.presentationFailed||first.failed||first.prepared!=3||first.topologies!=3||first.stages!=expected+interactive.size()||first.metrics.compilerInvocations!=expected+interactive.size())
         throw std::runtime_error("Height cache preparation did not publish coherent shared stages: "+serializeProjectMaterialCacheReport(first));
     const auto warm=prepareProjectMaterialCache(root,config);
     check(warm.failed==0&&warm.cacheHits==expected&&warm.metrics.compilerInvocations==0,
@@ -147,20 +171,22 @@ int main(int argc,char** argv) {
         const std::vector files{temporary.root/"assets/materials/a.crimson-material",temporary.root/material.id};
         const auto authored=crimson::fingerprintFiles(files);
         const crimson::ShaderCompileConfig config{argv[1],argv[2],argv[3],temporary.root/"assets/cache/shaders"};
-        std::set<std::string> vertexStages,fragmentStages;
+        std::set<std::string> vertexStages,fragmentStages,interactiveStages;
         for(const auto& asset:{crimson::defaultMaterialAsset(),crimson::defaultParticleMaterialAsset()}) {
             const auto generated=crimson::generateMaterialGraphShader(asset);
             for(const auto& pass:generated.variants) {
                 vertexStages.insert(pass.vertexName);
                 fragmentStages.insert(crimson::materialGraphShaderRecipe(config,generated,pass).name);
+                if(crimson::materialGraphInteractivePass(pass.pass))interactiveStages.insert(crimson::materialGraphShaderRecipe(config,generated,pass).name);
             }
         }
         const auto uniqueStages=vertexStages.size()+fragmentStages.size();
         coverageStageIdentityChecks(config);
-        const auto first=crimson::prepareProjectMaterialCache(temporary.root,config);
-        if(first.failed!=0||first.materials!=4||first.topologies!=2||first.prepared!=2)
+        const std::array firstUseMaterials{crimson::defaultMaterialAsset(),crimson::defaultParticleMaterialAsset()};bool firstUseObserved=false;
+        const auto first=crimson::prepareProjectMaterialCache(temporary.root,config,[&]{firstUseCatalogReady(config,firstUseMaterials);firstUseObserved=true;});
+        if(!firstUseObserved||first.presentationPrepared!=2||first.presentationFailed||first.failed!=0||first.materials!=4||first.topologies!=2||first.prepared!=2)
             throw std::runtime_error("Build preparation did not coalesce equal authored material graphs: "+crimson::serializeProjectMaterialCacheReport(first));
-        check(first.stages==uniqueStages&&first.metrics.compilerInvocations==uniqueStages,"Build preparation requested or compiled a shared stage more than once.");
+        check(first.stages==uniqueStages+interactiveStages.size()&&first.metrics.compilerInvocations==uniqueStages+interactiveStages.size(),"Build preparation requested or compiled a shared stage more than once.");
         const auto second=crimson::prepareProjectMaterialCache(temporary.root,config);
         check(second.failed==0&&second.prepared==2&&second.cacheHits==uniqueStages&&second.metrics.cacheOnlyRequests==uniqueStages&&second.metrics.compilerInvocations==0,
             "Repeated build preparation missed its content cache or reread a shared stage.");

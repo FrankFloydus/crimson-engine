@@ -155,7 +155,7 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
     const double radius=.625*std::max(math::length(x+y),math::length(x-y))+.5*std::min(math::length(x),math::length(y));
     if(!std::isfinite(radius)||radius<=0){pending("Invalid footprint.");return;}
     const float projectionDistance=static_cast<float>(std::max(.01,.5*std::max(math::length(x),math::length(y))+.025));
-    const Vec3 extent{radius,radius,radius},searchExtent{radius+projectionDistance,radius+projectionDistance,radius+projectionDistance};
+    const Vec3 searchExtent{radius+projectionDistance,radius+projectionDistance,radius+projectionDistance};
     const Aabb region{center-searchExtent,center+searchExtent,true};
     std::vector<Candidate>candidates;SpatialEntry spatial;spatial.inputs=inputs.value;Hash bindings;Hash signature;
     signature.add(decals::DecalChartCacheVersion);signature.add(d.id);signature.add(d.world);
@@ -201,7 +201,6 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
     const auto effectiveFrame=normalMatrix?decals::conformDecalFrame(d.world,math::transformPoint(seedCandidate->world,seed->localPoint),math::transformDirection(*normalMatrix,seed->localNormal)):std::nullopt;
     if(!effectiveFrame){pending("Invalid footprint.");return;}
     spatial.frame=*effectiveFrame;
-    const auto surfaceCenter=math::transformPoint(*effectiveFrame,{});const Aabb patchRegion{surfaceCenter-extent,surfaceCenter+extent,true};
     signature.add(*effectiveFrame);signature.add(seed->seed.receiver.entity);signature.add(seed->seed.receiver.draw);signature.add(seed->seed.receiver.primitive);signature.add(seed->seed.triangle);signature.add(seed->seed.barycentrics);
     const auto key=signature.value;
     spatial.signature=key;spatial.bindings=bindings.value;
@@ -209,10 +208,11 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
         for(const auto&m:extracted.models)if(std::any_of(candidates.begin(),candidates.end(),[&](const auto&c){return c.entity==m.id;}))options.assetDependencies.push_back(m.assetId);
         decals::DecalBuildRequest request;request.seed=seed->seed;request.frame=*effectiveFrame;
         const auto cacheFile=decals::decalCachePath(assets_.projectRoot(),key);
-        entry.resource=resources_.requestDerived<decals::DecalPatch>("decal-patch:"+std::to_string(key),[candidates=std::move(candidates),region=patchRegion,request,key,cacheFile](std::stop_token stop) mutable{
+        entry.resource=resources_.requestDerived<decals::DecalPatch>("decal-patch:"+std::to_string(key),[seedSource=seedCandidate->source,seedWorld=seedCandidate->world,candidates=std::move(candidates),request,key,cacheFile](std::stop_token stop) mutable{
+            const auto sourceQuery=decals::decalSourceQuery(*seedSource,seedWorld,request);
             decals::DecalSurfaceSnapshot snapshot;size_t triangles=0;
             for(const auto&candidate:candidates)for(const auto&draw:candidate.source->draws){if(stop.stop_requested())throw std::runtime_error("Decal preparation cancelled.");if(draw.material>=candidate.slots.size()||!candidate.slots[draw.material])continue;
-                const auto indices=decals::querySurfaceTriangles(draw,candidate.world,region);if(indices.empty())continue;
+                const auto indices=decals::querySurfaceTriangles(draw,candidate.world,sourceQuery,stop);if(indices.empty())continue;
                 if((triangles+=indices.size())>request.limits.maximumInputTriangles)throw std::runtime_error("Decal receiver neighborhood exceeds its triangle budget.");
                 decals::SurfaceReceiver receiver;receiver.id=draw.surface.id;receiver.id.entity=candidate.entity;receiver.generation=candidate.revision;receiver.localToWorld=candidate.world*draw.surface.localToWorld;receiver.triangles.reserve(indices.size());for(uint32_t i:indices)receiver.triangles.push_back(draw.surface.triangles[i]);snapshot.receivers.push_back(std::move(receiver));
             }

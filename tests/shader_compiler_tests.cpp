@@ -197,6 +197,91 @@ float4 main(Constants constants,float3 barycentric : SV_DomainLocation,const Out
         require(file.path().extension()!=".tmp"&&file.path().extension()!=".hlsl"&&file.path().extension()!=".d",
             "Native domain compilation left staging files behind.");
 }
+void decalCacheIsolationChecks(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include) {
+    Temp temp;
+    const auto directory=temp.root/"disposable material shader family";
+    std::filesystem::copy(source,directory,std::filesystem::copy_options::recursive);
+    const ShaderCompileConfig config{compiler,directory,include,temp.root/"material pass cache"};
+    MaterialAsset material;canonicalizeMaterialAsset(material);
+    auto& graph=material.graph;const auto output=materialOutputNode(graph).id;
+    materialOutputNode(graph).output.blend=MaterialBlend::Mask;
+    materialOutputNode(graph).output.tessellation.enabled=true;
+    const auto image=addMaterialNode(graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(graph,image)->texture.image.id=GrayTextureId;
+    connectMaterialNodes(graph,image,MaterialPin::RGB,output,MaterialPin::BaseColor);
+    connectMaterialNodes(graph,image,MaterialPin::A,output,MaterialPin::OpacityMask);
+    const auto generated=generateMaterialGraphShader(material);
+    std::vector<ShaderCompileRecipe> unrelated;
+    for(const auto pass:{MaterialGraphPass::Model,MaterialGraphPass::Picking,MaterialGraphPass::PointShadow,MaterialGraphPass::DirectionalShadow}) {
+        const auto variant=std::find_if(generated.variants.begin(),generated.variants.end(),[&](const auto& value){return value.pass==pass;});
+        require(variant!=generated.variants.end(),"Material cache isolation lost a Lit color/coverage fixture.");
+        const auto vertex=compileShader(config,variant->vertexName);
+        const auto recipe=materialGraphShaderRecipe(config,generated,*variant);
+        const auto fragment=compileShader(config,recipe);std::string diagnostic;
+        if(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,variant->manifest,diagnostic))
+            throw std::runtime_error("Material cache-isolation fixture: "+diagnostic);
+        unrelated.push_back(recipe);
+        if(pass==MaterialGraphPass::Model){
+            require(variant->tessellation&&!variant->domainSource.empty(),"Material cache isolation lost its native Height domain fixture.");
+            unrelated.push_back(materialGraphDomainShaderRecipe(config,generated,*variant));
+        }
+    }
+    const auto preview=generateMaterialGraphPreviewShader(material,{image,MaterialPin::RGB});
+    require(preview.nodePreview&&preview.variants.size()==1,"Material cache isolation lost its node-preview fixture.");
+    unrelated.push_back(materialGraphShaderRecipe(config,preview,preview.variants.front()));
+    MaterialAsset decal;canonicalizeMaterialAsset(decal);
+    materialOutputNode(decal.graph).output.shading=MaterialShading::Decal;
+    const auto decalGraph=generateMaterialGraphShader(decal);
+    require(decalGraph.variants.size()==1&&decalGraph.variants.front().pass==MaterialGraphPass::Decal,
+        "Material cache isolation lost its typed Decal fixture.");
+    const auto decalRecipe=materialGraphShaderRecipe(config,decalGraph,decalGraph.variants.front());
+    const auto originalDecal=compileShader(config,decalRecipe);
+    require(std::any_of(originalDecal.dependencies.begin(),originalDecal.dependencies.end(),[](const auto& path){return path.filename()=="material_graph_decal.sh";}),
+        "Decal raster source is absent from its actual compiler dependencies.");
+    std::vector<ShaderBinary> originals;
+    ShaderCacheReadSession unrelatedSession(config);
+    for(const auto& recipe:unrelated){
+        auto binary=compileShader(config,recipe);
+        require(std::none_of(binary.dependencies.begin(),binary.dependencies.end(),[](const auto& path){return path.filename()=="material_graph_decal.sh";}),
+            "Decal-only raster source leaked into Lit/coverage/preview/domain compiler inputs.");
+        require(unrelatedSession.find(recipe).has_value(),"Warm material cache-isolation fixture did not hydrate.");
+        originals.push_back(std::move(binary));
+    }
+    const auto artifactTimes=[&]{
+        std::vector<std::pair<std::filesystem::path,std::filesystem::file_time_type>> result;
+        for(const auto& entry:std::filesystem::directory_iterator(config.cacheDirectory))if(entry.is_regular_file())
+            result.emplace_back(entry.path().filename(),entry.last_write_time());
+        std::sort(result.begin(),result.end());return result;
+    };
+    const auto originalTimes=artifactTimes();
+    const auto decalPath=directory/"material_graph_decal.sh";
+    auto changed=read(decalPath);
+    const std::string before="material.baseColor*u_decalRasterColor.rgb",after="(material.baseColor*0.5)*u_decalRasterColor.rgb";
+    const auto at=changed.find(before);require(at!=std::string::npos,"Decal-only semantic edit fixture lost its color expression.");
+    changed.replace(at,before.size(),after);write(decalPath,changed);
+    const auto metrics=shaderCompilerMetrics();
+    require(unrelatedSession.unchanged(),"A Decal-only shader edit invalidated an already hydrated unrelated material session.");
+    for(std::size_t i=0;i<unrelated.size();++i){
+        const auto cached=ShaderCacheReadSession(config).find(unrelated[i]);
+        const auto warm=compileShader(config,unrelated[i]);
+        require(cached&&cached->bytes==originals[i].bytes&&cached->fingerprint==originals[i].fingerprint&&
+            warm.bytes==originals[i].bytes&&warm.fingerprint==originals[i].fingerprint,
+            "A Decal-only edit evicted or changed a warm Lit/coverage/preview/native-domain artifact.");
+    }
+    require(shaderCompilerMetrics().compilerInvocations==metrics.compilerInvocations&&artifactTimes()==originalTimes,
+        "A Decal-only edit started unrelated shaderc work or rewrote warm cache files.");
+    require(!ShaderCacheReadSession(config).find(decalRecipe)&&shaderCompilerMetrics().compilerInvocations==metrics.compilerInvocations,
+        "Cache-only Decal lookup reused stale code or invoked shaderc after a real raster edit.");
+    const auto changedDecal=compileShader(config,decalRecipe);
+    require(changedDecal.fingerprint!=originalDecal.fingerprint&&changedDecal.bytes!=originalDecal.bytes&&
+        shaderCompilerMetrics().compilerInvocations>metrics.compilerInvocations,
+        "A real Decal-only shader edit did not compile changed Decal bytecode.");
+    const auto afterCompile=shaderCompilerMetrics();
+    require(compileShader(config,decalRecipe).bytes==changedDecal.bytes&&
+        shaderCompilerMetrics().compilerInvocations==afterCompile.compilerInvocations,
+        "The rebuilt Decal artifact did not become warm.");
+    std::cout<<"Decal-only edit preserved six warm Lit/coverage/preview/domain inputs without shaderc and rebuilt only Decal.\n";
+}
 void cachePublicationChecks(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include) {
 #ifdef _WIN32
     Temp temp;
@@ -262,6 +347,7 @@ void cachePublicationChecks(const std::filesystem::path& compiler,const std::fil
 void run(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include,bool publicationOnly=false) {
     cachePublicationChecks(compiler,source,include);
     if(publicationOnly)return;
+    decalCacheIsolationChecks(compiler,source,include);
     Temp temp;
     runtimePathChecks(temp.root/"runtime selection");
     embeddedBaselineChecks(temp.root/"embedded baseline");
@@ -597,9 +683,11 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
 }
 int main(int argc,char** argv) {
     try {
-        if (argc!=4&&!(argc==5&&std::string_view(argv[4])=="--cache-publication-only"))
-            throw std::runtime_error("Pass compiler, engine source directory, pinned include directory and optional --cache-publication-only.");
-        run(pathFromUtf8(argv[1]),pathFromUtf8(argv[2]),pathFromUtf8(argv[3]),argc==5);
+        if (argc!=4&&!(argc==5&&(std::string_view(argv[4])=="--cache-publication-only"||std::string_view(argv[4])=="--decal-cache-isolation-only")))
+            throw std::runtime_error("Pass compiler, engine source directory, pinned include directory and optional --cache-publication-only or --decal-cache-isolation-only.");
+        if(argc==5&&std::string_view(argv[4])=="--decal-cache-isolation-only")
+            decalCacheIsolationChecks(pathFromUtf8(argv[1]),pathFromUtf8(argv[2]),pathFromUtf8(argv[3]));
+        else run(pathFromUtf8(argv[1]),pathFromUtf8(argv[2]),pathFromUtf8(argv[3]),argc==5);
         std::cout<<"Shader compiler checks passed.\n"; return 0;
     } catch (const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

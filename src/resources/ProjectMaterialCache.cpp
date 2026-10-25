@@ -4,6 +4,7 @@
 #include "assets/ContentStorage.h"
 #include "resources/AssetId.h"
 #include "crimson-renderer/MaterialGraphShader.h"
+#include "crimson-renderer/MaterialGraphCompilePolicy.h"
 #include "vs_model.h"
 #include "vs_model_paint.h"
 #include "vs_pick.h"
@@ -39,7 +40,7 @@ ShaderCompilerMetrics difference(ShaderCompilerMetrics before,ShaderCompilerMetr
         after.workerCacheHits-before.workerCacheHits};
 }
 }
-ProjectMaterialCacheReport prepareProjectMaterialCache(const std::filesystem::path& project,const ShaderCompileConfig& config) {
+ProjectMaterialCacheReport prepareProjectMaterialCache(const std::filesystem::path& project,const ShaderCompileConfig& config,const std::function<void()>& presentationReady) {
     ProjectMaterialCacheReport report;const auto started=std::chrono::steady_clock::now();const auto before=shaderCompilerMetrics();
     std::vector<std::string> ids;
     if(contentStorageReady(project)) {
@@ -73,23 +74,36 @@ ProjectMaterialCacheReport prepareProjectMaterialCache(const std::filesystem::pa
         if(cached)++report.cacheHits;else binary=compileShader(config,name);
         ++report.stages;return vertices.emplace(name,Stage{std::move(*binary),cached}).first->second;
     };
-    const auto loadGenerated=[&](const ShaderCompileRecipe& recipe)->Stage& {
+    const auto loadGenerated=[&](const ShaderCompileRecipe& recipe,bool cachedOnly=false)->Stage* {
         // Generated recipe names describe individual compiler inputs. Coverage
         // passes and different materials can therefore share the same stage.
-        if(const auto found=generatedStages.find(recipe.name);found!=generatedStages.end())return found->second;
+        const auto key=recipe.name+(recipe.optimization==ShaderCompileOptimization::Interactive?";interactive":";full");
+        if(const auto found=generatedStages.find(key);found!=generatedStages.end())return &found->second;
         auto binary=cache.find(recipe);
         const bool cached=binary.has_value();
+        if(!cached&&cachedOnly)return nullptr;
         if(cached)++report.cacheHits;else binary=compileShader(config,recipe);
-        ++report.stages;return generatedStages.emplace(recipe.name,Stage{std::move(*binary),cached}).first->second;
+        ++report.stages;return &generatedStages.emplace(key,Stage{std::move(*binary),cached}).first->second;
     };
-    for(const auto& [key,shader]:graphs) {
-        try {
+    const auto prepareGraph=[&](const MaterialGraphShader& shader,bool presentation) {
             for(const auto& variant:shader.variants) {
                 auto& vertex=loadVertex(variant.vertexName);
-                const auto recipe=materialGraphShaderRecipe(config,shader,variant);
-                auto& fragment=loadGenerated(recipe);
-                const auto domainRecipe=variant.tessellation?materialGraphDomainShaderRecipe(config,shader,variant):ShaderCompileRecipe{};
-                Stage* domain=variant.tessellation?&loadGenerated(domainRecipe):nullptr;
+                auto recipe=materialGraphShaderRecipe(config,shader,variant);
+                auto domainRecipe=variant.tessellation?materialGraphDomainShaderRecipe(config,shader,variant):ShaderCompileRecipe{};
+                if(presentation&&materialGraphInteractivePass(variant.pass)) {
+                    // An already optimized pair wins. A partial or rejected O3
+                    // pair cannot delay the complete usable catalog behind one
+                    // expensive graph, nor certify a mixed-quality cache pair.
+                    const auto* fragment=loadGenerated(recipe,true);
+                    const auto* domain=variant.tessellation?loadGenerated(domainRecipe,true):nullptr;
+                    std::string diagnostic;
+                    const bool full=fragment&&(!variant.tessellation||domain)&&
+                        preflightGeneratedShaderPair(vertex.binary.bytes,fragment->binary.bytes,embeddedVertex(variant.pass,variant.vertexName),variant.manifest,diagnostic)&&
+                        (!domain||preflightGeneratedTessellationDomain(domain->binary.bytes,embeddedVertex(variant.pass,variant.vertexName),variant.domainManifest,diagnostic));
+                    if(!full){recipe.optimization=ShaderCompileOptimization::Interactive;domainRecipe.optimization=ShaderCompileOptimization::Interactive;}
+                }
+                auto& fragment=*loadGenerated(recipe);
+                Stage* domain=variant.tessellation?loadGenerated(domainRecipe):nullptr;
                 std::string diagnostic;
                 const auto preflight=[&] {
                     return preflightGeneratedShaderPair(vertex.binary.bytes,fragment.binary.bytes,embeddedVertex(variant.pass,variant.vertexName),variant.manifest,diagnostic)&&
@@ -115,6 +129,16 @@ ProjectMaterialCacheReport prepareProjectMaterialCache(const std::filesystem::pa
                 }
             }
             if(!cache.unchanged())throw std::runtime_error("Shader inputs changed during project cache preparation.");
+    };
+    for(const auto& [key,shader]:graphs) {
+        try{prepareGraph(shader,true);++report.presentationPrepared;}
+        catch(const std::exception& error){++report.presentationFailed;report.diagnostics.push_back(key+" first-use: "+error.what());}
+    }
+    report.presentationMilliseconds=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+    if(presentationReady)presentationReady();
+    for(const auto& [key,shader]:graphs) {
+        try {
+            prepareGraph(shader,false);
             ++report.prepared;
         } catch(const std::exception& error){++report.failed;report.diagnostics.push_back(key+": "+error.what());}
     }
@@ -123,6 +147,7 @@ ProjectMaterialCacheReport prepareProjectMaterialCache(const std::filesystem::pa
 }
 std::string serializeProjectMaterialCacheReport(const ProjectMaterialCacheReport& report) {
     return nlohmann::json{{"materials",report.materials},{"uniqueTopologies",report.topologies},{"preparedTopologies",report.prepared},
+        {"presentationTopologies",report.presentationPrepared},{"presentationFailures",report.presentationFailed},{"presentationMs",report.presentationMilliseconds},
         {"failures",report.failed},{"stageRequests",report.stages},{"cacheHits",report.cacheHits},{"elapsedMs",report.elapsedMilliseconds},
         {"compilerInvocations",report.metrics.compilerInvocations},{"compilerMs",report.metrics.compilerNanoseconds/1e6},
         {"diagnostics",report.diagnostics}}.dump(2)+"\n";

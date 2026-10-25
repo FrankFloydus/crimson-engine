@@ -1,4 +1,5 @@
 #include "DecalModelSurface.h"
+#include "DecalSampling.h"
 #include <crimson/renderer/forward/ModelData.h>
 #include <crimson/renderer/forward/MeshNormals.h>
 #include <algorithm>
@@ -133,12 +134,13 @@ ModelSurface buildModelSurface(const ModelAsset& model,uint64_t fingerprint,Sour
     if(result.draws.empty()&&result.diagnostic.empty())result.diagnostic="No usable decal receiver triangles.";
     return result;
 }
-std::vector<uint32_t> querySurfaceTriangles(const ModelDrawSurface& draw,const Mat4& entityWorld,const Aabb& worldBounds) {
+std::vector<uint32_t> querySurfaceTriangles(const ModelDrawSurface& draw,const Mat4& entityWorld,const Aabb& worldBounds,std::stop_token stop) {
     std::vector<uint32_t> result;if(draw.nodes.empty()||!worldBounds.valid)return result;
     const auto inverse=math::inverse(entityWorld*draw.surface.localToWorld);if(!inverse)return result;
     const auto local=math::transformBounds(worldBounds,*inverse);
     std::vector<uint32_t> pending{0};
     while(!pending.empty()) {
+        cancelled(stop);
         const auto node=pending.back();pending.pop_back();const auto& value=draw.nodes.at(node);
         if(!overlaps(local,value.bounds))continue;
         if(value.count) {
@@ -147,6 +149,36 @@ std::vector<uint32_t> querySurfaceTriangles(const ModelDrawSurface& draw,const M
     }
     std::sort(result.begin(),result.end(),[&](auto a,auto b){return draw.surface.triangles[a].triangle<draw.surface.triangles[b].triangle;});
     return result;
+}
+DecalSourceQuery decalSourceQuery(const ModelSurface& model,const Mat4& entityWorld,const DecalBuildRequest& request) {
+    const auto draw=std::find_if(model.draws.begin(),model.draws.end(),[&](const auto& value){return value.surface.id.draw==request.seed.receiver.draw&&value.surface.id.primitive==request.seed.receiver.primitive;});
+    if(draw==model.draws.end())throw std::runtime_error("Seed receiver draw is unavailable.");
+    const auto triangle=std::find_if(draw->surface.triangles.begin(),draw->surface.triangles.end(),[&](const auto& value){return value.triangle==request.seed.triangle;});
+    if(triangle==draw->surface.triangles.end())throw std::runtime_error("Seed receiver triangle is unavailable.");
+    const auto bary=detail::d3(request.seed.barycentrics);
+    if(!detail::finite(bary)||std::abs(bary.x+bary.y+bary.z-1)>1e-4||std::min({bary.x,bary.y,bary.z})< -1e-5)throw std::runtime_error("Invalid seed barycentrics.");
+    const auto transform=entityWorld*draw->surface.localToWorld;
+    const auto point=detail::point(transform,detail::d3(triangle->positions[0])*bary.x+detail::d3(triangle->positions[1])*bary.y+detail::d3(triangle->positions[2])*bary.z);
+    const auto normal=detail::normal(transform,detail::cross(detail::d3(triangle->positions[1])-detail::d3(triangle->positions[0]),detail::d3(triangle->positions[2])-detail::d3(triangle->positions[0])));
+    const auto domain=detail::samplingDomain(request,point,normal);
+    return {{point.x,point.y,point.z},domain.radius,domain.intrinsicRadius+domain.spacing+domain.tolerance,domain.tolerance};
+}
+std::vector<uint32_t> querySurfaceTriangles(const ModelDrawSurface& draw,const Mat4& entityWorld,
+    const DecalSourceQuery& query,std::stop_token stop) {
+    const detail::D3 center{query.center[0],query.center[1],query.center[2]};
+    if(!detail::finite(center)||!std::isfinite(query.radius)||!std::isfinite(query.maximumDistance)||!std::isfinite(query.tolerance)||query.radius<=0||query.maximumDistance<=0||query.tolerance<0)throw std::runtime_error("Invalid decal source query.");
+    Aabb box;box.valid=true;
+    // Outward rounding keeps the float BVH broad phase conservative relative
+    // to the shared double-precision world-space inclusion test below.
+    for(size_t axis=0;axis<3;++axis){box.minimum[axis]=std::nextafter(static_cast<float>(query.center[axis]-query.radius-query.tolerance),-INFINITY);box.maximum[axis]=std::nextafter(static_cast<float>(query.center[axis]+query.radius+query.tolerance),INFINITY);}
+    auto indices=querySurfaceTriangles(draw,entityWorld,box,stop);const auto transform=entityWorld*draw.surface.localToWorld;size_t tested{};
+    std::erase_if(indices,[&](uint32_t index){if((tested++&1023)==0)cancelled(stop);const auto& triangle=draw.surface.triangles[index];std::array<detail::D3,3> positions;for(size_t corner=0;corner<3;++corner)positions[corner]=detail::point(transform,detail::d3(triangle.positions[corner]));
+        // A receiver-local AABB can grow substantially through an affine
+        // inverse. Check the original world box before the distance frontier.
+        for(size_t axis=0;axis<3;++axis){double minimum=INFINITY,maximum=-INFINITY;for(const auto position:positions){minimum=std::min(minimum,position[axis]);maximum=std::max(maximum,position[axis]);}if(minimum>query.center[axis]+query.radius+query.tolerance||maximum<query.center[axis]-query.radius-query.tolerance)return true;}
+        return detail::triangleDistance(center,positions)>query.maximumDistance;
+    });
+    return indices;
 }
 SurfaceHitResult resolveModelSurfaceHit(const ModelSurface& model,uint64_t entity,const Mat4& entityWorld,
     uint32_t drawIndex,uint32_t primitive,Vec3 visiblePoint,float tolerance) {

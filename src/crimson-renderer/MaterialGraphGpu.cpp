@@ -1,4 +1,5 @@
 #include "MaterialGraphGpu.h"
+#include "MaterialGraphCompilePolicy.h"
 #include "resources/ResourceManager.h"
 #include "assets/MaterialAsset.h"
 #include "resources/CacheIO.h"
@@ -123,7 +124,7 @@ MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphSha
         "Hardware tessellation requires Direct3D 12; this backend renders the base mesh.":"";
     const auto current=[&]{return entry.current&&entry.currentEpoch==(*owner.sourceEpoch);};
     const auto pending=[&](bool active) {return MaterialGraphProgramResult{entry.current,current()?capabilityDiagnostic:"Compiling material graph...",current(),active};};
-    const auto interactivePass=[](const auto& variant){return variant.pass==MaterialGraphPass::Decal||variant.pass==MaterialGraphPass::Model||variant.pass==MaterialGraphPass::Particle||variant.pass==MaterialGraphPass::ModelTransmission||variant.pass==MaterialGraphPass::ParticleTransmission||variant.pass==MaterialGraphPass::ModelReflection||variant.pass==MaterialGraphPass::ParticleReflection;};
+    const auto interactivePass=[](const auto& variant){return materialGraphInteractivePass(variant.pass);};
     try {
         const auto* caps=bgfx::getCaps();
         if(!caps || caps->limits.maxTextureSamplers<16)throw std::runtime_error("Material graphs require sixteen texture sampler stages.");

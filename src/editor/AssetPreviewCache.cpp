@@ -1,4 +1,5 @@
 #include "AssetPreviewCache.h"
+#include "AssetPreviews.h"
 #include "assets/AtomicFile.h"
 #include "resources/CacheIO.h"
 #include "resources/ImageDecoder.h"
@@ -35,6 +36,14 @@ std::string storedPath(const std::filesystem::path& root,const std::filesystem::
 std::filesystem::path restoredPath(const std::filesystem::path& root,const Json& path) {
     auto file=pathFromUtf8(path.get<std::string>());return file.is_absolute()?file:(root/file).lexically_normal();
 }
+}
+std::optional<uint64_t> PreviewDependencies::sourceFingerprint(const std::filesystem::path& source) const {
+    if(files.size()!=sourceFingerprints.size())return std::nullopt;
+    // The descriptor builder deduplicates Windows case/relative/absolute
+    // aliases. Lookup must use that same identity, not the retained spelling.
+    const auto key=resourcePathKey(source);
+    for(std::size_t i=0;i<files.size();++i)if(resourcePathKey(files[i])==key)return sourceFingerprints[i];
+    return std::nullopt;
 }
 std::vector<std::filesystem::path> uniquePreviewSourceFiles(std::vector<std::filesystem::path> files) {
     CRIMSON_PROFILE_ZONE("Thumbnail source path normalization");

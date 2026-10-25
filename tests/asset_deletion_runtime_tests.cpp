@@ -1,4 +1,5 @@
 #include "editor/AssetPreviews.h"
+#include "editor/AssetPreviewCache.h"
 #include "editor/EditorResources.h"
 #include "editor/EditorSession.h"
 #include "editor/ResourceRuntime.h"
@@ -10,6 +11,7 @@
 #include "crimson-renderer/MaterialGraphGpu.h"
 #include "crimson-renderer/Renderer.h"
 #include "resources/AssetId.h"
+#include "resources/CacheIO.h"
 #include "scene/SceneDocument.h"
 #include "GpuTestBackend.h"
 #include "quader_bundle_fixture.h"
@@ -22,9 +24,12 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 #include <thread>
+#include <unordered_set>
 
 // This executable runs the actual resource coordinator with a null editor and
 // the actual preview/resource owners directly. No EditorSession is constructed;
@@ -88,6 +93,101 @@ MaterialAsset graph(const fs::path& root,const std::string& name,const std::stri
 }
 bool catalogContains(const AssetLibrary& assets,const std::string& id) {
     return std::any_of(assets.catalog().begin(),assets.catalog().end(),[&](const auto& entry){return entry.id==id;});
+}
+void materialThumbnails(SDL_Window* window,const fs::path& sourceRoot={}) {
+    Project project;initializeContentStorage(project.root);
+    const auto colorId=newAssetId(),normalId=newAssetId();
+    const auto colorFile=project.root/"Content"/"Color.png",normalFile=project.root/"Content"/"Normal.png";
+    fs::create_directories(colorFile.parent_path());
+    image(colorFile,{180,80,40,255});image(normalFile,{128,128,255,255});
+    const std::array<StoredAssetPath,2> images{{{colorId,colorFile},{normalId,normalFile}}};registerAssetPaths(project.root,images);
+    auto fixed=graph(project.root,"Fixed Quader texture",colorId,normalId);
+    materialOutputNode(fixed.graph).output.blend=MaterialBlend::Opaque;canonicalizeMaterialAsset(fixed);saveMaterialAsset(project.root,fixed);
+    require(materialGraphFixedSurface(fixed.graph).has_value(),"The Quader-like thumbnail fixture no longer exercises fixed material lowering.");
+    const auto generated=graph(project.root,"Generated masked texture",colorId,normalId);
+    auto blend=createMaterialAsset(project.root,"Height blend");initializeBlendMaterialGraph(blend.graph);
+    std::array<MaterialNodeId,4> layers{};const std::array pins{MaterialPin::Base,MaterialPin::Red,MaterialPin::Green,MaterialPin::Blue};
+    for(std::size_t i=0;i<pins.size();++i){const auto* link=materialInputLink(blend.graph,materialOutputNode(blend.graph).id,pins[i]);require(link,"Blend fixture omitted a source layer.");layers[i]=link->fromNode;findMaterialNode(blend.graph,layers[i])->material.id=fixed.id;}
+    const auto height=addMaterialNode(blend.graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(blend.graph,height)->texture.image.id=colorId;findMaterialNode(blend.graph,height)->texture.role=MaterialTextureRole::Data;
+    connectMaterialNodes(blend.graph,height,MaterialPin::R,layers[0],MaterialPin::Height);findMaterialNode(blend.graph,layers[1])->blendLayer.heightBlend=true;
+    canonicalizeMaterialAsset(blend);saveMaterialAsset(project.root,blend);
+    auto decalMaterial=createMaterialAsset(project.root,"Decal material");materialOutputNode(decalMaterial.graph).output.shading=MaterialShading::Decal;
+    const auto decalTexture=addMaterialNode(decalMaterial.graph,MaterialNodeKind::Texture2D).id;findMaterialNode(decalMaterial.graph,decalTexture)->texture.image.id=colorId;
+    connectMaterialNodes(decalMaterial.graph,decalTexture,MaterialPin::RGB,materialOutputNode(decalMaterial.graph).id,MaterialPin::BaseColor);
+    canonicalizeMaterialAsset(decalMaterial);saveMaterialAsset(project.root,decalMaterial);
+    auto decalAsset=createDecalAsset(project.root,"Decal asset");decalAsset.material.id=decalMaterial.id;saveDecalAsset(project.root,decalAsset);
+    std::vector<std::string> visible{fixed.id,generated.id,blend.id,decalMaterial.id,decalAsset.id};
+    std::vector<fs::path> originalFiles;
+    if(!sourceRoot.empty()) {
+        // Read actual project material graphs and images into an isolated cache
+        // root. Keep every UUID and byte intact; the running editor's project,
+        // source files and shader/preview caches are never mutation targets.
+        std::unordered_set<std::string> copied;
+        const auto copySource=[&](const std::string& id) {
+            const auto source=resolveAssetPath(sourceRoot,id);
+            require(fs::is_regular_file(source),"The actual-project thumbnail source is missing: "+id);
+            const auto target=project.root/"Content"/"ActualInputs"/(id+source.extension().string());
+            fs::create_directories(target.parent_path());copyFileAtomically(source,target);
+            registerAssetPath(project.root,id,target);originalFiles.push_back(source);
+        };
+        std::function<void(const std::string&)> copyMaterial=[&](const std::string& id) {
+            if(isEngineAssetId(id)||!copied.insert(id).second)return;
+            const auto material=loadMaterialAsset(sourceRoot,id);
+            for(const auto& texture:materialTextureReferences(material))
+                if(!isEngineAssetId(texture)&&copied.insert(texture).second)copySource(texture);
+            for(const auto& child:materialMaterialReferences(material))copyMaterial(child);
+            copySource(id);
+        };
+        for(const auto* id:{"a98c9d63-efed-5f84-b13a-9273b13b1734", // imported Quader stone
+                            "c3744381-b311-4b32-a277-507ee54a5269", // saved height blend example
+                            "61e7eb9b-f476-5edb-8a3d-00a102cc6d3a"}) { // user's current decal material
+            copyMaterial(id);visible.emplace_back(id);
+        }
+    }
+    const auto originalFingerprint=fingerprintFiles(originalFiles);
+
+    ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));
+    ImGuiOwner context;ImGuiBgfx tools(renderer);AssetLibrary assets(project.root,&resources);
+    ResourceRuntime runtime(project.root,resources,assets,renderer,tools);EditorResources prepared(assets,renderer,resources,project.root);
+    TestGpuContext gpu;renderer.resizeViewport(64,64);renderer.setGridVisible(false);bgfx::reset(64,64,BGFX_RESET_NONE);
+    auto environment=std::make_shared<PreparedEnvironment>();environment->key=0x54484d424d4154;
+    environment->settings={2,8,8,16,16,16};environment->data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{.25f,.25f,.25f})},environment->settings);
+    ResourceRequestOptions environmentOptions;environmentOptions.variant="ibl";
+    resources.seed<PreparedEnvironment>(AssetRef<PreparedEnvironment>{StudioEnvironmentId},{environment,sizeof(PreparedEnvironment),environment->key,{}},environmentOptions);
+    std::uint32_t frame{};
+    const auto tick=[&]{runtime.preFrame(nullptr,frame);prepared.beginFrame();renderer.advanceStreaming();frame=renderer.advance_frame();gpu.flush();};
+    const auto wait=[&](AssetPreviews& previews,const char* phase,bool diskOnly){
+        const auto begin=Clock::now(),deadline=begin+std::chrono::seconds{120};auto nextLog=begin;
+        for(;;){
+            tick();previews.pump(frame,visible,32);prepared.endFrame();
+            const bool ready=std::all_of(visible.begin(),visible.end(),[&](const auto& id){return bgfx::isValid(renderer.thumbnailTexture(id));});
+            if(ready){const auto stats=previews.stats();std::cout<<phase<<" material thumbnails ready in "<<std::chrono::duration<double,std::milli>(Clock::now()-begin).count()<<"ms; renders="<<stats.renderRequests<<" disk="<<stats.diskHits<<'\n'<<std::flush;
+                if(diskOnly)require(stats.renderRequests==0&&stats.diskHits==visible.size(),"Warm material thumbnails did not restore through their persistent source descriptors.");return;}
+            if(Clock::now()>=nextLog){nextLog=Clock::now()+std::chrono::seconds{2};for(const auto& id:visible)if(!bgfx::isValid(renderer.thumbnailTexture(id)))std::cout<<phase<<' '<<assets.displayName(id)<<": "<<previews.diagnostic(id)<<'\n'<<std::flush;}
+            require(Clock::now()<deadline,std::string(phase)+" material thumbnails failed to converge. Assets: "+assets.status()+"\nPreviews: "+previews.status()+"\nModels: "+prepared.status());
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+    };
+    {
+        AssetPreviews previews(project.root,assets,resources,renderer,prepared);wait(previews,"cold",false);
+        // Finish the ordinary async PNG/index writes before discarding the owner.
+        const auto deadline=Clock::now()+std::chrono::seconds{15};bool persisted{};
+        while(Clock::now()<deadline){tick();previews.pump(frame,visible,32);prepared.endFrame();
+            const auto folder=project.root/".crimson"/"cache"/"previews";
+            persisted=std::all_of(visible.begin(),visible.end(),[&](const auto& id){return fs::is_regular_file(assetPreviewIndexPath(folder,id,32));});
+            if(persisted)break;std::this_thread::sleep_for(std::chrono::milliseconds{1});}
+        require(persisted,"Material thumbnail pixels became resident but their persistent source indexes never completed.");
+        auto policy=streaming::detail::HashSeed;const auto serialized=assets.references().serialize();streaming::detail::hash(policy,serialized.data(),serialized.size());
+        for(const auto& id:visible){const auto cached=readAssetPreviewCache(project.root,project.root/".crimson"/"cache"/"previews",id,32,renderer.shaderSignature(),policy);std::size_t colored{};
+            for(std::size_t offset=0;offset<cached.image->rgba.size();offset+=4)colored+=cached.image->rgba[offset]>cached.image->rgba[offset+1]+10&&cached.image->rgba[offset]>cached.image->rgba[offset+2]+10;
+            if(std::find(visible.begin(),visible.begin()+5,id)!=visible.begin()+5)
+                require(colored>20,"Material thumbnail published a blank/neutral fallback instead of its authored red surface: "+assets.displayName(id));}
+    }
+    for(const auto& id:visible)renderer.evictThumbnail(id);
+    {AssetPreviews reopened(project.root,assets,resources,renderer,prepared);wait(reopened,"warm",true);}
+    require(fingerprintFiles(originalFiles)==originalFingerprint,"The actual-project thumbnail probe changed an authored source.");
+    runtime.stop();frame=renderer.drainPending(frame);tools.shutdown();
 }
 void exercise(SDL_Window* window) {
     Project project;auto fixture=bundle_test::writeFixture(project.root);
@@ -228,11 +328,14 @@ void exercise(SDL_Window* window) {
     std::cout<<"Actual Quader mixed-deletion resource frames, generated texture packets, queued thumbnail readback and saved-scene fallback preview passed.\n";
 }
 }
-int main() {
+int main(int argc,char** argv) {
     try {
         SdlOwner sdl;
         const std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(
             SDL_CreateWindow("Crimson deletion resource regression",64,64,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
-        require(bool(window),SDL_GetError());exercise(window.get());return 0;
+        require(bool(window),SDL_GetError());
+        if(argc>=2&&std::string_view(argv[1])=="--material-thumbnails")materialThumbnails(window.get(),argc>=3?fs::path(argv[2]):fs::path{});
+        else exercise(window.get());
+        return 0;
     }catch(const std::exception& error){std::cerr<<"Asset deletion runtime test failed: "<<error.what()<<'\n';return 1;}
 }

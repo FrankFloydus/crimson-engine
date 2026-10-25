@@ -151,7 +151,7 @@ struct AssetPreviews::Impl {
         std::vector<PreviewSourceLocation> locations;
         bool indexChecked{};
         bool wanted{},forceScene{},saveRequested{};
-        std::string error;
+        std::string error,pending;
         std::unique_ptr<DecalResources> decalResources;
         std::unique_ptr<ScenePlan> scenePlan;
         DecalPreviewGeometry decalGeometry;
@@ -326,7 +326,7 @@ struct AssetPreviews::Impl {
         return true;
     }
     bool warmCache(const std::string& id,Entry& entry,uint64_t signature) {
-        if (bgfx::isValid(renderer.thumbnailTexture(id,signature))) { ++statistics.residentHits;entry.cacheState.published=signature;entry.retry.reset();entry.error.clear();return true; }
+        if (bgfx::isValid(renderer.thumbnailTexture(id,signature))) { ++statistics.residentHits;entry.cacheState.published=signature;entry.retry.reset();entry.error.clear();entry.pending.clear();return true; }
         if (entry.cacheState.published==signature && entry.writer) return true;
         if (entry.cacheState.needsDiskRead(signature)) {
             entry.cached={};
@@ -371,7 +371,9 @@ struct AssetPreviews::Impl {
         static shared::profiling::CpuLocation location{"Asset thumbnail request",__func__,__FILE__,__LINE__};
         shared::profiling::CpuZone requestZone{location};requestZone.text(id);
         ++statistics.requests;
+        entry.pending="Waiting for thumbnail retry";
         if (assets.references().deleted(id) || !entry.retry.ready(PreviewRetryState::Clock::now())) return;
+        entry.pending="Validating thumbnail cache";
         {
         CRIMSON_PROFILE_ZONE("Thumbnail descriptor validation");
         // The submitted packet pins a complete exact generation until readback.
@@ -384,6 +386,7 @@ struct AssetPreviews::Impl {
         if(!entry.descriptors.valid && indexedCache(id,entry))return;
         }
         if(std::chrono::steady_clock::now()>=validationDeadline)return;
+        entry.pending="Planning thumbnail sources";
         ++statistics.validations;
         SceneSettings settings; settings.antiAliasing=AntiAliasing::Smaa;
         settings.directional.enabled=false; for (auto& light:settings.points) light.enabled=false;
@@ -483,6 +486,7 @@ struct AssetPreviews::Impl {
             includeDecal(id);decalGeometry=&decalPreviewSurface();materialGeometry=decalGeometry->model;settings.camera=decalGeometry->camera;
             directions={DirectionalLight{{-.4f,-1,-.7f},{1,1,1},2,true}};
         } else if (entry.kind==AssetKind::Material) {
+            entry.pending="Preparing material definition";
             materialAsset=assets.findMaterial(id);
             if (!materialAsset) { entry.error="Material is unavailable."; return; }
             includeMaterial(id);
@@ -605,6 +609,7 @@ struct AssetPreviews::Impl {
         const auto source=settings.environment.source==EnvironmentSource::Hdri?
             assets.references().resolveEnvironment(settings.environment.map):std::string{};
         if(!source.empty())validationFiles.push_back(sourceFile(source));
+        entry.pending="Preparing thumbnail environment";
         auto bake=environment(source,entry); if (!bake) return;
         hash(sourceKey,bake->key);hash(sourceKey,settings.exposure);
         hash(sourceKey,thumbnailEnvironmentKey(settings.environment,settings.proceduralSun));
@@ -630,6 +635,7 @@ struct AssetPreviews::Impl {
                 return ResourceLoadResult<PreviewDependencies>{data,sizeof(PreviewDependencies)+files.size()*(sizeof(std::filesystem::path)+sizeof(uint64_t)),data->fingerprint,files};
             },std::move(options));
         }
+        entry.pending="Reading thumbnail source fingerprints";
         if (entry.dependencies.state()==ResourceState::Failed) { entry.error=entry.dependencies.diagnostic(); return; }
         if (entry.dependencies.state()!=ResourceState::Ready) return;
         const auto dependencies=entry.dependencies.snapshot(); if (!dependencies) return;
@@ -646,11 +652,13 @@ struct AssetPreviews::Impl {
         }
         entry.signature=signature;
         if (warmCache(id,entry,signature)) { if (entry.cacheState.published==signature) entry.saveRequested=false; return; }
+        entry.pending="Waiting for thumbnail renderer";
         if (renderer.thumbnailBusy() || entry.rendering==signature) return;
         // Exact source/PNG validation needs no receiver geometry. Only an
         // actual render request prepares spatial charts; unchanged retries
         // retain that work while continuing chart/material readiness polling.
         if(decalScene&&!decalExtraction.decals.empty()) {
+            entry.pending="Preparing thumbnail surface decals";
             CRIMSON_PROFILE_ZONE("Thumbnail decal preparation");
             if(!entry.decalResources)entry.decalResources=std::make_unique<DecalResources>(assets,resources);
             entry.decalResources->collect();
@@ -676,6 +684,7 @@ struct AssetPreviews::Impl {
         std::vector<RenderParticle> particles;
         std::vector<RenderParticleMaterial> particleMaterials;
         if(decalAsset||decalMaterialPreview) {
+            entry.pending="Preparing decal material and textures";
             auto candidate=std::make_shared<PreparedEditorModel>();candidate->asset=materialGeometry;
             candidate->materials=materialGeometry->materials;candidate->textures=assets.modelBindings(*materialGeometry,candidate->materials);
             const auto material=decalAsset?assets.preparedDecalMaterial(id,previewSize,ResourcePriority::Preview):assets.preparedDecalMaterial(*materialAsset,assets.materialRevision(id),previewSize,ResourcePriority::Preview);
@@ -714,12 +723,17 @@ struct AssetPreviews::Impl {
             if(!material->diagnostic.empty())entry.error=material->diagnostic;
         }
         if (materialAsset && !spriteMaterial&&!decalMaterialPreview) {
+            entry.pending="Preparing material shader and textures";
             assets.setTextureDemand(previewSize);
             auto candidate=std::make_shared<PreparedEditorModel>(); candidate->asset=materialGeometry;
             candidate->materials={materialAsset->surface}; candidate->textures=assets.modelBindings(*materialGeometry,candidate->materials);
             if (!assets.modelBindingsReady(candidate->textures) || std::any_of(candidate->textures.begin(),candidate->textures.end(),[](const auto& binding) {
                 return binding.graphPending || !binding.complete || !binding.sourceReady;
-            })) return;
+            })) {
+                for(const auto& binding:candidate->textures)if(!binding.diagnostic.empty()){entry.pending+=" ("+binding.diagnostic+")";break;}
+                return;
+            }
+            entry.pending="Validating material texture source versions";
             if (!texturesMatchSources(assets,root,*dependencies,candidate->materials,candidate->textures,resources,refreshedSources)) return;
             std::unordered_map<std::string,uint64_t> versions;
             const auto& material=materialAsset->surface; size_t slot{};
@@ -733,6 +747,7 @@ struct AssetPreviews::Impl {
                 ++slot;
             }
             prepared.retainExternalModelForFrame(materialGeometry->id);
+            entry.pending="Preparing thumbnail mesh";
             renderer.configureModelStream(materialGeometry->id,1,*materialGeometry->stream);
             if (!renderer.modelStreamReady(materialGeometry->id,1)) {
                 if (!renderer.queueModelLod(materialGeometry->id,1,materialPreviewGeometryLevel())) entry.error=renderer.modelStatus();
@@ -769,7 +784,8 @@ struct AssetPreviews::Impl {
             renderScene.shadowInstances=pins->shadows->instances;
             renderScene.shadowWorldId=textHash(id);renderScene.shadowResolution=256;
         }
-        if (renderer.renderThumbnail(id,signature,renderScene,static_cast<uint16_t>(previewSize),pins)) {entry.rendering=signature;++statistics.renderRequests;}
+        entry.pending="Rendering thumbnail";
+        if (renderer.renderThumbnail(id,signature,renderScene,static_cast<uint16_t>(previewSize),pins)) {entry.rendering=signature;++statistics.renderRequests;entry.pending="Waiting for thumbnail readback";}
         else { entry.error=renderer.thumbnailStatus().empty() ? "This renderer cannot create asset previews." : renderer.thumbnailStatus();entry.retry.failed(PreviewRetryState::Clock::now()); }
     }
 };
@@ -829,7 +845,7 @@ void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible,uin
             auto& entry=found->second; entry.rendering=0;
             if (!impl_->assets.references().deleted(result->id) && entry.signature==result->signature) {
                 if (impl_->renderer.setThumbnail(result->id,result->signature,result->image)) {
-                    entry.cacheState.published=result->signature;entry.retry.reset();entry.saveRequested=false;entry.error.clear();
+                    entry.cacheState.published=result->signature;entry.retry.reset();entry.saveRequested=false;entry.error.clear();entry.pending.clear();
                     impl_->writePreview(*result,entry);
                 } else { entry.error="Cannot publish thumbnail texture.";entry.retry.failed(PreviewRetryState::Clock::now()); }
             }
@@ -914,5 +930,9 @@ void AssetPreviews::invalidateFile(const std::filesystem::path& file) {
     }
 }
 const std::string& AssetPreviews::status() const { return impl_->status; }
+std::string AssetPreviews::diagnostic(const std::string& id) const {
+    const auto found=impl_->entries.find(id);if(found==impl_->entries.end())return "Thumbnail has not been requested";
+    const auto& entry=found->second;return entry.error.empty()?entry.pending:entry.pending.empty()?entry.error:entry.pending+": "+entry.error;
+}
 AssetPreviewStats AssetPreviews::stats() const { return impl_->statistics; }
 } // namespace crimson

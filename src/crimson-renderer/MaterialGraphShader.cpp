@@ -3,6 +3,13 @@
 #include "assets/MaterialAsset.h"
 #include <stdexcept>
 namespace crimson {
+namespace {
+// This historical surface contract is immutable for Decal-only changes even
+// though its spelling contains an older decal-domain token. Splitting the two
+// literals retains every current key and lets future Decal edits stay local.
+constexpr const char* surfaceShaderContract="crimson-material-graph-v13;abi39;decal-domain-v2;pbr-quality-v1;ssr-reflection-v1;surface5-v1;refraction-pair-matte-v3;height-domain-v2;mesh-shading-v1;atomic-images-v1;12-textures;208-vec4;ibl12-13;forward-plus-brdf14;shadow15;point-directional-depth;runtime-uniforms;particle-instance80-orientation;rgb-to-scalar-r;point-record6;near-falloff-specular;finite-point-range-v4;source-radius-ggx-pcss-v2;distance-attenuation-v1;environment-ambient-color-v1";
+constexpr const char* decalShaderContract="crimson-material-graph-v13;abi39;decal-domain-v2;pbr-quality-v1;ssr-reflection-v1;surface5-v1;refraction-pair-matte-v3;height-domain-v2;mesh-shading-v1;atomic-images-v1;12-textures;208-vec4;ibl12-13;forward-plus-brdf14;shadow15;point-directional-depth;runtime-uniforms;particle-instance80-orientation;rgb-to-scalar-r;point-record6;near-falloff-specular;finite-point-range-v4;source-radius-ggx-pcss-v2;distance-attenuation-v1;environment-ambient-color-v1";
+}
 ShaderCompileRecipe materialGraphShaderRecipe(const ShaderCompileConfig& config,const MaterialGraphShader& graph,const MaterialGraphShaderVariant& variant) {
     ShaderCompileRecipe result;
     // Resource jobs and disk entries describe one compiler input, not the entire
@@ -12,7 +19,7 @@ ShaderCompileRecipe materialGraphShaderRecipe(const ShaderCompileConfig& config,
     result.name=std::string(graph.nodePreview?"graph-preview-stage-":"graph-stage-")+std::to_string(hash);result.source=variant.source;
     result.varyingDefinition=config.sourceDirectory/variant.varyingName;
     result.includeDirectories={config.sourceDirectory,config.includeDirectory};
-    result.contract="crimson-material-graph-v13;abi39;decal-domain-v2;pbr-quality-v1;ssr-reflection-v1;surface5-v1;refraction-pair-matte-v3;height-domain-v2;mesh-shading-v1;atomic-images-v1;12-textures;208-vec4;ibl12-13;forward-plus-brdf14;shadow15;point-directional-depth;runtime-uniforms;particle-instance80-orientation;rgb-to-scalar-r;point-record6;near-falloff-specular;finite-point-range-v4;source-radius-ggx-pcss-v2;distance-attenuation-v1;environment-ambient-color-v1";
+    result.contract=variant.pass==MaterialGraphPass::Decal?decalShaderContract:surfaceShaderContract;
     if(variant.pass==MaterialGraphPass::Model || variant.pass==MaterialGraphPass::Picking || variant.pass==MaterialGraphPass::ModelTransmission || variant.pass==MaterialGraphPass::ModelReflection)result.contract+=";model-instance-opacity-v1";
     return result;
 }

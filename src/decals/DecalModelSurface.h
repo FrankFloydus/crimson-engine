@@ -32,7 +32,16 @@ using OriginalPrimitiveLoader=std::function<std::shared_ptr<const ModelPrimitive
 ModelSurface buildModelSurface(const ModelAsset&,uint64_t fingerprint,SourceNormals,
     const OriginalPrimitiveLoader& original={},std::stop_token stop={});
 // Conservative BVH query. Returned indices address surface.triangles, whose triangle IDs retain source provenance.
-std::vector<uint32_t> querySurfaceTriangles(const ModelDrawSurface&,const Mat4& entityWorld,const Aabb& worldBounds);
+std::vector<uint32_t> querySurfaceTriangles(const ModelDrawSurface&,const Mat4& entityWorld,const Aabb& worldBounds,std::stop_token stop={});
+struct DecalSourceQuery {
+    std::array<double,3> center{};
+    double radius{},maximumDistance{},tolerance{};
+};
+// Uses the exact seed geometry and the topology builder's sampling domain.
+// The input budget applies after this geometric query, not to its AABB broad phase.
+DecalSourceQuery decalSourceQuery(const ModelSurface&,const Mat4& entityWorld,const DecalBuildRequest&);
+std::vector<uint32_t> querySurfaceTriangles(const ModelDrawSurface&,const Mat4& entityWorld,
+    const DecalSourceQuery&,std::stop_token stop={});
 struct ModelSurfaceHit {
     DecalSeed seed;
     Vec3 localPoint{},localNormal{}; // Model-root coordinates, including the source draw transform once.

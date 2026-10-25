@@ -56,6 +56,33 @@ const std::map<std::string,std::string> varying{
     {"vs_collision_overlay","collision_overlay.varying.def.sc"},{"fs_collision_overlay","collision_overlay.varying.def.sc"},
     {"vs_grid","varying.def.sc"},{"fs_grid","varying.def.sc"},{"fs_encode","varying.def.sc"},{"fs_sky","varying.def.sc"},{"vs_imgui","imgui.varying.def.sc"},{"fs_imgui","imgui.varying.def.sc"}};
 struct NativeHandle { HANDLE value{INVALID_HANDLE_VALUE}; ~NativeHandle(){if(value && value!=INVALID_HANDLE_VALUE) CloseHandle(value);} };
+class ShaderCompileLease {
+    NativeHandle mutex_;
+    bool owned_{};
+public:
+    ShaderCompileLease(const ShaderCompileConfig& config,std::string_view identity,std::stop_token stop) {
+        // The editor, build warmer and sibling workers can request the same
+        // cold input. Atomic publication protects bytes, but does not prevent
+        // duplicate expensive compiler processes. Serialize only that input;
+        // the next owner recomputes dependencies and checks its finished cache.
+        std::uint64_t key=14695981039346656037ull;
+        const auto add=[&](std::string_view value){for(const unsigned char byte:value){key^=byte;key*=1099511628211ull;}key^=0;key*=1099511628211ull;};
+        add(resourcePathKey(config.cacheDirectory));add(resourcePathKey(config.compiler));
+        add(resourcePathKey(config.sourceDirectory));add(resourcePathKey(config.includeDirectory));add(config.buildContract);add(identity);
+        const auto name=L"Local\\CrimsonShaderCache-v1-"+std::to_wstring(key);
+        mutex_.value=CreateMutexW(nullptr,FALSE,name.c_str());
+        if(!mutex_.value)throw std::runtime_error("Could not coordinate shader cache compilation.");
+        for(;;) {
+            if(stop.stop_requested())throw std::runtime_error("Shader compilation canceled.");
+            const auto result=WaitForSingleObject(mutex_.value,20);
+            if(result==WAIT_OBJECT_0||result==WAIT_ABANDONED){owned_=true;break;}
+            if(result!=WAIT_TIMEOUT)throw std::runtime_error("Could not wait for shader cache compilation.");
+        }
+    }
+    ~ShaderCompileLease(){if(owned_)ReleaseMutex(mutex_.value);}
+    ShaderCompileLease(const ShaderCompileLease&)=delete;
+    ShaderCompileLease& operator=(const ShaderCompileLease&)=delete;
+};
 std::string utf8(const std::filesystem::path& path) {
     const auto text=path.generic_u8string(); return {reinterpret_cast<const char*>(text.data()),text.size()};
 }
@@ -203,6 +230,7 @@ ShaderBinary compileShader(const ShaderCompileConfig& config,const std::string& 
     shared::profiling::CpuZone zone{location};zone.text(name);
     metrics.workerRequests.fetch_add(1,std::memory_order_relaxed);
     if(!std::filesystem::is_regular_file(config.compiler)) throw std::runtime_error("Pinned shader compiler is unavailable; embedded shaders remain active.");
+    ShaderCompileLease lease(config,"engine:"+name,token);
     auto dependencies=shaderDependencies(config,name);const auto dependencyState=fingerprintFileStates(dependencies);
     const auto initialFingerprint=fingerprintFiles(dependencies);
     auto fingerprint=compileFingerprint(config,name,initialFingerprint);
@@ -216,7 +244,7 @@ ShaderBinary compileShader(const ShaderCompileConfig& config,const std::string& 
     }
     {std::error_code ignored;std::filesystem::remove(target,ignored);}
     static std::atomic_uint64_t sequence{};
-    const auto stage=config.cacheDirectory/(name+"-"+std::to_string(sequence.fetch_add(1))+".tmp");
+    const auto stage=config.cacheDirectory/(name+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(sequence.fetch_add(1))+".tmp");
     try {
         const auto command=L"-f "+quoted(config.sourceDirectory/(name+".sc"))+L" -o "+quoted(stage)+L" --platform windows --type "+
             (name.starts_with("cs_") ? std::wstring(L"compute") : name.starts_with("vs_") ? std::wstring(L"vertex") : std::wstring(L"fragment"))+L" --profile s_5_0 -O 3 --depends --varyingdef "+
@@ -370,6 +398,7 @@ ShaderBinary compileShader(const ShaderCompileConfig& config,const ShaderCompile
     if(token.stop_requested())throw std::runtime_error("Shader compilation canceled.");
     if(!std::filesystem::is_regular_file(config.compiler))throw std::runtime_error("Pinned shader compiler is unavailable.");
     const auto identity=recipeIdentity(recipe);
+    ShaderCompileLease lease(config,"generated:"+identity,token);
     auto dependencies=shaderDependencies(config,recipe);
     const auto dependencyState=fingerprintFileStates(dependencies);
     auto fingerprint=recipeFingerprint(config,identity,dependencies);

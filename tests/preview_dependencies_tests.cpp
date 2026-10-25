@@ -54,6 +54,10 @@ void sourcePathNormalization() {
     require(unique[0]==first&&unique[1]==second,"Preview source normalization lost the first original source spelling.");
     require(uniquePreviewSourceFiles(unique)==unique,"Normalizing an already prepared source descriptor changed it.");
     require(uniquePreviewSourceFiles({}).empty(),"An empty source descriptor acquired a dependency.");
+    PreviewDependencies descriptor;descriptor.files=uniquePreviewSourceFiles({first,"content/FIRST.PNG",fs::absolute(first)});descriptor.sourceFingerprints={1234};
+    require(descriptor.sourceMatches(first,1234)&&descriptor.sourceMatches("CONTENT/first.png",1234)&&descriptor.sourceMatches(fs::absolute(first),1234),
+        "A deduplicated Windows source alias left a coherent GPU thumbnail pending forever.");
+    require(!descriptor.sourceMatches(second,1234)&&!descriptor.sourceMatches(first,4321),"Canonical source lookup accepted another file or stale GPU bytes.");
 }
 void fairRequestScheduling() {
     using namespace crimson;
