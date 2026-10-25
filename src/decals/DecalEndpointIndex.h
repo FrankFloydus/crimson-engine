@@ -5,6 +5,16 @@
 #include <vector>
 
 namespace crimson::decals::detail {
+// Use the same best-conditioned surface coordinates as cell orientation.
+// An off-plane candidate with identical surface coordinates to a cell corner
+// is not an additional boundary sample, even if a 3D dot product rounds its
+// edge parameter to a tiny positive value. This is exact equality, not a weld.
+struct SurfaceEndpointProjection {
+    size_t u{},v{};
+    explicit SurfaceEndpointProjection(D3 normal){size_t axis=0;for(size_t i=1;i<3;++i)if(std::abs(normal[i])>std::abs(normal[axis]))axis=i;u=(axis+1)%3;v=(axis+2)%3;}
+    bool coincident(D3 a,D3 b)const{return a[u]==b[u]&&a[v]==b[v];}
+};
+
 // Immutable point index for the shared-endpoint pass. The query only rejects
 // points outside a conservative segment box; the caller retains the precise
 // edge-distance, interval and provenance predicates and final ordering.

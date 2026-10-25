@@ -8,6 +8,10 @@
 #include "decal_polygon_intervals_fixture.h"
 #include "decal_orientation_fixture.h"
 #include "decal_endpoint_index_fixture.h"
+#include "decal_intrinsic_conditioning_fixture.h"
+#include "decal_exact_geodesics_fixture.h"
+#include "decal_geodesic_heading_fixture.h"
+#include "decal_finite_contact_fixture.h"
 #include <algorithm>
 #include <iostream>
 #include <cmath>
@@ -178,7 +182,7 @@ void nondevelopable(){
     DecalSurfaceSnapshot s;SurfaceReceiver receiver;receiver.id.entity=1;receiver.generation=1;
     const auto p=[](double x,double y){return Vec3{x,y,.1*(x*x+y*y)};};
     for(int y=0;y<6;++y)for(int x=0;x<6;++x){double a=-1.5+x*.5,b=-1.5+y*.5;auto q=quad(1,p(a,b),p(a+.5,b),p(a+.5,b+.5),p(a,b+.5));for(auto&t:q.triangles){t.triangle=static_cast<uint32_t>(receiver.triangles.size());receiver.triangles.push_back(t);}}
-    s.receivers.push_back(receiver);auto r=request();r.seed.triangle=42;r.seed.barycentrics={1,0,0};r.frame.at(0,0)=.8f;r.frame.at(1,1)=.8f;auto result=build(s,r,"nondevelopable bowl AffineAdaptive");require(result.usable(),result.message);require(!result.statistics.usedDevelopableUnfolding,"Curved bowl incorrectly accepted as developable");provenance(s,result);
+    s.receivers.push_back(receiver);auto r=request();r.seed.triangle=42;r.seed.barycentrics={1,0,0};r.frame.at(0,0)=.8f;r.frame.at(1,1)=.8f;auto result=build(s,r,"nondevelopable bowl intrinsic log map");require(result.usable(),result.message);require(!result.statistics.usedDevelopableUnfolding,"Curved bowl incorrectly accepted as developable");provenance(s,result);
 }
 void closedBuiltinCylinder(){
     // Match the editor's default builtin cylinder, including its separate cap
@@ -211,4 +215,4 @@ void closedBuiltinCylinder(){
 }
 void failures(){DecalSurfaceSnapshot s{{quad(1,{-1,-1,0},{1,-1,0},{1,1,0},{-1,1,0})}};auto r=request();std::stop_source stop;stop.request_stop();require(buildDecalPatch(s,r,stop.get_token()).status==DecalPatchStatus::Cancelled,"Cancellation ignored");r.limits.maximumTriangles=5;require(buildDecalPatch(s,r).status==DecalPatchStatus::LimitExceeded,"Geometry cap silently truncated");r=request();r.frame.at(0,0)=0;require(buildDecalPatch(s,r).status==DecalPatchStatus::InvalidInput,"Singular frame accepted");r=request();r.seed.receiver.entity=99;require(buildDecalPatch(s,r).status==DecalPatchStatus::MissingSeed,"Missing seed invented surface");}
 }
-int main(){try{test::runOrientationProofs();test::runEndpointIndexProofs();test::runContactCellsProofs();test::runPolygonIntervalsProofs();test::runPolygonProofs();test::runUnfoldProofs();planeAndAffine();imageOrientation();translatedPlanePrecision();resizedArch();localDevelopableFootprint();seams();boundedConnectedPreparation();denseSourceAndFootprintBudgets();narrowFootprints();curved();nondevelopable();closedBuiltinCylinder();failures();savedContactCells();std::cout<<"All decal CPU surface proofs passed\n";return 0;}catch(const std::exception&e){std::cerr<<"DECAL PROOF FAILED: "<<e.what()<<'\n';return 1;}}
+int main(){try{test::runExactGeodesicProofs();test::runGeodesicHeadingProofs();test::runFiniteContactProofs();test::runIntrinsicConditioningProofs();test::runOrientationProofs();test::runEndpointIndexProofs();test::runContactCellsProofs();test::runPolygonIntervalsProofs();test::runPolygonProofs();test::runUnfoldProofs();planeAndAffine();imageOrientation();translatedPlanePrecision();resizedArch();localDevelopableFootprint();seams();boundedConnectedPreparation();denseSourceAndFootprintBudgets();narrowFootprints();curved();nondevelopable();closedBuiltinCylinder();failures();savedContactCells();std::cout<<"All decal CPU surface proofs passed\n";return 0;}catch(const std::exception&e){std::cerr<<"DECAL PROOF FAILED: "<<e.what()<<'\n';return 1;}}

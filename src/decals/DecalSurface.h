@@ -4,6 +4,7 @@
 #include <array>
 #include <compare>
 #include <cstdint>
+#include <memory>
 #include <stop_token>
 #include <string>
 #include <vector>
@@ -19,11 +20,24 @@ struct SurfaceTriangle {
     std::array<Vec3,3> positions{}; // Receiver-local original LOD0.
     std::array<Vec3,3> normals{};   // Unperturbed receiver shading normals; zero uses geometric normal.
 };
+// A refined MeshPaint perimeter point retains its original, straight source
+// edge and exact dyadic parameter. This is construction identity, independent
+// of rounded render positions, shading aliases and paint weights.
+struct SurfaceBoundaryPoint { Vec3 first{},last{};double parameter{}; };
+struct SurfaceBoundaryTriangle {
+    uint32_t triangle{};
+    uint8_t corners{};
+    std::array<SurfaceBoundaryPoint,3> points{};
+};
+struct SurfaceBoundaryLineage {
+    std::vector<SurfaceBoundaryTriangle> triangles; // Sorted original render triangle IDs.
+};
 struct SurfaceReceiver {
     ReceiverId id{};
     uint64_t generation{};
     Mat4 localToWorld{};
     std::vector<SurfaceTriangle> triangles;
+    std::shared_ptr<const SurfaceBoundaryLineage> boundary;
 };
 struct DecalSurfaceSnapshot { std::vector<SurfaceReceiver> receivers; };
 struct DecalSeed {

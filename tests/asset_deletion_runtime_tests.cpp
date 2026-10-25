@@ -6,6 +6,7 @@
 #include "assets/AssetLibrary.h"
 #include "assets/AtomicFile.h"
 #include "assets/ContentStorage.h"
+#include "decals/DecalResolve.h"
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "crimson-renderer/MaterialGraphGpu.h"
@@ -21,6 +22,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -189,6 +191,85 @@ void materialThumbnails(SDL_Window* window,const fs::path& sourceRoot={}) {
     require(fingerprintFiles(originalFiles)==originalFingerprint,"The actual-project thumbnail probe changed an authored source.");
     runtime.stop();frame=renderer.drainPending(frame);tools.shutdown();
 }
+// Exercise failure/backoff through the actual thumbnail owner. The material
+// dependency changes, while the scene asset and its authored decal stay intact.
+void decalThumbnailRetry(SDL_Window* window) {
+    Project project;initializeContentStorage(project.root);
+    auto receiverMaterial=createMaterialAsset(project.root,"Retry receiver");
+    materialOutputNode(receiverMaterial.graph).output.shading=MaterialShading::Unlit;
+    canonicalizeMaterialAsset(receiverMaterial);saveMaterialAsset(project.root,receiverMaterial);
+    auto decalMaterial=createMaterialAsset(project.root,"Retry decal material");
+    materialOutputNode(decalMaterial.graph).output.shading=MaterialShading::Decal;
+    materialOutputNode(decalMaterial.graph).output.baseColor={1,.1f,.1f};
+    canonicalizeMaterialAsset(decalMaterial);saveMaterialAsset(project.root,decalMaterial);
+    auto decalAsset=createDecalAsset(project.root,"Retry decal");decalAsset.material.id=decalMaterial.id;saveDecalAsset(project.root,decalAsset);
+    SceneDocument document(project.root);const auto box=document.createBox("Retry receiver");
+    auto boxRecord=*document.scene().find(box);boxRecord.modelMaterials={AssetRef<MaterialAsset>{receiverMaterial.id}};
+    require(document.updateEntity(box,boxRecord),document.status());
+    SceneDecal decal;decal.asset.id=decalAsset.id;decal.seed.receiver=box;decal.seed.modelId=boxRecord.model->id;decal.seed.localPoint={.1f,.5f,.1f};
+    const auto placement=decals::surfacePlacementFrame(decal.seed.localPoint,{0,1,0})*math::scaling({.4f,.4f,1});
+    document.createDecal(decal,"Retry surface decal",placement);
+    require(document.save("Decal thumbnail retry"),document.status());const auto sceneId=document.assetId();
+    const auto sceneFile=resolveAssetPath(project.root,sceneId),materialFile=resolveAssetPath(project.root,receiverMaterial.id);
+    const auto unchangedScene=fingerprintFiles({sceneFile});
+
+    ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));
+    ImGuiOwner context;ImGuiBgfx tools(renderer);AssetLibrary assets(project.root,&resources);
+    ResourceRuntime runtime(project.root,resources,assets,renderer,tools);EditorResources prepared(assets,renderer,resources,project.root);
+    AssetPreviews previews(project.root,assets,resources,renderer,prepared);TestGpuContext gpu;
+    renderer.resizeViewport(64,64);renderer.setGridVisible(false);bgfx::reset(64,64,BGFX_RESET_NONE);
+    auto environment=std::make_shared<PreparedEnvironment>();environment->key=0x444543414c525452;
+    environment->settings={2,8,8,16,16,16};environment->data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{.25f,.25f,.25f})},environment->settings);
+    ResourceRequestOptions environmentOptions;environmentOptions.variant="ibl";
+    resources.seed<PreparedEnvironment>(AssetRef<PreparedEnvironment>{StudioEnvironmentId},{environment,sizeof(PreparedEnvironment),environment->key,{}},environmentOptions);
+    const std::array visible{sceneId};std::uint32_t frame{};
+    const auto tick=[&]{runtime.preFrame(nullptr,frame);prepared.beginFrame();renderer.advanceStreaming();frame=renderer.advance_frame();gpu.flush();
+        previews.pump(frame,visible,32);prepared.endFrame();require(runtime.status().empty(),"Decal thumbnail coordinator: "+runtime.status());};
+    const auto until=[&](const auto& condition,const char* reason,std::chrono::seconds timeout){const auto deadline=Clock::now()+timeout;
+        do{tick();if(condition())return;std::this_thread::sleep_for(std::chrono::milliseconds{1});}while(Clock::now()<deadline);
+        throw std::runtime_error(std::string(reason)+"\nThumbnail: "+previews.diagnostic(sceneId)+"\nAssets: "+assets.status());};
+    until([&]{return previews.stats().decalPreparationFailures>0;},"Unlit receiver did not reach actual terminal thumbnail failure.",std::chrono::seconds{15});
+    require(previews.diagnostic(sceneId).find("Unlit")!=std::string::npos,"Terminal thumbnail fixture failed for an unrelated reason.");
+    const auto failed=previews.stats();const auto retryBegin=Clock::now();
+    constexpr unsigned Requests=256;
+    for(unsigned index=0;index<Requests;++index)tick();
+    const auto after=previews.stats();
+    // The retry policy is time based. This bound tolerates a slow test machine
+    // without assuming a particular CPU/GPU frame duration or sleeping a second.
+    const auto maximumRetries=static_cast<std::uint64_t>(std::ceil(std::chrono::duration<double>(Clock::now()-retryBegin).count()))+1;
+    require(after.requests>=failed.requests+Requests,"The regression did not issue repeated actual thumbnail-owner requests.");
+    require(after.decalPreparations-failed.decalPreparations<=maximumRetries&&after.decalPreparationFailures-failed.decalPreparationFailures<=maximumRetries,
+        "A terminal decal thumbnail repeated full preparation on ordinary visible-card requests.");
+    require(after.renderRequests==0&&!bgfx::isValid(renderer.thumbnailTexture(sceneId)),"An invalid decal scene was published as a finished thumbnail.");
+
+    // This is a dependent material file, not the scene's own identity. Pending
+    // failure descriptors must make this event reset the owner's real backoff.
+    materialOutputNode(receiverMaterial.graph).output.shading=MaterialShading::StandardPbr;
+    canonicalizeMaterialAsset(receiverMaterial);saveMaterialAsset(project.root,receiverMaterial);
+    assets.publishMaterial(std::make_shared<const MaterialAsset>(receiverMaterial));
+    const auto beforeInvalidate=previews.stats();previews.invalidateFile(materialFile);
+    require(previews.stats().invalidations>beforeInvalidate.invalidations,"A terminal thumbnail lost its material dependency invalidation route.");
+    const auto failuresBeforeRepair=previews.stats().decalPreparationFailures;
+    bool sawWorkerPending=false,sawMaterialPending=false;
+    until([&]{const auto stats=previews.stats();
+        require(stats.decalPreparationFailures==failuresBeforeRepair,"An active decal worker/material preparation acquired terminal thumbnail backoff.");
+        const auto diagnostic=previews.diagnostic(sceneId);
+        sawWorkerPending|=diagnostic.find("Preparing decal surface")!=std::string::npos||diagnostic.find("Preparing surface geometry")!=std::string::npos;
+        sawMaterialPending|=diagnostic.find("Compiling")!=std::string::npos||diagnostic.find("Preparing decal material")!=std::string::npos;
+        return bgfx::isValid(renderer.thumbnailTexture(sceneId));
+    },"A repaired material dependency did not resume the actual decal thumbnail.",std::chrono::seconds{90});
+    const auto repaired=previews.stats();
+    require(repaired.decalPreparations>after.decalPreparations+1&&repaired.renderRequests>0,
+        "Dependency invalidation did not resume repeated nonterminal decal preparation and publication.");
+    require(sawWorkerPending||sawMaterialPending,"The repaired fixture stopped exercising asynchronous decal readiness.");
+    require(fingerprintFiles({sceneFile})==unchangedScene,"Dependent-material thumbnail repair changed the authored scene or decal.");
+    std::cout<<"Actual decal thumbnail retry: requests="<<after.requests-failed.requests
+        <<" terminal_preparations="<<after.decalPreparations-failed.decalPreparations
+        <<" repaired_preparations="<<repaired.decalPreparations-after.decalPreparations
+        <<" worker_pending="<<sawWorkerPending<<" material_pending="<<sawMaterialPending<<" published=true\n";
+    runtime.stop();frame=renderer.drainPending(frame);tools.shutdown();
+}
+
 void exercise(SDL_Window* window) {
     Project project;auto fixture=bundle_test::writeFixture(project.root);
     const auto colorId=newAssetId(),normalId=newAssetId();
@@ -334,7 +415,8 @@ int main(int argc,char** argv) {
         const std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(
             SDL_CreateWindow("Crimson deletion resource regression",64,64,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
         require(bool(window),SDL_GetError());
-        if(argc>=2&&std::string_view(argv[1])=="--material-thumbnails")materialThumbnails(window.get(),argc>=3?fs::path(argv[2]):fs::path{});
+        if(argc>=2&&std::string_view(argv[1])=="--decal-thumbnail-retry")decalThumbnailRetry(window.get());
+        else if(argc>=2&&std::string_view(argv[1])=="--material-thumbnails")materialThumbnails(window.get(),argc>=3?fs::path(argv[2]):fs::path{});
         else exercise(window.get());
         return 0;
     }catch(const std::exception& error){std::cerr<<"Asset deletion runtime test failed: "<<error.what()<<'\n';return 1;}

@@ -76,8 +76,8 @@ ModelSurfaceHit sourceHit(const ModelDrawSurface&draw,const SurfaceTriangle&tria
 }
 size_t ModelSurface::bytes() const noexcept {
     size_t result=sizeof(*this)+draws.capacity()*sizeof(ModelDrawSurface)+diagnostic.capacity();
-    for(const auto& draw:draws)result+=draw.surface.triangles.capacity()*sizeof(SurfaceTriangle)+
-        draw.order.capacity()*sizeof(uint32_t)+draw.nodes.capacity()*sizeof(SourceBvhNode);
+    for(const auto& draw:draws){result+=draw.surface.triangles.capacity()*sizeof(SurfaceTriangle)+
+        draw.order.capacity()*sizeof(uint32_t)+draw.nodes.capacity()*sizeof(SourceBvhNode);if(draw.surface.boundary)result+=sizeof(SurfaceBoundaryLineage)+draw.surface.boundary->triangles.capacity()*sizeof(SurfaceBoundaryTriangle);}
     return result;
 }
 ModelSurface buildModelSurface(const ModelAsset& model,uint64_t fingerprint,SourceNormals mode,

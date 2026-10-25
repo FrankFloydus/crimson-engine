@@ -40,6 +40,7 @@ inline Json snapshotJson(const DecalSurfaceSnapshot& snapshot,const DecalBuildRe
             for(size_t i=0;i<3;++i){positions.push_back(triangle.positions[i].values);normals.push_back(triangle.normals[i].values);}
             item["triangles"].push_back({{"triangle",triangle.triangle},{"positions",positions},{"normals",normals}});
         }
+        if(receiver.boundary){item["boundary"]=Json::array();for(const auto& record:receiver.boundary->triangles){Json points=Json::array();for(const auto& point:record.points)points.push_back({{"first",point.first.values},{"last",point.last.values},{"parameter",point.parameter}});item["boundary"].push_back({{"triangle",record.triangle},{"corners",record.corners},{"points",points}});}}
         output["receivers"].push_back(std::move(item));
     }
     return output;
@@ -58,6 +59,7 @@ inline std::pair<DecalSurfaceSnapshot,DecalBuildRequest> snapshotInput(const Jso
             for(size_t i=0;i<3;++i){triangle.positions[i]=vector(input.at("positions").at(i));triangle.normals[i]=vector(input.at("normals").at(i));}
             receiver.triangles.push_back(triangle);
         }
+        if(item.contains("boundary")){auto boundary=std::make_shared<SurfaceBoundaryLineage>();for(const auto& input:item.at("boundary")){SurfaceBoundaryTriangle record;record.triangle=input.at("triangle").get<uint32_t>();record.corners=input.at("corners").get<uint8_t>();for(size_t i=0;i<3;++i){const auto& point=input.at("points").at(i);record.points[i]={vector(point.at("first")),vector(point.at("last")),point.at("parameter").get<double>()};}boundary->triangles.push_back(record);}receiver.boundary=std::move(boundary);}
         snapshot.receivers.push_back(std::move(receiver));
     }
     return {std::move(snapshot),request};

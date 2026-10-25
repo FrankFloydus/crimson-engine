@@ -5,6 +5,7 @@
 #include <crimson/renderer/forward/ForwardTypes.hpp>
 #include <chrono>
 #include <unordered_map>
+#include "decals/DecalSurface.h"
 
 namespace crimson {
 class AssetLibrary;
@@ -13,6 +14,7 @@ struct MeshPaintPreparedDraw {
     std::uint32_t draw{},sourcePrimitive{},primitive{};
     std::shared_ptr<const MeshPaintGeometry> geometry;
     std::shared_ptr<const MeshPaintPayload> weights;
+    std::shared_ptr<const decals::SurfaceBoundaryLineage> decalBoundary;
     bool compatible{true};
 };
 struct PreparedMeshPaintModel {

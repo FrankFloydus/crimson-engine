@@ -18,7 +18,7 @@ namespace {
 std::atomic_uint64_t nextSubdivisionOverlayOwner{1};
 constexpr std::size_t MaximumSubdivisionOverlayBytes=128ull*1024*1024,MaximumSubdivisionOverlayEntries=256;
 struct ModelData final:ModelAsset {
-    struct Draw {std::uint32_t sourcePrimitive{};std::shared_ptr<const MeshPaintGeometry> geometry;std::shared_ptr<const MeshPaintPayload> base;};
+    struct Draw {std::uint32_t sourcePrimitive{};std::shared_ptr<const MeshPaintGeometry> geometry;std::shared_ptr<const MeshPaintPayload> base;std::shared_ptr<const decals::SurfaceBoundaryLineage> boundary,decalBoundary;};
     std::vector<Draw> paintedDraws;
     std::optional<SceneMeshPaint> resampled;
     std::shared_ptr<const ModelAsset> source;
@@ -35,8 +35,8 @@ bool rigidSource(const ModelAsset& model){return model.skins.empty()&&model.anim
 std::uint64_t paintKey(const std::optional<SceneMeshPaint>& paint){std::uint64_t hash=1469598103934665603ull;if(paint)for(const auto& draw:paint->draws){mix(hash,draw.draw);mix(hash,draw.primitive);mix(hash,draw.level);mix(hash,draw.sourceSignature);mix(hash,draw.weights?draw.weights->fingerprint:0);}return hash;}
 std::size_t bytes(const ModelData& model){std::size_t total=sizeof(ModelData);std::unordered_set<const MeshPaintGeometry*> geometries;
     for(const auto& p:model.primitives)total+=sizeof(ModelPrimitive)+p.vertices.size()*sizeof(ModelVertex)+p.indices.size()*sizeof(std::uint32_t);
-    for(const auto& d:model.paintedDraws)if(geometries.insert(d.geometry.get()).second){total+=sizeof(MeshPaintGeometry)+(d.geometry->vertices.size()+d.geometry->shadingVertices.size())*sizeof(ModelVertex)+d.geometry->indices.size()*sizeof(std::uint32_t)+d.geometry->cells.size()*sizeof(MeshPaintCell)+d.geometry->boundaryEdges.size()*sizeof(std::array<std::uint32_t,2>);
-        for(const auto& list:d.geometry->vertexTriangles)total+=sizeof(list)+list.size()*sizeof(std::uint32_t);for(const auto& list:d.geometry->seamVertices)total+=sizeof(list)+list.size()*sizeof(std::uint32_t);}
+    for(const auto& d:model.paintedDraws){if(d.boundary)total+=sizeof(decals::SurfaceBoundaryLineage)+d.boundary->triangles.capacity()*sizeof(decals::SurfaceBoundaryTriangle);if(d.decalBoundary&&d.decalBoundary!=d.boundary)total+=sizeof(decals::SurfaceBoundaryLineage)+d.decalBoundary->triangles.capacity()*sizeof(decals::SurfaceBoundaryTriangle);if(geometries.insert(d.geometry.get()).second){total+=sizeof(MeshPaintGeometry)+(d.geometry->vertices.size()+d.geometry->shadingVertices.size())*sizeof(ModelVertex)+d.geometry->indices.size()*sizeof(std::uint32_t)+d.geometry->cells.size()*sizeof(MeshPaintCell)+d.geometry->boundaryEdges.size()*sizeof(std::array<std::uint32_t,2>);
+        for(const auto& list:d.geometry->vertexTriangles)total+=sizeof(list)+list.size()*sizeof(std::uint32_t);for(const auto& list:d.geometry->seamVertices)total+=sizeof(list)+list.size()*sizeof(std::uint32_t);}}
     if(model.decalAsset){total+=sizeof(ModelAsset);for(const auto& p:model.decalAsset->primitives)total+=sizeof(ModelPrimitive)+p.vertices.size()*sizeof(ModelVertex)+p.indices.size()*sizeof(std::uint32_t);}
     if(model.resampled)for(const auto& d:model.resampled->draws)if(d.weights)for(const auto& page:d.weights->pages)if(page)total+=sizeof(MeshPaintPage);return total;
 }
@@ -53,9 +53,11 @@ std::shared_ptr<ModelData> build(const std::shared_ptr<const ModelAsset>& source
             catch(const std::exception& error){cancelled(stop);throw std::runtime_error(std::string("Original paint geometry cache: ")+error.what());}}}
         auto& geometry=geometries[draw.primitive];if(!geometry){CRIMSON_PROFILE_ZONE("Vertex paint corner quad refinement");geometry=buildMeshPaintGeometry(*original,level,stop);}
         vertexTotal+=geometry->vertices.size();triangleTotal+=geometry->indices.size()/3;if(vertexTotal>MaximumMeshPaintVertices||triangleTotal>MaximumMeshPaintTriangles)throw std::runtime_error("Subdivision exceeds this entity's 262144 vertex / 524288 triangle budget.");
-        const auto primitive=static_cast<std::uint32_t>(result->primitives.size());result->primitives.push_back(meshPaintRenderPrimitive(*original,*geometry));result->draws[drawIndex].primitive=primitive;result->paintedDraws.push_back({draw.primitive,geometry,makeMeshPaintPayload(static_cast<std::uint32_t>(geometry->vertices.size()))});mix(result->signature,geometry->signature);
+        const auto primitive=static_cast<std::uint32_t>(result->primitives.size());result->primitives.push_back(meshPaintRenderPrimitive(*original,*geometry));result->draws[drawIndex].primitive=primitive;const auto boundary=decals::meshPaintBoundaryLineage(*original,*geometry,stop);result->paintedDraws.push_back({draw.primitive,geometry,makeMeshPaintPayload(static_cast<std::uint32_t>(geometry->vertices.size())),boundary,boundary});mix(result->signature,geometry->signature);
         {CRIMSON_PROFILE_ZONE("Decal paint-only refinement removal");
-        if(auto simplified=decals::simplifyDecalPaintPrimitive(*original,*geometry,stop)){
+        std::shared_ptr<const decals::SurfaceBoundaryLineage> retainedBoundary;
+        if(auto simplified=decals::simplifyDecalPaintPrimitive(*original,*geometry,stop,boundary.get(),&retainedBoundary)){
+            result->paintedDraws.back().decalBoundary=std::move(retainedBoundary);
             if(!decalAsset){decalAsset=std::make_shared<ModelAsset>();*decalAsset=*result;decalAsset->primitives.back()=std::move(*simplified);}
             else decalAsset->primitives.push_back(std::move(*simplified));
         }else if(decalAsset)decalAsset->primitives.push_back(result->primitives.back());}
@@ -100,8 +102,8 @@ PreparedMeshPaintModel MeshPaintResources::prepare(const EntityRecord& record,Re
     // Generated smooth normals depend on triangle density. Retain their exact
     // render mesh; only explicit/flat normal modes use the proven proxy.
     out.decalAsset=record.meshShading!=MeshShading::Smooth&&data->decalAsset?data->decalAsset:out.asset;
-    out.decalSignature=out.signature;if(out.decalAsset!=out.asset)mix(out.decalSignature,0x646563616c707278ull);
-    for(std::uint32_t i=0;i<data->paintedDraws.size();++i){const auto& d=data->paintedDraws[i];MeshPaintPreparedDraw result;result.draw=i;result.sourcePrimitive=d.sourcePrimitive;result.primitive=data->draws[i].primitive;result.geometry=d.geometry;
+    out.decalSignature=out.signature;if(out.decalAsset!=out.asset)mix(out.decalSignature,0x646563616c707278ull);mix(out.decalSignature,0x626f756e64617279ull);
+    for(std::uint32_t i=0;i<data->paintedDraws.size();++i){const auto& d=data->paintedDraws[i];MeshPaintPreparedDraw result;result.draw=i;result.sourcePrimitive=d.sourcePrimitive;result.primitive=data->draws[i].primitive;result.geometry=d.geometry;result.decalBoundary=out.decalAsset==out.asset?d.boundary:d.decalBoundary;
         const SceneMeshPaintDraw* stored=nullptr;if(record.meshPaint)for(const auto& candidate:record.meshPaint->draws)if(candidate.draw==i&&candidate.primitive==d.sourcePrimitive){stored=&candidate;break;}
         if(stored){result.compatible=stored->sourceSignature==d.geometry->sourceSignature&&stored->level==d.geometry->level&&stored->weights&&stored->weights->vertexCount==d.geometry->vertices.size();if(result.compatible)result.weights=stored->weights;else out.diagnostic="Vertex paint source changed. Reset Paint to start again.";}
         if(!result.weights)result.weights=d.base;out.bindings.push_back({result.draw,result.primitive,result.geometry,result.weights});out.draws.push_back(std::move(result));}

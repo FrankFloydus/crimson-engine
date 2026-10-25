@@ -101,6 +101,14 @@ ProbeOptions probeOptions(int argc,char** argv,int first) {
     }
     require(!result.exportOnly||!result.exportFile.empty(),"--export-only requires --export.");return result;
 }
+ModelSurface paintedSurface(ModelAsset model,uint32_t level,bool useProxy,SourceNormals mode,uint64_t fingerprint=1){
+    std::vector<std::shared_ptr<const SurfaceBoundaryLineage>> boundaries(model.primitives.size());
+    for(size_t i=0;i<model.primitives.size();++i){auto& primitive=model.primitives[i];if(!level||primitive.hasSkinning)continue;const auto geometry=buildMeshPaintGeometry(primitive,level);auto boundary=meshPaintBoundaryLineage(primitive,*geometry);std::shared_ptr<const SurfaceBoundaryLineage> retained;
+        auto proxy=useProxy&&mode!=SourceNormals::Smooth?simplifyDecalPaintPrimitive(primitive,*geometry,{},boundary.get(),&retained):std::optional<ModelPrimitive>{};
+        if(proxy){primitive=std::move(*proxy);boundary=std::move(retained);}else primitive=meshPaintRenderPrimitive(primitive,*geometry);boundaries[i]=std::move(boundary);
+    }
+    auto result=buildModelSurface(model,fingerprint,mode);for(auto& draw:result.draws)draw.surface.boundary=boundaries.at(draw.surface.id.primitive);return result;
+}
 void sceneProbe(const fs::path& sceneFile,const std::string& name,const ProbeOptions& options) {
     const auto root=sceneFile.parent_path().parent_path();const auto scene=readJson(sceneFile),locations=readJson(root/".crimson/asset-locations.json").at("assets");
     std::map<std::string,Json> entities;for(const auto& entity:scene.at("entities"))entities.emplace(entity.at("id").get<std::string>(),entity);
@@ -117,8 +125,7 @@ void sceneProbe(const fs::path& sceneFile,const std::string& name,const ProbeOpt
         const auto entityWorld=world(world,entity);Aabb bounds;for(const auto& primitive:model.primitives)for(const auto& vertex:primitive.vertices)math::include(bounds,math::transformPoint(entityWorld,vertex.position));
         const auto extent=Vec3{radius+projection,radius+projection,radius+projection};bool near=bounds.valid;for(size_t axis=0;axis<3;++axis)near&=bounds.minimum[axis]<=center[axis]+extent[axis]&&bounds.maximum[axis]>=center[axis]-extent[axis];if(!near)continue;
         const auto level=entity.contains("meshPaint")?entity.at("meshPaint").value("level",0u):0u;
-        for(auto& primitive:model.primitives)if(level&&!primitive.hasSkinning){const auto geometry=buildMeshPaintGeometry(primitive,level);const auto proxy=simplifyDecalPaintPrimitive(primitive,*geometry);primitive=proxy?*proxy:meshPaintRenderPrimitive(primitive,*geometry);}
-        auto source=buildModelSurface(model,1,static_cast<SourceNormals>(entity.value("meshShading",0)));if(!source.draws.empty())sources.push_back({entity.at("name").get<std::string>(),std::stoull(id,nullptr,16),entityWorld,std::move(source)});
+        auto source=paintedSurface(std::move(model),level,true,static_cast<SourceNormals>(entity.value("meshShading",0)));if(!source.draws.empty())sources.push_back({entity.at("name").get<std::string>(),std::stoull(id,nullptr,16),entityWorld,std::move(source)});
     }
     const auto saved=std::stoull(decal->at("decal").at("seed").at("receiver").get<std::string>(),nullptr,16);std::optional<ModelSurfaceHit> seed;const Source* seedSource{};double distance=INFINITY;
     for(const auto& source:sources){const auto hit=projectModelSurfaceHit(source.surface,source.entity,source.world,center,projection);if(!hit.hit)continue;const auto d=math::length(math::transformPoint(source.world,hit.hit->localPoint)-center);if(d<distance-1e-5||(std::abs(d-distance)<1e-5&&source.entity==saved)){distance=d;seed=hit.hit;seedSource=&source;}}
@@ -156,9 +163,7 @@ Mat4 roomWorld() {
     std::copy(values.begin(),values.end(),result.begin());return result;
 }
 void run(const ModelAsset& original,unsigned level,const std::vector<float>& sizes,bool useProxy,bool adaptiveBudget) {
-    auto model=original;std::size_t triangles{};
-    for(auto& primitive:model.primitives){if(level){const auto geometry=buildMeshPaintGeometry(primitive,level);auto proxy=useProxy?simplifyDecalPaintPrimitive(primitive,*geometry):std::optional<ModelPrimitive>{};primitive=proxy?std::move(*proxy):meshPaintRenderPrimitive(primitive,*geometry);}triangles+=primitive.indices.size()/3;}
-    const auto source=buildModelSurface(model,level+1,SourceNormals::UseMeshNormals);const auto world=roomWorld();
+    const auto source=paintedSurface(original,level,useProxy,SourceNormals::UseMeshNormals,level+1);std::size_t triangles{};for(const auto& draw:source.draws)triangles+=draw.surface.triangles.size();const auto world=roomWorld();
     const auto point=math::transformPoint(world,{.371f,-.5f,-.231f});
     const auto hit=projectModelSurfaceHit(source,0x6f1f1f91d24b1ed1ull,world,point,.005f,[](std::uint32_t material){return material==1;});
     require(hit.hit.has_value(),"Room floor seed could not be resolved.");

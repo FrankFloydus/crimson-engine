@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <stdexcept>
+#include <tuple>
 
 namespace crimson::decals {
 namespace {
@@ -20,8 +21,39 @@ struct Face {
     Vec3 origin{},shadingNormal{};
 };
 }
-std::optional<ModelPrimitive> simplifyDecalPaintPrimitive(const ModelPrimitive& source,
+std::shared_ptr<const SurfaceBoundaryLineage> meshPaintBoundaryLineage(const ModelPrimitive& source,
     const MeshPaintGeometry& refined,std::stop_token stop) {
+    cancelled(stop);if(!refined.level)return {};
+    const auto coarse=buildMeshPaintGeometry(source,0,stop);
+    if(coarse->sourceSignature!=refined.sourceSignature)throw std::runtime_error("Decal boundary has incompatible paint source provenance.");
+    auto result=std::make_shared<SurfaceBoundaryLineage>();uint32_t triangle{};
+    for(const auto& cell:refined.cells){
+        cancelled(stop);if(cell.sourceFace>=coarse->cells.size())throw std::runtime_error("Decal boundary has an invalid source face.");
+        const auto& face=coarse->cells[cell.sourceFace];
+        for(unsigned t=0;t<cell.cornerCount-2u;++t,++triangle){
+            SurfaceBoundaryTriangle record;record.triangle=triangle;
+            for(unsigned c=0;c<3;++c){
+                const auto logical=cell.triangleCorners[t*3+c];const auto uv=cell.sourceCoordinates[logical];
+                for(unsigned edge=0;edge<face.cornerCount;++edge){
+                    const auto a=face.sourceCoordinates[edge],b=face.sourceCoordinates[(edge+1)%face.cornerCount];
+                    const double dx=double(b[0])-a[0],dy=double(b[1])-a[1],x=double(uv[0])-a[0],y=double(uv[1])-a[1];
+                    if(dx*y-dy*x!=0)continue;double parameter=std::abs(dx)>=std::abs(dy)?x/dx:y/dy;if(parameter<0||parameter>1)continue;
+                    auto first=coarse->vertices.at(face.vertices[edge]).position,last=coarse->vertices.at(face.vertices[(edge+1)%face.cornerCount]).position;
+                    // The same original edge in opposite face winding uses
+                    // the identical arithmetic recipe and parameter direction.
+                    if(std::tie(last[0],last[1],last[2])<std::tie(first[0],first[1],first[2])){std::swap(first,last);parameter=1-parameter;}
+                    record.points[c]={first,last,parameter};record.corners|=1u<<c;break;
+                }
+            }
+            if(record.corners)result->triangles.push_back(record);
+        }
+    }
+    return result->triangles.empty()?nullptr:result;
+}
+std::optional<ModelPrimitive> simplifyDecalPaintPrimitive(const ModelPrimitive& source,
+    const MeshPaintGeometry& refined,std::stop_token stop,const SurfaceBoundaryLineage* fineBoundary,
+    std::shared_ptr<const SurfaceBoundaryLineage>* retainedBoundary) {
+    if(retainedBoundary)retainedBoundary->reset();
     cancelled(stop);if(!refined.level)return {};
     // Canonical level-zero cells supply the exact source-face numbering and
     // original triangle winding, including imported shading aliases.
@@ -78,20 +110,24 @@ std::optional<ModelPrimitive> simplifyDecalPaintPrimitive(const ModelPrimitive& 
     const auto simplify=[](const Face& face){return face.candidate&&face.seen&&face.normalSet;};
     if(std::none_of(faces.begin(),faces.end(),simplify))return {};
     ModelPrimitive result;result.material=source.material;result.uvMask=source.uvMask;result.tangentUv=source.tangentUv;result.bounds=refined.bounds;
+    auto remapped=retainedBoundary&&fineBoundary?std::make_shared<SurfaceBoundaryLineage>():nullptr;uint32_t originalTriangle{};
     std::vector<bool> written(faces.size());
     for(const auto& cell:refined.cells){
         cancelled(stop);const auto& face=faces[cell.sourceFace];
+        const uint32_t sourceTriangle=originalTriangle;originalTriangle+=cell.cornerCount-2u;
         if(simplify(face)){
             if(written[cell.sourceFace])continue;written[cell.sourceFace]=true;
             const auto& original=coarse->cells.at(cell.sourceFace);const auto first=static_cast<std::uint32_t>(result.vertices.size());
             for(unsigned c=0;c<original.cornerCount;++c){auto value=coarse->vertices.at(original.vertices[c]);value.normal=face.shadingNormal;result.vertices.push_back(value);}
             for(unsigned c=0;c<3u*(original.cornerCount-2u);++c)result.indices.push_back(first+original.triangleCorners[c]);
         }else{
+            const auto firstTriangle=static_cast<uint32_t>(result.indices.size()/3);
             const auto first=static_cast<std::uint32_t>(result.vertices.size());const auto count=meshPaintCellVertexCount(cell);
             for(std::uint32_t c=0;c<count;++c)result.vertices.push_back(vertex(refined,cell,c));
             for(unsigned c=0;c<3u*(cell.cornerCount-2u);++c)result.indices.push_back(first+(cell.shadingVertexCount==6?c:cell.triangleCorners[c]));
+            if(remapped)for(unsigned t=0;t<cell.cornerCount-2u;++t){const auto& records=fineBoundary->triangles;const auto at=std::lower_bound(records.begin(),records.end(),sourceTriangle+t,[](const auto& record,uint32_t id){return record.triangle<id;});if(at!=records.end()&&at->triangle==sourceTriangle+t){auto record=*at;record.triangle=firstTriangle+t;remapped->triangles.push_back(record);}}
         }
     }
-    result.sourceVertexCount=result.vertices.size();result.sourceIndexCount=result.indices.size();return result;
+    result.sourceVertexCount=result.vertices.size();result.sourceIndexCount=result.indices.size();if(retainedBoundary&&remapped&&!remapped->triangles.empty())*retainedBoundary=std::move(remapped);return result;
 }
 }

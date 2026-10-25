@@ -27,6 +27,7 @@
 #include <set>
 #include <stdexcept>
 #include <thread>
+#include <tuple>
 
 namespace {
 using namespace crimson;
@@ -667,7 +668,90 @@ template<class Read> void contactEdgeFiltering(Renderer& renderer,const std::sha
     save(cornerClear,capture,"visible-finite-corner-clear");save(cornerBaseline,capture,"visible-finite-corner-csm");save(cornerRefined,capture,"visible-finite-corner-refined");
 }
 
-void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capture,bool closedRoomOnly,bool compiledModel,bool profileClosedRoom,bool contactOnly){
+// A full-screen curved receiver made the old angular packet sweep almost the
+// entire sphere for every pixel. Use the same 32 finite rays as an independent
+// runtime reference; this catches traversal regressions without a GPU-speed
+// constant or CPU submission timing standing in for native GPU work.
+template<class Read> void contactPerformanceChecks(Renderer& renderer,const ShaderCompileConfig& config,
+    const Read& read,std::uint32_t& frame,const fs::path& capture){
+    Temporary reference;const auto sources=reference.path/"sources";
+    fs::copy(config.sourceDirectory,sources,fs::copy_options::recursive);
+    const auto entry=sources/"cs_shadow_contact_trace.sc";
+    std::string text;{std::ifstream input(entry,std::ios::binary);require(bool(input),"Contact reference source is missing.");text.assign(std::istreambuf_iterator<char>(input),{});}
+    {std::ofstream output(entry,std::ios::binary|std::ios::trunc);output<<"#define CC_SHADOW_SOURCE_SINGLE_RAY_REFERENCE 1\n"<<text;require(bool(output),"Cannot prepare independent contact reference.");}
+    ShaderCompileConfig referenceConfig{config.compiler,sources,config.includeDirectory,reference.path/"cache"};
+    // Compile both before rendering or timing. Reload validates the real named
+    // interfaces, while the private reference changes only traversal selection.
+    const std::array current{
+        RendererShaderPair{RendererProgram::ShadowContactTrace,{},compileShader(config,"cs_shadow_contact_trace").bytes},
+        RendererShaderPair{RendererProgram::ShadowContactPublish,{},compileShader(config,"cs_shadow_contact_publish").bytes}};
+    const std::array independent{
+        RendererShaderPair{RendererProgram::ShadowContactTrace,{},compileShader(referenceConfig,"cs_shadow_contact_trace").bytes},
+        RendererShaderPair{RendererProgram::ShadowContactPublish,{},compileShader(referenceConfig,"cs_shadow_contact_publish").bytes}};
+    const auto sphere=builtinSphereGeometry(),box=builtinBoxGeometry();
+    require(renderer.prepareModel(*sphere)&&renderer.prepareModel(*box),renderer.modelStatus());
+    std::vector<ModelMaterial> white(1);white[0].baseColor={1,1,1,1};white[0].roughness=1;white[0].metallic=white[0].specular=0;
+    std::vector<ModelMaterialTextures> textures(1);std::array<RenderModelInstance,3> instances;
+    for(unsigned i=0;i<instances.size();++i){auto& instance=instances[i];instance.entityId=910+i;
+        instance.model.asset=i==0?sphere:box;instance.materials=&white;instance.textures=&textures;instance.forceFullDetail=true;}
+    instances[0].model.transform=math::translation({0,1.5417464f,1.9092153f});
+    instances[1].model.transform=math::translation({0,.99876356f,0});
+    SceneSettings settings;settings.environment.enabled=false;settings.environment.ambientLight.source=AmbientLightSource::Disabled;
+    settings.environment.background.overrideColor=true;settings.environment.background.color={};settings.environment.toneMapping=ToneMapping::Linear;
+    settings.environment.fog.enabled=settings.environment.glow.enabled=settings.environment.ssgi.enabled=false;
+    settings.environment.ssao.enabled=settings.environment.ssr.enabled=false;settings.antiAliasing=AntiAliasing::Off;settings.exposure=1;
+    settings.camera.position={-.48f,1.60f,2.45f};settings.camera.target={0,1.5417464f,1.9092153f};
+    settings.camera.fov=45;settings.camera.fovAxis=CameraFovAxis::Vertical;settings.camera.nearPlane=.01f;
+    const auto closeCamera=settings.camera;
+    DirectionalLight sun;sun.entityId=920;sun.direction={-.3145876f,-.7120456f,.6277145f};sun.color={1,1,1};sun.intensity=2;
+    sun.castShadows=true;sun.shadowAngularDiameter=.53f;sun.shadowDistance=100;sun.shadowDepthBias=.005f;sun.shadowNormalBias=1;
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=instances;scene.shadowInstances=instances;
+    scene.directionalLights=std::span(&sun,1);scene.shadowWorldId=921;scene.shadowResolution=1024;
+    bgfx::setDebug(BGFX_DEBUG_PROFILER);
+    const auto contactView=renderViewPassSlots(RenderViewPurpose::Game).lightingEffects;
+    require(contactView!=InvalidRenderView,"Contact performance fixture has no native compute view.");
+    const auto submit=[&]{renderer.renderGame(scene);bgfx::touch(ToolsView);frame=renderer.advance_frame();};
+    const auto measure=[&](const auto& programs,const char* label){
+        require(renderer.reloadPrograms(programs),renderer.shaderStatus());settings.camera=closeCamera;
+        for(unsigned i=0;i<60;++i)submit();
+        require(renderer.shadowStatus().empty(),renderer.shadowStatus());
+        constexpr unsigned Samples=32;const auto first=frame+1,last=first+Samples-1;
+        std::set<std::uint32_t> frames;std::set<std::pair<std::int64_t,std::int64_t>> intervals;std::vector<double> values;
+        const auto compilerBefore=shaderCompilerMetrics();
+        const auto collect=[&]{const auto* stats=bgfx::getStats();if(stats->gpuTimerFreq<=0)return;
+            for(unsigned i=0;i<stats->numViews;++i){const auto& view=stats->viewStats[i];
+                if(view.view!=contactView||view.gpuFrameNum<first||view.gpuFrameNum>last||view.gpuTimeEnd<=view.gpuTimeBegin||
+                    !frames.insert(view.gpuFrameNum).second||!intervals.emplace(view.gpuTimeBegin,view.gpuTimeEnd).second)continue;
+                values.push_back(double(view.gpuTimeEnd-view.gpuTimeBegin)*1000./stats->gpuTimerFreq);}
+        };
+        // No readback, explicit fence, compiler, or CPU-duration assertion in
+        // the measured window. The native contact trace+publish view is alone:
+        // GI/AO and unrelated compute effects are disabled above.
+        for(unsigned i=0;i<Samples;++i){submit();collect();}
+        for(unsigned i=0;i<16;++i){submit();collect();}
+        require(values.size()>=Samples/2,"Too few distinct native contact GPU queries.");
+        require(shaderCompilerMetrics().compilerInvocations==compilerBefore.compilerInvocations,"Compilation entered contact GPU measurement.");
+        std::sort(values.begin(),values.end());const auto median=(values[(values.size()-1)/2]+values[values.size()/2])*.5;
+        std::cout<<"contact-performance "<<label<<" size="<<Size<<" gpu_samples="<<values.size()<<" median_ms="<<median
+            <<" maximum_ms="<<values.back()<<" shader_bytes="<<programs[0].fragment.size()<<std::endl;
+        const auto close=read(renderer.gameViewportTexture());
+        settings.camera.position={-1.25f,2.f,3.65f};settings.camera.target={0,1.54f,1.91f};
+        for(unsigned i=0;i<8;++i)submit();const auto edge=read(renderer.gameViewportTexture());
+        save(close,capture,std::string("contact-performance-")+label+"-close");save(edge,capture,std::string("contact-performance-")+label+"-edges");
+        return std::tuple{median,close,edge};
+    };
+    const auto [currentMs,currentClose,currentEdges]=measure(current,"production");
+    const auto [referenceMs,referenceClose,referenceEdges]=measure(independent,"reference");
+    require(currentClose.rgba==referenceClose.rgba&&currentEdges.rgba==referenceEdges.rgba,
+        "Contact traversal changed deterministic 32-ray image coverage.");
+    unsigned lit{},dark{};for(unsigned i=0;i<referenceEdges.rgba.size();i+=4){lit+=brightness(referenceEdges,i)>30;dark+=brightness(referenceEdges,i)<5;}
+    require(lit>=100&&dark>=100,"Contact image parity fixture lost its lit cap and shadow/silhouette coverage.");
+    require(currentMs<=referenceMs*3.+2.,"Angular contact traversal exceeded the independent-ray GPU budget: production="+
+        std::to_string(currentMs)+"ms, reference="+std::to_string(referenceMs)+"ms.");
+    require(renderer.reloadPrograms(current),renderer.shaderStatus());bgfx::setDebug(BGFX_DEBUG_NONE);
+}
+
+void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capture,bool closedRoomOnly,bool compiledModel,bool profileClosedRoom,bool contactOnly,bool contactPerformanceOnly){
     // Readback storage survives exceptional renderer shutdown.
     std::vector<std::shared_ptr<DecodedImage>> destinations;
     ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));MaterialGraphPrograms programs(resources,config);
@@ -692,6 +776,7 @@ void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capt
         for(unsigned i=0;i<120;++i){tick();if(picking::frameReady(frame,ready))return *image;}
         throw std::runtime_error("Directional quality readback timed out.");
     };
+    if(contactPerformanceOnly){contactPerformanceChecks(renderer,config,read,frame,capture);resources.stop();renderer.drainPending(frame);return;}
     if(contactOnly){const auto floor=floorGeometry();const auto box=builtinBoxGeometry();
         require(renderer.prepareModel(*floor)&&renderer.prepareModel(*box),renderer.modelStatus());
         std::vector<ModelMaterial> white(1);white[0].baseColor={1,1,1,1};white[0].roughness=1;white[0].metallic=white[0].specular=0;
@@ -827,11 +912,12 @@ void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capt
 }
 }
 int main(int argc,char** argv){try{
-    require(argc>=4,"Pass shaderc, source, include directories; optionally --closed-room-only, --contact-only, --compiled-model, --profile-closed-room and --capture output-directory.");
-    bool closedRoomOnly{},compiledModel{},profileClosedRoom{},contactOnly{};fs::path capture;
+    require(argc>=4,"Pass shaderc, source, include directories; optionally --closed-room-only, --contact-only, --contact-performance-only, --compiled-model, --profile-closed-room and --capture output-directory.");
+    bool closedRoomOnly{},compiledModel{},profileClosedRoom{},contactOnly{},contactPerformanceOnly{};fs::path capture;
     for(int index=4;index<argc;++index){const std::string argument=argv[index];
         if(argument=="--closed-room-only")closedRoomOnly=true;
         else if(argument=="--contact-only")contactOnly=true;
+        else if(argument=="--contact-performance-only")contactPerformanceOnly=true;
         else if(argument=="--compiled-model")compiledModel=true;
         else if(argument=="--profile-closed-room")profileClosedRoom=true;
         else if(argument=="--capture"&&index+1<argc)capture=argv[++index];
@@ -840,7 +926,8 @@ int main(int argc,char** argv){try{
     Temporary temporary;ShaderCompileConfig config{argv[1],argv[2],argv[3],temporary.path};Sdl sdl;
     std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson directional shadow quality checks",Size,Size,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
     require(!(contactOnly&&(closedRoomOnly||profileClosedRoom)),"--contact-only cannot be combined with closed-room diagnostics.");
-    require(bool(window),SDL_GetError());exercise(window.get(),config,capture,closedRoomOnly,compiledModel,profileClosedRoom,contactOnly);
-    std::cout<<(contactOnly?"Directional physical contact edge, finite opening and visible-corner checks passed.\n":closedRoomOnly?"Directional closed inward-normal double-sided room checks passed.\n":
+    require(!(contactPerformanceOnly&&(contactOnly||closedRoomOnly||profileClosedRoom||compiledModel)),"--contact-performance-only is an isolated GPU comparison.");
+    require(bool(window),SDL_GetError());exercise(window.get(),config,capture,closedRoomOnly,compiledModel,profileClosedRoom,contactOnly,contactPerformanceOnly);
+    std::cout<<(contactPerformanceOnly?"Directional contact native GPU budget and exact 32-ray image parity passed.\n":contactOnly?"Directional physical contact edge, finite opening and visible-corner checks passed.\n":closedRoomOnly?"Directional closed inward-normal double-sided room checks passed.\n":
         "Directional closed-room leaks, Scene/Game oblique/grazing floor/wall acne, generated/fallback materials, contact edge filtering and near-contact checks passed.\n");return 0;
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

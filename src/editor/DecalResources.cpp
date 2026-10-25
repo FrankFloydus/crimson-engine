@@ -39,13 +39,15 @@ DecalResources::DecalResources(AssetLibrary&assets,ResourceManager&resources):as
 DecalSourceResult DecalResources::modelSurface(const ExtractedModel&m,ResourcePriority priority){
     DecalSourceResult result;if(assets_.references().resolve(m.assetId).empty()){result.failed=true;result.diagnostic="Missing surface model.";return result;}auto model=assets_.findModel(m.assetId,m.primitive);
     result.diagnostic=assets_.modelDiagnostic(m.assetId);
-    if(!model||assets_.modelLoading(m.assetId)||!result.diagnostic.empty()){result.failed=!result.diagnostic.empty();if(result.diagnostic.empty())result.diagnostic="Preparing surface geometry.";return result;}
+    const bool loading=assets_.modelLoading(m.assetId);
+    if(!model||loading||!result.diagnostic.empty()){result.failed=!loading&&(!model||!result.diagnostic.empty());if(result.diagnostic.empty())result.diagnostic=loading?"Preparing surface geometry.":"Missing surface model.";return result;}
     result.revision=std::max<uint64_t>(1,assets_.modelRevision(m.assetId));
     result.fingerprint=model->stream?model->stream->key:assets_.modelFingerprint(m.assetId);Hash identity;identity.add(model->id);identity.add(result.fingerprint);
     bool painted=m.meshPaint.has_value();
     try{if(!painted)for(const auto& material:assets_.resolvedModelMaterials(*model,m.materialOverrides))if(material.graph&&materialOutputNode(*material.graph).output.shading==MaterialShading::BlendPbr){painted=true;break;}}
     catch(const std::exception& error){result.failed=true;result.diagnostic=error.what();return result;}
-    if(painted){const auto prepared=meshPaint_.prepare(m,priority);if(!prepared.ready){result.failed=prepared.failed;result.diagnostic=prepared.diagnostic;return result;}model=prepared.decalAsset;result.revision=prepared.revision;result.fingerprint=prepared.decalSignature;identity=Hash{};identity.add(model->id);identity.add(result.fingerprint);}
+    std::vector<std::shared_ptr<const decals::SurfaceBoundaryLineage>> boundaries;
+    if(painted){const auto prepared=meshPaint_.prepare(m,priority);if(!prepared.ready){result.failed=prepared.failed;result.diagnostic=prepared.diagnostic;return result;}model=prepared.decalAsset;result.revision=prepared.revision;result.fingerprint=prepared.decalSignature;identity=Hash{};identity.add(model->id);identity.add(result.fingerprint);boundaries.resize(model->draws.size());for(const auto& draw:prepared.draws)if(draw.draw<boundaries.size())boundaries[draw.draw]=draw.decalBoundary;}
     result.model=model;
     // The stream key covers original primitive attributes. Draw occurrence
     // transforms are separate metadata and must also invalidate the source.
@@ -57,12 +59,12 @@ DecalSourceResult DecalResources::modelSurface(const ExtractedModel&m,ResourcePr
     if(!entry.resource||retry){ResourceRequestOptions options;options.priority=priority;options.retainLoader=false;options.cancelWhenUnused=true;options.assetDependencies={m.assetId};options.forceReload=retry;
         if(model->stream)for(const auto&primitive:model->stream->primitives)if(!primitive.levels.empty())options.dependencies.push_back(primitive.levels[0].file);
         entry.revision=result.revision;
-        entry.resource=resources_.requestDerived<decals::ModelSurface>("decal-surface:"+key,[model,mode,fingerprint=result.fingerprint](std::stop_token stop){
+        entry.resource=resources_.requestDerived<decals::ModelSurface>("decal-surface:"+key,[model,mode,boundaries=std::move(boundaries),fingerprint=result.fingerprint](std::stop_token stop){
             const auto original=[model](uint32_t primitive,std::stop_token token)->std::shared_ptr<const ModelPrimitive>{
                 if(!model->stream||primitive>=model->stream->primitives.size()||model->stream->primitives[primitive].levels.empty())return {};
                 auto lod=streaming::loadModelLod(model->stream->primitives[primitive].levels[0],primitive,0,false,token);return {lod,&lod->geometry};
             };
-            auto surface=std::make_shared<decals::ModelSurface>(decals::buildModelSurface(*model,fingerprint,mode,original,stop));return ResourceLoadResult<decals::ModelSurface>{surface,surface->bytes(),fingerprint,{}};
+            auto surface=std::make_shared<decals::ModelSurface>(decals::buildModelSurface(*model,fingerprint,mode,original,stop));for(auto& draw:surface->draws)if(draw.surface.id.draw<boundaries.size())draw.surface.boundary=boundaries[draw.surface.id.draw];return ResourceLoadResult<decals::ModelSurface>{surface,surface->bytes(),fingerprint,{}};
         },std::move(options));
     }
     if(const auto snapshot=entry.resource.snapshot()){result.surface=snapshot.shared();result.current=entry.resource.state()==ResourceState::Ready;}
@@ -132,10 +134,10 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
     auto&entry=patches_[d.id];entry.current=false;entry.used=std::chrono::steady_clock::now();
     // A pending frame submits no packet, while retaining a compatible CPU
     // publication so texture preparation cannot trigger a chart rebuild.
-    const auto pending=[&](std::string message,bool ready=false){entry.status=std::move(message);out.ready&=ready;out.refined=false;if(out.status.empty())out.status=entry.status;};
+    const auto pending=[&](std::string message,bool failed=false){entry.status=std::move(message);out.ready=false;out.refined=false;out.failed|=failed;if(out.status.empty())out.status=entry.status;};
     if(d.decal.projection==SceneDecalProjection::Box) {
         entry.resource={};entry.render.reset();entry.spatial.reset();entry.surfaceFrame.reset();
-        if(!math::inverse(d.world)){pending("Invalid decal box transform.");return;}
+        if(!math::inverse(d.world)){pending("Invalid decal box transform.",true);return;}
         const auto material=assets_.preparedDecalMaterial(d.decal.asset.id,1024,priority);
         if(!material||!material->ready||!material->current||!material->render){pending(material&&!material->diagnostic.empty()?material->diagnostic:"Preparing decal material.");return;}
         RenderDecal packet;packet.entityId=d.id;packet.stableOrder=d.id;packet.layer=d.decal.priority;
@@ -153,7 +155,7 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
     entry.spatial.reset();
     const auto center=math::transformPoint(d.world,{}),x=math::transformDirection(d.world,{1,0,0}),y=math::transformDirection(d.world,{0,1,0});
     const double radius=.625*std::max(math::length(x+y),math::length(x-y))+.5*std::min(math::length(x),math::length(y));
-    if(!std::isfinite(radius)||radius<=0){pending("Invalid footprint.");return;}
+    if(!std::isfinite(radius)||radius<=0){pending("Invalid footprint.",true);return;}
     const float projectionDistance=static_cast<float>(std::max(.01,.5*std::max(math::length(x),math::length(y))+.025));
     const Vec3 searchExtent{radius+projectionDistance,radius+projectionDistance,radius+projectionDistance};
     const Aabb region{center-searchExtent,center+searchExtent,true};
@@ -164,7 +166,7 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
         if(!m.visible||!m.receiveDecals)continue;
         // An unrelated missing/unloaded visual must not suppress a valid local
         // receiver. Ready models enter the geometric signature when published.
-        const auto model=assets_.findModel(m.assetId,m.primitive);if(!model){preparing=assets_.modelDiagnostic(m.assetId);if(preparing.empty())preparing="Preparing receiver models.";continue;}
+        const auto model=assets_.findModel(m.assetId,m.primitive);if(!model){if(assets_.modelLoading(m.assetId)){preparing=assets_.modelDiagnostic(m.assetId);if(preparing.empty())preparing="Preparing receiver models.";}else{unsupported=assets_.modelDiagnostic(m.assetId);if(unsupported.empty())unsupported="Missing receiver model.";}continue;}
         // Pin immutable metadata/primitive variants with this bounded spatial
         // entry. A weak primitive cache must not rebuild geometry on retries.
         spatial.models.push_back(model);
@@ -196,10 +198,10 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
             seed=hit.hit;seedCandidate=&candidate;closest=distance;
         }
     }
-    if(!seed||!seedCandidate){spatial.diagnostic=!unsupported.empty()?unsupported:!preparing.empty()?preparing:"No receiving surface within the decal footprint.";entry.spatial=std::move(spatial);pending(entry.spatial->diagnostic);return;}
+    if(!seed||!seedCandidate){spatial.diagnostic=!unsupported.empty()?unsupported:!preparing.empty()?preparing:"No receiving surface within the decal footprint.";spatial.failed=preparing.empty();entry.spatial=std::move(spatial);pending(entry.spatial->diagnostic,entry.spatial->failed);return;}
     const auto normalMatrix=math::normalMatrix(seedCandidate->world);
     const auto effectiveFrame=normalMatrix?decals::conformDecalFrame(d.world,math::transformPoint(seedCandidate->world,seed->localPoint),math::transformDirection(*normalMatrix,seed->localNormal)):std::nullopt;
-    if(!effectiveFrame){pending("Invalid footprint.");return;}
+    if(!effectiveFrame){pending("Invalid footprint.",true);return;}
     spatial.frame=*effectiveFrame;
     signature.add(*effectiveFrame);signature.add(seed->seed.receiver.entity);signature.add(seed->seed.receiver.draw);signature.add(seed->seed.receiver.primitive);signature.add(seed->seed.triangle);signature.add(seed->seed.barycentrics);
     const auto key=signature.value;
@@ -214,7 +216,7 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
             for(const auto&candidate:candidates)for(const auto&draw:candidate.source->draws){if(stop.stop_requested())throw std::runtime_error("Decal preparation cancelled.");if(draw.material>=candidate.slots.size()||!candidate.slots[draw.material])continue;
                 const auto indices=decals::querySurfaceTriangles(draw,candidate.world,sourceQuery,stop);if(indices.empty())continue;
                 if((triangles+=indices.size())>request.limits.maximumInputTriangles)throw std::runtime_error("Decal receiver neighborhood exceeds its triangle budget.");
-                decals::SurfaceReceiver receiver;receiver.id=draw.surface.id;receiver.id.entity=candidate.entity;receiver.generation=candidate.revision;receiver.localToWorld=candidate.world*draw.surface.localToWorld;receiver.triangles.reserve(indices.size());for(uint32_t i:indices)receiver.triangles.push_back(draw.surface.triangles[i]);snapshot.receivers.push_back(std::move(receiver));
+                decals::SurfaceReceiver receiver;receiver.id=draw.surface.id;receiver.id.entity=candidate.entity;receiver.generation=candidate.revision;receiver.localToWorld=candidate.world*draw.surface.localToWorld;receiver.boundary=draw.surface.boundary;receiver.triangles.reserve(indices.size());for(uint32_t i:indices)receiver.triangles.push_back(draw.surface.triangles[i]);snapshot.receivers.push_back(std::move(receiver));
             }
             // Keep the final upload bounded while allowing genuinely dense
             // receiver fields to survive a large image. Flat paint-only detail
@@ -230,10 +232,10 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
     }else ++stats_.spatialCacheHits;
     const auto& spatial=*entry.spatial;const auto key=spatial.signature;
     if(reuse)out.receivers.insert(out.receivers.end(),spatial.receivers.begin(),spatial.receivers.end());
-    if(!spatial.diagnostic.empty()){pending(spatial.diagnostic);return;}
+    if(!spatial.diagnostic.empty()){pending(spatial.diagnostic,spatial.failed);return;}
     entry.surfaceFrame=spatial.frame;
-    const auto patch=entry.resource.snapshot();if(!patch){pending(entry.resource.state()==ResourceState::Failed?entry.resource.diagnostic():"Preparing decal surface.");return;}
-    if(!patch->usable()){pending(patch->message);return;}
+    const auto patch=entry.resource.snapshot();if(!patch){const bool failed=entry.resource.state()==ResourceState::Failed;pending(failed?entry.resource.diagnostic():"Preparing decal surface.",failed);return;}
+    if(!patch->usable()){const auto state=entry.resource.state();const bool failed=state==ResourceState::Ready||state==ResourceState::Failed;pending(failed?patch->message:"Preparing decal surface.",failed);return;}
     if(entry.publishedRevision!=patch.revision()||entry.publishedBindings!=spatial.bindings){Hash published;published.add(key);published.add(spatial.bindings);entry.render=renderPatch(*patch,published.value,spatial.revisions);entry.publishedRevision=patch.revision();entry.publishedBindings=spatial.bindings;}
     entry.current=true;
     const auto material=assets_.preparedDecalMaterial(d.decal.asset.id,1024,priority);if(!material||!material->ready||!material->current||!material->render){pending(material&&!material->diagnostic.empty()?material->diagnostic:"Preparing decal material.");return;}

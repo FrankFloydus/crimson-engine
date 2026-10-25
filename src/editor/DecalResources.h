@@ -10,7 +10,7 @@ namespace crimson {
 class AssetLibrary;
 struct DecalSourceResult {std::shared_ptr<const decals::ModelSurface> surface;bool current{};uint64_t revision{},fingerprint{};std::string diagnostic;bool failed{};std::shared_ptr<const ModelAsset> model;std::string sourceKey;};
 struct DecalPlacementResult {SceneDecalSeed seed;Mat4 frame{};bool ready{},failed{};std::string diagnostic;};
-struct DecalPreparedScene {std::vector<RenderDecal> decals;std::vector<EntityId> receivers;bool ready{true},refined{true};std::string status;};
+struct DecalPreparedScene {std::vector<RenderDecal> decals;std::vector<EntityId> receivers;bool ready{true},refined{true},failed{};std::string status;};
 struct DecalResourceStats {uint64_t spatialPreparations{},spatialCacheHits{},seedQueries{};};
 class DecalResources {
 public:
@@ -35,6 +35,7 @@ private:
         std::vector<std::pair<std::string,ResourceSnapshot<decals::ModelSurface>>> sources;
         std::vector<std::shared_ptr<const ModelAsset>> models;
         std::string diagnostic;
+        bool failed{};
     };
     struct PatchEntry {ResourceHandle<decals::DecalPatch> resource;uint64_t signature{},publishedRevision{},publishedBindings{};std::shared_ptr<const DecalPatchData> render;std::optional<Mat4> surfaceFrame;std::optional<SpatialEntry> spatial;std::chrono::steady_clock::time_point used;std::string status;bool current{};};
     AssetLibrary&assets_;ResourceManager&resources_;

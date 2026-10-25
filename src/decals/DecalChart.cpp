@@ -1,7 +1,7 @@
 #include "DecalInternal.h"
-#include <geometrycentral/surface/common_subdivision.h>
-#include <geometrycentral/surface/integer_coordinates_intrinsic_triangulation.h>
-#include <geometrycentral/surface/vector_heat_method.h>
+#include "DecalExactGeodesics.h"
+#include "DecalGeodesicGeometry.h"
+#include <geometrycentral/surface/manifold_surface_mesh.h>
 #include <chrono>
 #include <map>
 #include <queue>
@@ -109,24 +109,60 @@ void buildChart(const DecalSurfaceSnapshot&snapshot,const DecalBuildRequest&r,co
     out.statistics.usedDevelopableUnfolding=developableChart(a,inputChart,developedFaces);
     if(out.statistics.usedDevelopableUnfolding){for(size_t i=0;i<a.faces.size();++i)if(developedFaces[i]){ChartTriangle t{};t.sourceFace=i;for(size_t j=0;j<3;++j){size_t v=a.faces[i].v[j];t.positions[j]=a.positions[v];t.metres[j]=inputChart[v];t.vertices[j]=v;}triangles.push_back(t);}}
     else{
-    gs::VertexPositionGeometry geometry(mesh,positions);gs::IntegerCoordinatesIntrinsicTriangulation intrinsic(mesh,geometry,0.0);intrinsic.flipToDelaunay();cancelled(stop);
-    gs::Vertex seed=intrinsic.intrinsicMesh->vertex(a.seedVertex);gs::VertexData<gc::Vector2> chart(*intrinsic.intrinsicMesh);
-    gs::VectorHeatMethodSolver solver(intrinsic);chart=solver.computeLogMap(seed,gs::LogMapStrategy::AffineAdaptive);cancelled(stop);
-    // The intrinsic vertex tangent x-axis follows its current halfedge. Trace it
-    // onto the input surface before aligning to the authored world tangent.
-    D3 direction{};const auto path=intrinsic.traceIntrinsicHalfedgeAlongInput(seed.halfedge());
-    for(const auto&p:path){const auto q=p.interpolate(positions);D3 d{q.x-a.seedPosition.x,q.y-a.seedPosition.y,q.z-a.seedPosition.z};d=d-a.seedNormal*dot(d,a.seedNormal);if(length(d)>1e-9){direction=unit(d);break;}}
-    if(length(direction)<.5)throw Failure(DecalPatchStatus::InvalidChart,"Intrinsic seed tangent could not be aligned.");
-    intrinsic.requireHalfedgeVectorsInVertex();const auto h=intrinsic.halfedgeVectorsInVertex[seed.halfedge()].normalize();
-    const double dx=dot(direction,a.basisX),dy=dot(direction,a.basisY),rx=dx*h.x+dy*h.y,ry=dy*h.x-dx*h.y;const gc::Vector2 origin=chart[seed];
-    for(gs::Vertex v:intrinsic.intrinsicMesh->vertices()){gc::Vector2 p=chart[v]-origin;chart[v]={rx*p.x-ry*p.y,ry*p.x+rx*p.y};}
-    auto&common=intrinsic.getCommonSubdivision();common.constructMesh(true);cancelled(stop);
-    // Original input boundaries and the analysis halo are not final output.
-    // Keep the solver's temporary transfer bounded independently of clipping.
-    const size_t commonLimit=static_cast<size_t>(std::min<uint64_t>(1'000'000,std::max<uint64_t>(uint64_t(r.limits.maximumTriangles)*4,uint64_t(a.faces.size())*4)));
-    if(common.mesh->nFaces()>commonLimit)throw Failure(DecalPatchStatus::LimitExceeded,"Intrinsic common-subdivision budget exceeded.");
-    auto commonChart=common.interpolateAcrossB(chart);auto commonPosition=common.interpolateAcrossA(positions);
-    for(gs::Face f:common.mesh->faces()){ChartTriangle t{};t.sourceFace=common.sourceFaceA[f].getIndex();size_t i=0;for(gs::Vertex v:f.adjacentVertices()){if(i>=3)throw Failure(DecalPatchStatus::InvalidChart,"Common subdivision did not triangulate.");auto p=commonPosition[v];auto c=commonChart[v];t.positions[i]={p.x,p.y,p.z};t.vertices[i]=v.getIndex();t.metres[i++]={c.x,c.y};}if(i==3)triangles.push_back(t);}
+    // The log map must retain the source metric. A uniform edge-length
+    // mollification can turn rounded paint-cell needles into cone curvature
+    // and warp an otherwise flat room before any output validation occurs.
+    DecalGeodesicGeometry geometry(mesh,positions);
+    geometry.requireFaceAreas();geometry.requireCornerAngles();
+    for(gs::Face face:mesh.faces()){
+        cancelled(stop);
+        if(!std::isfinite(geometry.faceAreas[face])||geometry.faceAreas[face]<=0)
+            throw Failure(DecalPatchStatus::InvalidChart,"Intrinsic surface triangles are degenerate.");
+    }
+    for(gs::Corner corner:mesh.corners()){
+        cancelled(stop);
+        if(!std::isfinite(geometry.cornerAngles[corner])||geometry.cornerAngles[corner]<0)
+            throw Failure(DecalPatchStatus::InvalidChart,"Intrinsic surface angles are nonfinite.");
+    }
+    // Bound propagation work, interval storage and unfolding depth. Source
+    // window headings avoid the upstream greedy traceback's thin-cell cycles.
+    // Its maximum-distance argument alone does not stop without stop points.
+    exact::BoundedGeo solver(mesh,geometry,{1'000'000,30'000'000,5'000},stop);
+    const gs::Vertex seed=mesh.vertex(a.seedVertex);
+    solver.propagateBounded(seed,4*a.scale);cancelled(stop);
+    geometry.requireHalfedgeVectorsInVertex();
+    auto seedEdge=mesh.face(a.seedFace).halfedge();
+    while(seedEdge.vertex()!=seed)seedEdge=seedEdge.next();
+    const D3 direction=unit(a.positions[seedEdge.tipVertex().getIndex()]-a.seedPosition);
+    const auto h=geometry.halfedgeVectorsInVertex[seedEdge].normalize();
+    if(length(direction)<.5||!h.isFinite())
+        throw Failure(DecalPatchStatus::InvalidChart,"Intrinsic seed tangent could not be aligned.");
+    const double dx=dot(direction,a.basisX),dy=dot(direction,a.basisY);
+    const double rx=dx*h.x+dy*h.y,ry=dy*h.x-dx*h.y;
+    std::vector<D2> chart(mesh.nVertices());std::vector<bool> reached(mesh.nVertices()),needed(mesh.nVertices());
+    const double outputSupport=.5*std::max(std::hypot(a.ax+a.bx,a.ay+a.by),std::hypot(a.ax-a.bx,a.ay-a.by))*r.limits.maximumStretch;
+    const double imageRadius=outputSupport/r.limits.maximumStretch;
+    std::vector<std::optional<double>> distances(mesh.nVertices());for(gs::Vertex vertex:mesh.vertices()){cancelled(stop);distances[vertex.getIndex()]=solver.distanceBounded(vertex);}
+    for(const auto& face:a.faces){cancelled(stop);if(triangleDistance(a.seedPosition,{a.positions[face.v[0]],a.positions[face.v[1]],a.positions[face.v[2]]})>outputSupport)continue;bool outside=false;
+        // Surface distance is 1-Lipschitz. A corner's distance minus the
+        // largest incident edge bounds the distance of every point in this
+        // convex face, even when its other corners lie outside the image.
+        for(size_t i=0;i<3;++i)if(distances[face.v[i]]){const double radius=std::max(length(a.positions[face.v[i]]-a.positions[face.v[(i+1)%3]]),length(a.positions[face.v[i]]-a.positions[face.v[(i+2)%3]]));if(*distances[face.v[i]]-radius>imageRadius+1e-9*std::max({1.,a.scale,radius})){outside=true;break;}}
+        if(!outside)for(size_t v:face.v)needed[v]=true;
+    }
+    for(gs::Vertex vertex:mesh.vertices()){
+        cancelled(stop);if(!needed[vertex.getIndex()])continue;const auto p=solver.logBounded(vertex);
+        if(!p)continue; // Proven outside the finite propagation domain.
+        chart[vertex.getIndex()]={rx*p->x-ry*p->y,ry*p->x+rx*p->y};
+        reached[vertex.getIndex()]=true;
+    }
+    for(size_t i=0;i<a.faces.size();++i){
+        const auto& face=a.faces[i];
+        if(!reached[face.v[0]]||!reached[face.v[1]]||!reached[face.v[2]])continue;
+        ChartTriangle triangle{};triangle.sourceFace=i;
+        for(size_t j=0;j<3;++j){const size_t v=face.v[j];triangle.positions[j]=a.positions[v];triangle.metres[j]=chart[v];triangle.vertices[j]=v;}
+        triangles.push_back(triangle);
+    }
     }
     // Chart metres retain the oriented surface basis. Raster V runs downward,
     // so the authored local +Y edge samples the top of the source image.
@@ -145,9 +181,9 @@ void buildChart(const DecalSurfaceSnapshot&snapshot,const DecalBuildRequest&r,co
     struct OutputRef{size_t chunk,index;std::array<D3,3>positions;std::array<VertexKey,3>vertices;};
     std::map<size_t,size_t>chunks;std::vector<UvTriangle>uvTriangles;std::vector<OutputRef>outputRefs;
     for(size_t faceIndex=0;faceIndex<triangles.size();++faceIndex){const auto&f=triangles[faceIndex];
-        cancelled(stop);const size_t sourceFace=f.sourceFace;if(sourceFace>=a.faces.size())throw Failure(DecalPatchStatus::InvalidChart,"Common subdivision lost source provenance.");
-        // The working halo is a numerical boundary condition, never a donor
-        // surface for a map whose distant heat quotient has lost precision.
+        cancelled(stop);const size_t sourceFace=f.sourceFace;if(sourceFace>=a.faces.size())throw Failure(DecalPatchStatus::InvalidChart,"Intrinsic chart lost source provenance.");
+        // The working halo prepares the local solve; only the bounded output
+        // support can contribute image geometry.
         const double support=.5*std::max(std::hypot(a.ax+a.bx,a.ay+a.by),std::hypot(a.ax-a.bx,a.ay-a.by))*r.limits.maximumStretch;
         if(triangleDistance(a.seedPosition,f.positions)>support)continue;
         const Source&s=a.sources[a.faces[sourceFace].source];const auto&receiver=snapshot.receivers[s.receiver];const auto&source=receiver.triangles[s.triangle];
@@ -156,15 +192,16 @@ void buildChart(const DecalSurfaceSnapshot&snapshot,const DecalBuildRequest&r,co
         const auto original=poly;
         for(size_t axis=0;axis<2;++axis){poly=clipUv(poly,axis,0,false);if(poly.empty())break;poly=clipUv(poly,axis,1,true);if(poly.empty())break;}
         if(poly.size()<3)continue;
-        const double chartArea=cross2(metres[1]-metres[0],metres[2]-metres[0]);const double surfaceParity=dot(cross(original[1].p-original[0].p,original[2].p-original[0].p),s.geometricNormal);
+        std::array<D3,3> actual;for(size_t i=0;i<3;++i)actual[i]=actualPoint(s,barycentric(s,original[i].p));
+        const double chartArea=cross2(metres[1]-metres[0],metres[2]-metres[0]);const double surfaceParity=dot(cross(actual[1]-actual[0],actual[2]-actual[0]),s.geometricNormal);
         if(std::abs(surfaceParity)<a.scale*a.scale*1e-13)continue;
         if(chartArea*surfaceParity<=0)continue;
-        const double distortion=stretch(original[1].p-original[0].p,original[2].p-original[0].p,metres[1]-metres[0],metres[2]-metres[0]);
+        const double distortion=stretch(actual[1]-actual[0],actual[2]-actual[0],metres[1]-metres[0],metres[2]-metres[0]);
         if(!std::isfinite(distortion)||distortion>r.limits.maximumStretch+1e-6)continue;
         out.statistics.maximumStretch=std::max(out.statistics.maximumStretch,distortion);
         auto[it,inserted]=chunks.try_emplace(s.receiver,out.chunks.size());if(inserted)out.chunks.push_back({receiver.id,receiver.generation,{},{}});auto&chunk=out.chunks[it->second];
         for(size_t j=1;j+1<poly.size();++j){std::array<Point,3>tri{poly[0],poly[j],poly[j+1]};if(std::abs(cross2(tri[1].uv-tri[0].uv,tri[2].uv-tri[0].uv))<1e-14)continue;UvTriangle uvtri{{tri[0].uv,tri[1].uv,tri[2].uv}};uvTriangles.push_back(uvtri);outputRefs.push_back({it->second,chunk.indices.size(),{}, {}});
-            for(size_t k=0;k<tri.size();++k){const Point&p=tri[k];D3 b=barycentric(s,p.p),exact=s.p[0]*b.x+s.p[1]*b.y+s.p[2]*b.z,n=unit(s.n[0]*b.x+s.n[1]*b.y+s.n[2]*b.z);outputRefs.back().positions[k]=exact;outputRefs.back().vertices[k]=vertexKey(f,faceIndex,p);chunk.indices.push_back(static_cast<uint32_t>(chunk.vertices.size()));chunk.vertices.push_back({v3(exact),v3(n),Vec2{std::clamp(p.uv.x,0.,1.),std::clamp(p.uv.y,0.,1.)},source.triangle,v3(b)});}
+            for(size_t k=0;k<tri.size();++k){const Point&p=tri[k];D3 b=barycentric(s,p.p),exact=actualPoint(s,b),n=unit(s.n[0]*b.x+s.n[1]*b.y+s.n[2]*b.z);outputRefs.back().positions[k]=exact;outputRefs.back().vertices[k]=vertexKey(f,faceIndex,p);chunk.indices.push_back(static_cast<uint32_t>(chunk.vertices.size()));chunk.vertices.push_back({v3(exact),v3(n),Vec2{std::clamp(p.uv.x,0.,1.),std::clamp(p.uv.y,0.,1.)},source.triangle,v3(b)});}
             if(++out.statistics.outputTriangles>r.limits.maximumTriangles)throw Failure(DecalPatchStatus::LimitExceeded,"Output triangle budget exceeded.");
         }
     }

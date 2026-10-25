@@ -6,6 +6,7 @@
 #include "EditorResources.h"
 #include "DecalResources.h"
 #include "DecalPreview.h"
+#include "decals/DecalCache.h"
 #include "assets/AssetLibrary.h"
 #include "assets/MaterialGraphReferences.h"
 #include "assets/MaterialPreviewGeometry.h"
@@ -55,7 +56,7 @@ uint64_t materialPreviewHash(const MaterialAsset& material) {
     auto key=streaming::detail::HashSeed;hash(key,material.shading);hash(key,material.blend);materialHash(key,material.surface);return key;
 }
 uint64_t animationPreviewHash(const AnimationAsset& animation) {return textHash(serializeAnimationAsset(animation));}
-uint64_t decalPreviewHash(const DecalAsset& decal) {auto key=textHash(serializeDecalAsset(decal));hash(key,3u);return key;}
+uint64_t decalPreviewHash(const DecalAsset& decal) {auto key=textHash(serializeDecalAsset(decal));hash(key,3u);hash(key,decals::DecalChartCacheVersion);return key;}
 struct PreviewPins {
     std::shared_ptr<const SceneSnapshot> scene;
     std::shared_ptr<const MaterialAsset> material;
@@ -660,10 +661,17 @@ struct AssetPreviews::Impl {
         if(decalScene&&!decalExtraction.decals.empty()) {
             entry.pending="Preparing thumbnail surface decals";
             CRIMSON_PROFILE_ZONE("Thumbnail decal preparation");
+            ++statistics.decalPreparations;
             if(!entry.decalResources)entry.decalResources=std::make_unique<DecalResources>(assets,resources);
             entry.decalResources->collect();
             preparedDecals=entry.decalResources->prepare(*decalScene,decalExtraction,ResourcePriority::Preview);
-            if(!preparedDecals.ready||!preparedDecals.refined){entry.error=preparedDecals.status;return;}
+            if(!preparedDecals.ready||!preparedDecals.refined){entry.error=preparedDecals.status;
+                // A completed unusable chart cannot improve on a per-frame
+                // readiness poll. Source invalidation resets the ordinary
+                // failure backoff; actual worker/material preparation stays live.
+                if(preparedDecals.failed){++statistics.decalPreparationFailures;entry.retry.failed(PreviewRetryState::Clock::now());}
+                return;
+            }
         }
         auto pins=std::make_shared<PreviewPins>(); pins->scene=sceneSnapshot; pins->material=materialAsset; pins->environment=bake;
         pins->decals=std::move(preparedDecals.decals);
