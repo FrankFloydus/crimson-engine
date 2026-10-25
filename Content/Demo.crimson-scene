@@ -1,0 +1,271 @@
+{
+  "entities": [
+    {
+      "environment": {
+        "environment": {
+          "ambientLight": {
+            "color": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "energy": 1.0,
+            "skyContribution": 1.0,
+            "source": 2
+          },
+          "background": {
+            "color": [
+              0.08235294371843338,
+              0.08235294371843338,
+              0.08235294371843338
+            ],
+            "overrideColor": false,
+            "show": true
+          },
+          "debanding": false,
+          "dither": {
+            "enabled": false,
+            "pattern": "Bayer4x4",
+            "size": 1,
+            "strength": 1.0
+          },
+          "enabled": true,
+          "fog": {
+            "aerialPerspective": 0.0,
+            "color": [
+              0.6463000178337097,
+              0.6557999849319458,
+              0.670799970626831
+            ],
+            "density": 0.02370000071823597,
+            "depthBegin": 10.0,
+            "depthCurve": 1.0,
+            "depthEnd": 100.0,
+            "depthOpacity": 1.0,
+            "enabled": true,
+            "height": 0.0,
+            "heightDensity": 0.0,
+            "lightEnergy": 1.0,
+            "mode": 0,
+            "skyAffect": 1.0,
+            "sunScatter": 0.0
+          },
+          "glow": {
+            "anamorphic": 0.0,
+            "blendMode": "Screen",
+            "enabled": false,
+            "hdrScale": 2.0,
+            "levels": [
+              0.0,
+              0.800000011920929,
+              0.4000000059604645,
+              0.10000000149011612,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "luminanceCap": 12.0,
+            "mix": 0.5,
+            "quality": 1,
+            "radius": 1.0,
+            "saturation": 1.0,
+            "source": "Scene",
+            "strength": 0.30000001192092896,
+            "threshold": 1.0,
+            "tint": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          "intensity": 1.0,
+          "map": "",
+          "pixelization": {
+            "enabled": false,
+            "pixelSize": 4
+          },
+          "posterization": {
+            "enabled": false,
+            "levels": 8
+          },
+          "procedural": {
+            "groundBottom": [
+              0.13300000131130219,
+              0.18423530459403992,
+              0.20000000298023224
+            ],
+            "groundCurve": 0.019999999552965164,
+            "groundHorizon": [
+              0.6463000178337097,
+              0.6557999849319458,
+              0.670799970626831
+            ],
+            "skyCurve": 0.15000000596046448,
+            "skyHorizon": [
+              0.6463000178337097,
+              0.6557999849319458,
+              0.670799970626831
+            ],
+            "skyTop": [
+              0.38499999046325684,
+              0.45399999618530273,
+              0.550000011920929
+            ],
+            "sunDiameter": 0.5,
+            "sunHaloCurve": 0.15000000596046448,
+            "sunHaloExtent": 30.0
+          },
+          "rotation": 0.0,
+          "source": 1,
+          "specularAA": false,
+          "ssao": {
+            "enabled": false,
+            "quality": 1,
+            "radius": 0.5,
+            "strength": 1.0
+          },
+          "ssgi": {
+            "bounces": 1,
+            "denoiseRadius": 4,
+            "denoiseStrength": 1.0,
+            "enabled": false,
+            "maxDistance": 3.0,
+            "quality": 1,
+            "radianceClamp": 10.0,
+            "rayBias": 0.019999999552965164,
+            "rays": 4,
+            "steps": 16,
+            "strength": 1.0,
+            "temporalStability": 0.8999999761581421,
+            "thickness": 0.10000000149011612
+          },
+          "ssr": {
+            "bias": 0.0020000000949949026,
+            "depthTolerance": 0.05000000074505806,
+            "enabled": false,
+            "maxDistance": 50.0,
+            "maxRoughness": 0.6000000238418579,
+            "quality": 1,
+            "strength": 1.0
+          },
+          "toneMapping": 0,
+          "toneMappingParameters": {
+            "acesWhite": 1.0,
+            "agxContrast": 1.25,
+            "agxWhite": 16.290000915527344,
+            "reinhardWhite": 0.0
+          },
+          "vignette": {
+            "enabled": false,
+            "intensity": 0.5,
+            "radius": 0.75,
+            "softness": 0.5
+          }
+        },
+        "exposure": 1.0,
+        "sun": "0000000000000000"
+      },
+      "id": "ad45265fda3eb8c4",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Environment",
+      "order": 1,
+      "parent": "0000000000000000",
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "id": "cc61bf7066abe553",
+      "lightingScopes": {
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "meshShading": 0,
+      "model": "ec337913-e4bd-5069-af3a-f18227b0209f",
+      "modelAnimation": {
+        "asset": "",
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "modelMaterials": [
+        "27f1509b-1479-56ab-9a33-463c614fee03"
+      ],
+      "name": "Box",
+      "order": 0,
+      "parent": "0000000000000000",
+      "primitive": {
+        "size": [
+          100.0,
+          1.0,
+          100.0
+        ]
+      },
+      "receiveShadows": true,
+      "visible": true
+    }
+  ],
+  "id": "e922455a-32f7-4c0f-a3b1-aad272ed643d",
+  "name": "Demo",
+  "previewCamera": {
+    "far": 2048.0,
+    "fov": 45.0,
+    "near": 0.009999999776482582,
+    "position": [
+      -7.456753253936768,
+      2.5774638652801514,
+      0.9786909818649292
+    ],
+    "target": [
+      22.265575408935547,
+      -4.281172752380371,
+      -1.5476971864700317
+    ],
+    "up": [
+      0.22327595949172974,
+      0.9745705127716064,
+      -0.01897737756371498
+    ]
+  },
+  "settings": {
+    "activeCamera": "0000000000000000",
+    "activeEnvironment": "ad45265fda3eb8c4",
+    "playerCharacter": "0000000000000000"
+  },
+  "type": "crimson-scene",
+  "version": 25
+}
