@@ -668,26 +668,32 @@ template<class Read> void contactEdgeFiltering(Renderer& renderer,const std::sha
     save(cornerClear,capture,"visible-finite-corner-clear");save(cornerBaseline,capture,"visible-finite-corner-csm");save(cornerRefined,capture,"visible-finite-corner-refined");
 }
 
-// A full-screen curved receiver made the old angular packet sweep almost the
-// entire sphere for every pixel. Use the same 32 finite rays as an independent
-// runtime reference; this catches traversal regressions without a GPU-speed
-// constant or CPU submission timing standing in for native GPU work.
+// A full-screen curved receiver exposed the angular packet regression. The
+// dense inclined plane adds capture-sized paint-style geometry at a grazing
+// camera angle. Only bounded production/private shaders run on that fixture;
+// the formerly unbounded packet is never used as a performance control.
 template<class Read> void contactPerformanceChecks(Renderer& renderer,const ShaderCompileConfig& config,
     const Read& read,std::uint32_t& frame,const fs::path& capture){
-    Temporary reference;const auto sources=reference.path/"sources";
-    fs::copy(config.sourceDirectory,sources,fs::copy_options::recursive);
-    const auto entry=sources/"cs_shadow_contact_trace.sc";
-    std::string text;{std::ifstream input(entry,std::ios::binary);require(bool(input),"Contact reference source is missing.");text.assign(std::istreambuf_iterator<char>(input),{});}
-    {std::ofstream output(entry,std::ios::binary|std::ios::trunc);output<<"#define CC_SHADOW_SOURCE_SINGLE_RAY_REFERENCE 1\n"<<text;require(bool(output),"Cannot prepare independent contact reference.");}
-    ShaderCompileConfig referenceConfig{config.compiler,sources,config.includeDirectory,reference.path/"cache"};
-    // Compile both before rendering or timing. Reload validates the real named
-    // interfaces, while the private reference changes only traversal selection.
+    Temporary reference;
     const std::array current{
         RendererShaderPair{RendererProgram::ShadowContactTrace,{},compileShader(config,"cs_shadow_contact_trace").bytes},
         RendererShaderPair{RendererProgram::ShadowContactPublish,{},compileShader(config,"cs_shadow_contact_publish").bytes}};
-    const std::array independent{
-        RendererShaderPair{RendererProgram::ShadowContactTrace,{},compileShader(referenceConfig,"cs_shadow_contact_trace").bytes},
-        RendererShaderPair{RendererProgram::ShadowContactPublish,{},compileShader(referenceConfig,"cs_shadow_contact_publish").bytes}};
+    const auto privatePrograms=[&](const char* name,const char* definitions){
+        const auto sources=reference.path/name/"sources";fs::create_directories(sources.parent_path());
+        fs::copy(config.sourceDirectory,sources,fs::copy_options::recursive);
+        const auto entry=sources/"cs_shadow_contact_trace.sc";
+        std::string text;{std::ifstream input(entry,std::ios::binary);require(bool(input),"Contact reference source is missing.");text.assign(std::istreambuf_iterator<char>(input),{});}
+        {std::ofstream output(entry,std::ios::binary|std::ios::trunc);output<<definitions<<text;require(bool(output),"Cannot prepare private contact shader.");}
+        ShaderCompileConfig privateConfig{config.compiler,sources,config.includeDirectory,reference.path/name/"cache"};
+        return std::array{RendererShaderPair{RendererProgram::ShadowContactTrace,{},compileShader(privateConfig,"cs_shadow_contact_trace").bytes},current[1]};
+    };
+    // These overrides exist only in private test compilations. Ample allowance
+    // is used on the tiny floor/box oracle, never on dense capture geometry.
+    const auto independent=privatePrograms("independent","#define CC_SHADOW_SOURCE_SINGLE_RAY_REFERENCE 1\n");
+    const auto amplePacket=privatePrograms("ample-packet","#define CC_SHADOW_CONTACT_WORK_LIMIT_OVERRIDE 65536u\n#define CC_SHADOW_CONTACT_PACKET_WORK_LIMIT_OVERRIDE 65536u\n");
+    const auto ampleFallback=privatePrograms("ample-fallback","#define CC_SHADOW_CONTACT_WORK_LIMIT_OVERRIDE 65536u\n#define CC_SHADOW_CONTACT_PACKET_WORK_LIMIT_OVERRIDE 1u\n");
+    const auto ampleIndependent=privatePrograms("ample-independent","#define CC_SHADOW_CONTACT_WORK_LIMIT_OVERRIDE 65536u\n#define CC_SHADOW_SOURCE_SINGLE_RAY_REFERENCE 1\n");
+    const auto exhausted=privatePrograms("exhausted","#define CC_SHADOW_CONTACT_WORK_LIMIT_OVERRIDE 64u\n#define CC_SHADOW_CONTACT_PACKET_WORK_LIMIT_OVERRIDE 1u\n");
     const auto sphere=builtinSphereGeometry(),box=builtinBoxGeometry();
     require(renderer.prepareModel(*sphere)&&renderer.prepareModel(*box),renderer.modelStatus());
     std::vector<ModelMaterial> white(1);white[0].baseColor={1,1,1,1};white[0].roughness=1;white[0].metallic=white[0].specular=0;
@@ -710,12 +716,27 @@ template<class Read> void contactPerformanceChecks(Renderer& renderer,const Shad
     bgfx::setDebug(BGFX_DEBUG_PROFILER);
     const auto contactView=renderViewPassSlots(RenderViewPurpose::Game).lightingEffects;
     require(contactView!=InvalidRenderView,"Contact performance fixture has no native compute view.");
-    const auto submit=[&]{renderer.renderGame(scene);bgfx::touch(ToolsView);frame=renderer.advance_frame();};
-    const auto measure=[&](const auto& programs,const char* label){
-        require(renderer.reloadPrograms(programs),renderer.shaderStatus());settings.camera=closeCamera;
-        for(unsigned i=0;i<60;++i)submit();
+    std::uint16_t width=Size,height=Size;
+    bool checkDenseAdmission{};unsigned denseSubmissions{};std::uint32_t reportedDenseSize{};
+    const auto submit=[&]{
+        renderer.renderGame(scene);
+        // These are per-submission counters. Asynchronous readback pumps
+        // advanceStreaming(), which clears them before the image returns.
+        if(checkDenseAdmission&&++denseSubmissions>12){
+            const auto& stats=renderer.shadowStats();
+            require(stats.rayInstances==1&&stats.rayTriangles==192200,
+                "Dense contact owner admitted instances="+std::to_string(stats.rayInstances)+" triangles="+std::to_string(stats.rayTriangles));
+            const auto sizeKey=(std::uint32_t(width)<<16)|height;
+            if(reportedDenseSize!=sizeKey){reportedDenseSize=sizeKey;std::cout<<"contact-dense-admission size="<<width<<"x"<<height
+                <<" instances="<<stats.rayInstances<<" triangles="<<stats.rayTriangles<<std::endl;}
+        }
+        bgfx::touch(ToolsView);frame=renderer.advance_frame();
+    };
+    const auto measureGpu=[&](const auto& programs,const std::string& label,unsigned warmup=24,unsigned samples=24){
+        require(renderer.reloadPrograms(programs),renderer.shaderStatus());
+        for(unsigned i=0;i<warmup;++i)submit();
         require(renderer.shadowStatus().empty(),renderer.shadowStatus());
-        constexpr unsigned Samples=32;const auto first=frame+1,last=first+Samples-1;
+        const auto first=frame+1,last=first+samples-1;
         std::set<std::uint32_t> frames;std::set<std::pair<std::int64_t,std::int64_t>> intervals;std::vector<double> values;
         const auto compilerBefore=shaderCompilerMetrics();
         const auto collect=[&]{const auto* stats=bgfx::getStats();if(stats->gpuTimerFreq<=0)return;
@@ -727,13 +748,22 @@ template<class Read> void contactPerformanceChecks(Renderer& renderer,const Shad
         // No readback, explicit fence, compiler, or CPU-duration assertion in
         // the measured window. The native contact trace+publish view is alone:
         // GI/AO and unrelated compute effects are disabled above.
-        for(unsigned i=0;i<Samples;++i){submit();collect();}
+        for(unsigned i=0;i<samples;++i){submit();collect();}
         for(unsigned i=0;i<16;++i){submit();collect();}
-        require(values.size()>=Samples/2,"Too few distinct native contact GPU queries.");
+        require(values.size()>=samples/2,"Too few distinct native contact GPU queries.");
         require(shaderCompilerMetrics().compilerInvocations==compilerBefore.compilerInvocations,"Compilation entered contact GPU measurement.");
         std::sort(values.begin(),values.end());const auto median=(values[(values.size()-1)/2]+values[values.size()/2])*.5;
-        std::cout<<"contact-performance "<<label<<" size="<<Size<<" gpu_samples="<<values.size()<<" median_ms="<<median
+        std::cout<<"contact-performance "<<label<<" size="<<width<<"x"<<height<<" gpu_samples="<<values.size()<<" median_ms="<<median
             <<" maximum_ms="<<values.back()<<" shader_bytes="<<programs[0].fragment.size()<<std::endl;
+        // Native query time includes trace and publication. This intentionally
+        // loose ceiling catches the historical hundreds-of-ms dispatches while
+        // allowing slower adapters and timing noise.
+        require(median<100.,label+": contact native GPU median exceeded 100 ms.");
+        require(values.back()<250.,label+": a contact native GPU interval exceeded 250 ms.");
+        return median;
+    };
+    const auto measure=[&](const auto& programs,const char* label){
+        settings.camera=closeCamera;const auto median=measureGpu(programs,label);
         const auto close=read(renderer.gameViewportTexture());
         settings.camera.position={-1.25f,2.f,3.65f};settings.camera.target={0,1.54f,1.91f};
         for(unsigned i=0;i<8;++i)submit();const auto edge=read(renderer.gameViewportTexture());
@@ -748,6 +778,107 @@ template<class Read> void contactPerformanceChecks(Renderer& renderer,const Shad
     require(lit>=100&&dark>=100,"Contact image parity fixture lost its lit cap and shadow/silhouette coverage.");
     require(currentMs<=referenceMs*3.+2.,"Angular contact traversal exceeded the independent-ray GPU budget: production="+
         std::to_string(currentMs)+"ms, reference="+std::to_string(referenceMs)+"ms.");
+
+    const auto floor=floorGeometry();require(renderer.prepareModel(*floor),renderer.modelStatus());
+    settings.camera.position={0,4,0};settings.camera.target={0,0,0};settings.camera.up={0,0,-1};settings.camera.nearPlane=.05f;
+    settings.camera.fov=45;sun.direction={0,-1,0};sun.intensity=1;sun.shadowAngularDiameter=0;sun.shadowDistance=20;
+    sun.shadowDepthBias=sun.shadowNormalBias=0;scene.shadowResolution=256;
+    RenderModelInstance receiver;receiver.entityId=930;receiver.model.asset=floor;receiver.materials=&white;receiver.textures=&textures;receiver.forceFullDetail=true;
+    auto blocker=receiver;blocker.entityId=931;blocker.model.asset=box;
+    blocker.model.transform=math::translation({.06f,.03f,0})*math::eulerRotationXYZ({0,.29670597f,0})*math::scaling({.55f,.01f,.55f});
+    std::array finiteCasters{receiver,blocker};scene.instances=std::span(&receiver,1);scene.shadowInstances=finiteCasters;
+    const auto floorPose=std::make_shared<ModelPose>(evaluateModelPose(*floor)),boxPose=std::make_shared<ModelPose>(evaluateModelPose(*box));
+    const auto finiteImage=[&](const auto& programs,bool csmOnly=false){
+        require(renderer.reloadPrograms(programs),renderer.shaderStatus());
+        receiver.pose=csmOnly?floorPose:nullptr;finiteCasters[0].pose=receiver.pose;finiteCasters[1].pose=csmOnly?boxPose:nullptr;
+        for(unsigned i=0;i<6;++i)submit();require(renderer.shadowStatus().empty(),renderer.shadowStatus());return read(renderer.gameViewportTexture(),width,height);
+    };
+    const auto csm=finiteImage(current,true),packet=finiteImage(amplePacket),fallback=finiteImage(ampleFallback),exact=finiteImage(ampleIndependent),limited=finiteImage(exhausted);
+    require(packet.rgba==exact.rgba,"Ample-budget hard packet changed deterministic finite coverage.");
+    require(fallback.rgba==exact.rgba,"Exhausted hard packet failed to restart exact independent-ray refinement.");
+    require(limited.rgba==csm.rgba,"Total-work exhaustion published partial contact coverage instead of the CSM baseline.");
+    unsigned refinedPixels{};for(unsigned i=0;i<exact.rgba.size();i+=4)refinedPixels+=exact.rgba[i]!=csm.rgba[i];
+    require(refinedPixels>=10,"Finite work-exhaustion fixture lost observable contact refinement.");
+    std::cout<<"contact-work-fallback refined_pixels="<<refinedPixels<<" packet_limit=1 total_limit=64 csm_exact=1"<<std::endl;
+    save(csm,capture,"contact-work-csm");save(exact,capture,"contact-work-exact");save(limited,capture,"contact-work-exhausted");
+
+    // A capture-sized viewport receives a smaller per-pixel allowance. Compare
+    // its useful refinement against both CSM alone and completed finite rays;
+    // ordered results prove fallback cannot introduce extra dark coverage.
+    width=914;height=600;renderer.resizeGameViewport(width,height);
+    const auto nativeCsm=finiteImage(current,true),nativeExact=finiteImage(ampleIndependent),nativeProduction=finiteImage(current);
+    unsigned nativeExactPixels{},nativeCorrectedPixels{},nativeOrderedViolations{};
+    for(unsigned i=0;i<nativeCsm.rgba.size();i+=4){
+        nativeExactPixels+=int(nativeExact.rgba[i])+1<int(nativeCsm.rgba[i]);
+        nativeCorrectedPixels+=int(nativeProduction.rgba[i])+1<int(nativeCsm.rgba[i]);
+        for(unsigned channel=0;channel<3;++channel)
+            nativeOrderedViolations+=int(nativeProduction.rgba[i+channel])>int(nativeCsm.rgba[i+channel])+1||
+                int(nativeProduction.rgba[i+channel])+1<int(nativeExact.rgba[i+channel]);
+    }
+    std::cout<<"contact-native-quality size="<<width<<"x"<<height<<" pixels="<<unsigned(width)*height
+        <<" ample_corrected="<<nativeExactPixels<<" production_corrected="<<nativeCorrectedPixels
+        <<" ordered_violations="<<nativeOrderedViolations<<std::endl;
+    require(nativeExactPixels>=10,"Capture-sized finite fixture lost completed contact refinement.");
+    require(nativeCorrectedPixels>=100 && nativeCorrectedPixels>=nativeExactPixels/8,
+        "Capture-sized production allowance removed useful finite contact refinement.");
+    require(nativeOrderedViolations==0,"Budgeted native contacts escaped the CSM/completed-refinement visibility bounds.");
+    // Exercise both triangles of the box's flat face. Counting corrected pixels
+    // alone allowed one triangle to sharpen while its neighbor stayed blurred.
+    unsigned nativeInteriorCorrections{};
+    constexpr std::array<Vec2,6> facePoints{{{-.40f,-.30f},{.40f,.30f},{-.30f,.40f},{.30f,-.40f},{-.40f,-.40f},{.40f,.40f}}};
+    for(const auto local:facePoints){
+        auto world=math::transformPoint(blocker.model.transform,{local[0],0,local[1]});world[1]=0;
+        const auto projected=math::project(world,settings.camera.projectionMatrix(float(width)/height,ClipDepth::ZeroToOne)*
+            settings.camera.viewMatrix(),{0,0,float(width),float(height)},ClipDepth::ZeroToOne);
+        require(projected&&(*projected)[0]>=0&&(*projected)[1]>=0&&(*projected)[0]<width&&(*projected)[1]<height,
+            "Native hard-shadow face probe left its viewport.");
+        const auto offset=(std::size_t((*projected)[1])*width+std::size_t((*projected)[0]))*4;
+        require(nativeExact.rgba[offset]<=1&&nativeProduction.rgba[offset]<=1,
+            "Native hard contact failed at box-face point "+std::to_string(local[0])+","+std::to_string(local[1])+
+            ": exact="+std::to_string(nativeExact.rgba[offset])+" production="+std::to_string(nativeProduction.rgba[offset]));
+        nativeInteriorCorrections+=nativeCsm.rgba[offset]>1;
+    }
+    require(nativeInteriorCorrections>=4,"Native hard-shadow face probes lost their observable CSM correction.");
+    std::cout<<"contact-native-face completed_probes="<<facePoints.size()<<" corrected_probes="<<nativeInteriorCorrections<<std::endl;
+    save(nativeCsm,capture,"contact-native-csm");save(nativeExact,capture,"contact-native-ample");save(nativeProduction,capture,"contact-native-production");
+    measureGpu(current,"finite-hard-capture-size",8,8);
+    width=height=Size;renderer.resizeGameViewport(Size,Size);
+
+    constexpr unsigned Cells=310;
+    auto dense=std::make_shared<ModelAsset>();dense->id="directional-contact-dense-painted-plane";
+    ModelPrimitive primitive;primitive.uvMask=3;primitive.tangentUv=0;primitive.vertices.reserve((Cells+1)*(Cells+1));
+    primitive.indices.reserve(Cells*Cells*6);primitive.sourceFaces.reserve(Cells*Cells);
+    const auto rotation=math::eulerRotationXYZ({.31f,-.27f,.43f});
+    const auto normal=math::normalized(math::transformDirection(rotation,{0,1,0})),tangent=math::normalized(math::transformDirection(rotation,{1,0,0}));
+    for(unsigned z=0;z<=Cells;++z)for(unsigned x=0;x<=Cells;++x){
+        const Vec2 uv{float(x)/Cells,float(z)/Cells};ModelVertex vertex;
+        vertex.position=math::transformPoint(rotation,{uv[0]*36-18,0,18-uv[1]*36});vertex.normal=normal;
+        vertex.tangent={tangent[0],tangent[1],tangent[2],-1};vertex.uv0=vertex.uv1=uv;
+        primitive.vertices.push_back(vertex);math::include(dense->bounds,vertex.position);
+    }
+    for(unsigned z=0;z<Cells;++z)for(unsigned x=0;x<Cells;++x){
+        const auto a=z*(Cells+1)+x,b=a+1,c=a+Cells+2,d=a+Cells+1,triangle=static_cast<std::uint32_t>(primitive.indices.size()/3);
+        primitive.indices.insert(primitive.indices.end(),{a,b,c,a,c,d});primitive.sourceFaces.push_back({{a,b,c,d},{triangle,triangle+1},4});
+    }
+    require(primitive.indices.size()/3==192200,"Dense contact fixture lost its capture-sized triangle population.");
+    dense->primitives.push_back(std::move(primitive));dense->draws.push_back({0,{}});dense->materials.emplace_back();
+    require(renderer.prepareModel(*dense),renderer.modelStatus());
+    RenderModelInstance denseReceiver=receiver;denseReceiver.entityId=940;denseReceiver.pose.reset();denseReceiver.model.asset=dense;
+    scene.instances=scene.shadowInstances=std::span(&denseReceiver,1);scene.shadowWorldId=941;scene.shadowResolution=1024;
+    settings.camera.position=math::transformPoint(rotation,{.08f,.025f,1});settings.camera.target=math::transformPoint(rotation,{0,0,-.5f});
+    settings.camera.up=normal;settings.camera.nearPlane=.0006994245f;settings.camera.fov=75;
+    sun.direction=math::normalized(math::transformDirection(rotation,{-.85f,-.45f,.25f}));sun.intensity=2;sun.shadowDistance=100;
+    sun.shadowAngularDiameter=0;sun.shadowDepthBias=.005f;sun.shadowNormalBias=1;
+    checkDenseAdmission=true;
+    const auto denseMs=measureGpu(current,"dense-hard-production",12,16);const auto denseImage=read(renderer.gameViewportTexture());
+    const auto denseReferenceMs=measureGpu(independent,"dense-hard-independent",12,16);const auto denseReference=read(renderer.gameViewportTexture());
+    require(denseImage.rgba==denseReference.rgba,"Bounded dense hard-source result disagrees with the same-budget independent control.");
+    require(denseMs<=denseReferenceMs*3.+2.,"Dense hard packet exceeded its bounded independent-ray timing control.");
+    unsigned denseLit{};for(unsigned i=0;i<denseImage.rgba.size();i+=4)denseLit+=brightness(denseImage,i)>30;
+    require(denseLit>=100,"Dense grazing fixture lost its visible receiving plane.");save(denseImage,capture,"contact-dense-hard");
+    width=914;height=600;renderer.resizeGameViewport(width,height);
+    measureGpu(current,"dense-hard-capture-size",8,8);save(read(renderer.gameViewportTexture(),width,height),capture,"contact-dense-hard-capture-size");
+    renderer.resizeGameViewport(Size,Size);
     require(renderer.reloadPrograms(current),renderer.shaderStatus());bgfx::setDebug(BGFX_DEBUG_NONE);
 }
 
@@ -767,11 +898,11 @@ void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capt
             <<" shader_sources="<<config.sourceDirectory.string()<<std::endl;
     }
     std::uint32_t frame{};const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=renderer.advance_frame();context.flush();};
-    const auto read=[&](bgfx::TextureHandle source){
-        Texture staging{bgfx::createTexture2D(Size,Size,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
+    const auto read=[&](bgfx::TextureHandle source,std::uint16_t width=Size,std::uint16_t height=Size){
+        Texture staging{bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
         require(bgfx::isValid(staging.handle),"Directional quality readback allocation failed.");
-        auto image=std::make_shared<DecodedImage>(DecodedImage{Size,Size,std::vector<std::uint8_t>(Size*Size*4)});destinations.push_back(image);
-        bgfx::blit(ReadView,staging.handle,0,0,source,0,0,Size,Size);const auto ready=bgfx::readTexture(staging.handle,image->rgba.data());
+        auto image=std::make_shared<DecodedImage>(DecodedImage{width,height,std::vector<std::uint8_t>(std::size_t(width)*height*4)});destinations.push_back(image);
+        bgfx::blit(ReadView,staging.handle,0,0,source,0,0,width,height);const auto ready=bgfx::readTexture(staging.handle,image->rgba.data());
         require(ready!=UINT32_MAX,"Directional quality readback is unsupported.");
         for(unsigned i=0;i<120;++i){tick();if(picking::frameReady(frame,ready))return *image;}
         throw std::runtime_error("Directional quality readback timed out.");

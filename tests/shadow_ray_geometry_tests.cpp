@@ -1,5 +1,6 @@
 #include <crimson/renderer/forward/ShadowRayGeometry.h>
 #include <crimson/renderer/forward/ModelData.h>
+#include "forward/ShadowContactBudget.h"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -166,9 +167,37 @@ void validationCases(){
     check(thinExpected&&thinActual&&*thinExpected==*thinActual,"A tiny valid triangle disappeared from ray visibility.");
     std::stop_source stop;stop.request_stop();throws([&]{(void)build_shadow_ray_mesh(mesh,stop.get_token());},"Canceled builder published geometry.");
 }
+void contactBudgetCases(){
+    using crimson::detail::shadow_contact_work_limit;
+    check(shadow_contact_work_limit(0,600,1)==0 && shadow_contact_work_limit(914,0,1)==0 &&
+        shadow_contact_work_limit(914,600,0)==0,"Empty directional contact demand acquired work.");
+    check(shadow_contact_work_limit(1,1,1)==detail::shadow_contact_receiver_work,
+        "A tiny viewport lost its per-receiver safety bound.");
+    std::uint32_t previous=detail::shadow_contact_receiver_work;
+    for(const auto size:{std::array<std::uint16_t,2>{128,128},{256,256},{914,600},{1920,1080},{3840,2160},{65535,65535}}){
+        std::uint32_t previousLights=detail::shadow_contact_receiver_work;
+        for(unsigned lights=1;lights<=4;++lights){
+            const auto limit=shadow_contact_work_limit(size[0],size[1],lights);
+            const auto total=std::uint64_t(limit)*size[0]*size[1]*lights;
+            check(total<=detail::shadow_contact_dispatch_work,"Contact work exceeded the complete dispatch allowance.");
+            check(limit<=detail::shadow_contact_receiver_work && limit<=previousLights,
+                "Adding directional lights increased per-query work.");
+            previousLights=limit;
+        }
+        const auto limit=shadow_contact_work_limit(size[0],size[1],1);
+        check(limit<=previous,"A larger viewport increased per-query work.");previous=limit;
+    }
+    check(shadow_contact_work_limit(65535,65535,4)==0,
+        "Oversized viewport multiplied a minimum per-query allowance beyond the dispatch bound.");
+    check(shadow_contact_work_limit(3840,2160,4)==0 && shadow_contact_work_limit(7680,4320,1)==0,
+        "Insufficient contact allowance scheduled an unusable supplement at a large viewport.");
+    check(shadow_contact_work_limit(2048,8192,1)==detail::shadow_contact_minimum_work &&
+        shadow_contact_work_limit(2048,8193,1)==0,
+        "Contact admission failed at its minimum useful allowance boundary.");
+}
 }
 int main(){try{
-    validationCases();const auto source=fixture();const auto savedVertices=source.vertices;const auto savedIndices=source.indices;
+    validationCases();contactBudgetCases();const auto source=fixture();const auto savedVertices=source.vertices;const auto savedIndices=source.indices;
     const auto mesh=build_shadow_ray_mesh(source),again=build_shadow_ray_mesh(source);check(bool(mesh)&&bool(again),"Valid fixture was rejected.");
     validatePacking(source,*mesh);
     check(mesh->nodes.size()==again->nodes.size()&&mesh->triangles.size()==again->triangles.size()&&
