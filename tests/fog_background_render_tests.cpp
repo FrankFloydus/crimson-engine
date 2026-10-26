@@ -2,6 +2,8 @@
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/Picking.h"
 #include "crimson-renderer/RenderPassPlan.h"
+#include "crimson-renderer/MaterialGraphGpu.h"
+#include "assets/MaterialGraph.h"
 #include "resources/ResourceManager.h"
 #include "GpuTestBackend.h"
 #include "fog_aerial_perspective_fixture.h"
@@ -9,13 +11,19 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <numbers>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
+#include <lodepng.h>
 
 namespace {
 using namespace crimson;
@@ -29,6 +37,15 @@ struct Sdl {
 struct Texture {
     bgfx::TextureHandle value{BGFX_INVALID_HANDLE};
     ~Texture(){if(bgfx::isValid(value))bgfx::destroy(value);}
+};
+struct ParticleShaderCache {
+    std::filesystem::path path=std::filesystem::temp_directory_path()/
+        ("crimson-particle-pixelization-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    ParticleShaderCache(){std::filesystem::create_directories(path);}
+    ~ParticleShaderCache(){std::error_code error;const auto target=std::filesystem::weakly_canonical(path,error);
+        const auto parent=std::filesystem::weakly_canonical(std::filesystem::temp_directory_path(),error);
+        if(!error&&target.parent_path()==parent&&target.filename().string().starts_with("crimson-particle-pixelization-"))
+            std::filesystem::remove_all(target,error);}
 };
 Vec3 linear(Vec3 color) {
     for(auto& value:color)value=value<=.04045f?value/12.92f:std::pow((value+.055f)/1.055f,2.4f);
@@ -108,7 +125,8 @@ void centerColor(const DecodedImage& image,const Vec3& expected,const std::strin
     for(unsigned channel=0;channel<3;++channel)
         check(std::abs(float(image.rgba[pixel+channel])-expected[channel])<=3,label+": unexpected center color.");
 }
-void exercise(SDL_Window* window,bool postProcessingOnly) {
+void exercise(SDL_Window* window,bool postProcessingOnly,const std::filesystem::path& shaderTools) {
+    ParticleShaderCache particleShaderCache;
     ResourceManager resources;
     Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));
     TestGpuContext context;
@@ -509,6 +527,101 @@ void exercise(SDL_Window* window,bool postProcessingOnly) {
         equivalent(rawEffects[1],raw[1],"Game RawData post-processing bypass");
     }
     scene.instances=game.instances={};renderer.evictModel(postMesh->id);
+    renderer.setDebugView(RenderViewPurpose::Scene,RenderDebugView::Lit);
+    renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Lit);
+    sceneSettings=SceneSettings{};sceneSettings.camera.position={0,0,3};sceneSettings.camera.target={};
+    sceneSettings.environment.enabled=false;sceneSettings.environment.ambientLight.source=AmbientLightSource::Disabled;
+    sceneSettings.environment.background.overrideColor=true;sceneSettings.environment.background.color={};
+    sceneSettings.environment.toneMapping=ToneMapping::Reinhard;sceneSettings.environment.debanding=false;
+    sceneSettings.environment.vignette.enabled=false;gameSettings=sceneSettings;
+    constexpr unsigned SoftExtent=32;
+    std::vector<std::uint8_t> softPixels(SoftExtent*SoftExtent*4);
+    for(unsigned y=0;y<SoftExtent;++y)for(unsigned x=0;x<SoftExtent;++x) {
+        const double u=(2*(double(x)+.5)/SoftExtent-1)/.9,v=(2*(double(y)+.5)/SoftExtent-1)/.55;
+        const double edge=std::clamp((1-std::hypot(u,v))*3,0.,1.);
+        const auto value=static_cast<std::uint8_t>(std::lround(255*edge*edge*(3-2*edge)));
+        const auto offset=(std::size_t(y)*SoftExtent+x)*4;
+        softPixels[offset]=softPixels[offset+1]=softPixels[offset+2]=softPixels[offset+3]=value;
+    }
+    Texture softTexture{bgfx::createTexture2D(SoftExtent,SoftExtent,false,1,bgfx::TextureFormat::RGBA8,
+        BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP,bgfx::copy(softPixels.data(),static_cast<std::uint32_t>(softPixels.size())))};
+    check(bgfx::isValid(softTexture.value),"Particle Pixelization soft-edge texture allocation failed.");
+    ShaderCompileConfig shaderConfig{shaderTools/"shaderc.exe",shaderTools/"shaders",shaderTools/"include",particleShaderCache.path};
+    check(std::filesystem::is_regular_file(shaderConfig.compiler)&&std::filesystem::is_directory(shaderConfig.sourceDirectory)&&
+        std::filesystem::is_directory(shaderConfig.includeDirectory),"Particle Pixelization requires the executable's paired shader-tools payload.");
+    MaterialGraphPrograms programs(resources,shaderConfig);
+    MaterialAsset authored;authored.id="post-process-soft-alpha-particle";
+    const auto outputId=addMaterialNode(authored.graph,MaterialNodeKind::Output).id;
+    auto& particleOutput=materialOutputNode(authored.graph).output;
+    particleOutput.shading=MaterialShading::Unlit;particleOutput.blend=MaterialBlend::Alpha;
+    particleOutput.baseColor={3,.75f,.2f};
+    const auto alphaId=addMaterialNode(authored.graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(authored.graph,alphaId)->texture.image.id="assets/textures/post-process-soft-alpha.png";
+    findMaterialNode(authored.graph,alphaId)->texture.role=MaterialTextureRole::Data;
+    connectMaterialNodes(authored.graph,alphaId,MaterialPin::A,outputId,MaterialPin::Opacity);
+    const auto shader=generateMaterialGraphShader(authored);MaterialGraphProgramResult compiled;
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{120};
+    do {
+        tick();compiled=programs.request(shader,ResourcePriority::Preview,MaterialGraphUsage::Surface);
+        if(!compiled.current&&!compiled.diagnostic.empty()&&compiled.diagnostic!="Compiling material graph...")throw std::runtime_error(compiled.diagnostic);
+        if(!compiled.current)std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }while(!compiled.current&&std::chrono::steady_clock::now()<deadline);
+    check(compiled.current&&bool(compiled.programs),"Generated soft-alpha particle material publication timed out.");
+    auto alphaPacket=std::make_shared<PreparedGraphMaterial>();alphaPacket->programs=compiled.programs;
+    alphaPacket->uniforms=shader.uniforms;alphaPacket->sources=shader.textures;alphaPacket->shading=MaterialShading::Unlit;
+    alphaPacket->blend=MaterialBlend::Alpha;alphaPacket->signature=compiled.programs->signature;
+    check(shader.textures.size()==1,"Soft-alpha particle fixture lost its authored coverage texture.");
+    alphaPacket->textures[shader.textures[0].slot]=softTexture.value;
+    alphaPacket->flags[shader.textures[0].slot]=BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP;
+    RenderParticle particle;particle.position={.03f,-.02f,0};particle.size=1.8f;particle.rotation=.43f;
+    RenderParticleMaterial sprite;sprite.shading=MaterialShading::Unlit;sprite.baseColor={3,.75f,.2f,.75f};
+    sprite.colorTexture=softTexture.value;sprite.samplerFlags=BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP;
+    scene.particles=game.particles=std::span(&particle,1);scene.particleMaterials=game.particleMaterials=std::span(&sprite,1);
+    char* captureValue{};std::size_t captureLength{};
+    const auto captureError=_dupenv_s(&captureValue,&captureLength,"CRIMSON_TEST_CAPTURE_DIR");
+    const std::filesystem::path captureDirectory=captureError==0&&captureValue?captureValue:"";std::free(captureValue);
+    const auto saveEvidence=[&](const char* name,const DecodedImage& image) {
+        if(captureDirectory.empty())return;
+        std::filesystem::create_directories(captureDirectory);
+        std::vector<unsigned char> bytes;check(lodepng::encode(bytes,image.rgba,image.width,image.height)==0,"Cannot encode particle Pixelization evidence.");
+        std::ofstream file(captureDirectory/name,std::ios::binary);file.write(reinterpret_cast<const char*>(bytes.data()),static_cast<std::streamsize>(bytes.size()));
+        check(bool(file),"Cannot write particle Pixelization evidence.");
+    };
+    constexpr std::array blends{MaterialBlend::Alpha,MaterialBlend::Additive,MaterialBlend::Mask};
+    for(unsigned materialCase=0;materialCase<4;++materialCase)for(const auto aa:{AntiAliasing::Off,AntiAliasing::Smaa})for(bool glow:{false,true}) {
+        sprite.graph=materialCase==3?alphaPacket:std::shared_ptr<const PreparedGraphMaterial>{};
+        sprite.blend=materialCase<3?blends[materialCase]:MaterialBlend::Alpha;
+        sceneSettings.antiAliasing=aa;sceneSettings.environment.pixelization.enabled=false;
+        sceneSettings.environment.glow.enabled=glow;sceneSettings.environment.glow.threshold=.05f;
+        sceneSettings.environment.glow.hdrScale=.1f;sceneSettings.environment.glow.strength=.6f;
+        gameSettings=sceneSettings;
+        const auto baseline=capture();
+        check(renderer.particleStats().submitted==1&&renderer.gameParticleStats().submitted==1,
+            "Particle-only Pixelization fixture did not submit its Scene/Game sprites.");
+        unsigned visible{};for(std::size_t byte=0;byte<baseline[0].rgba.size();byte+=4)
+            visible+=baseline[0].rgba[byte]>32||baseline[0].rgba[byte+1]>32||baseline[0].rgba[byte+2]>32;
+        check(visible>32,"Particle-only baseline has no visible textured sprite.");
+        sceneSettings.environment.pixelization={true,8};const auto sceneOnly=capture();
+        check(maxDifference(sceneOnly[0],baseline[0])>10,"Pixelization did not change particle-only Scene pixels.");
+        uniformCells(sceneOnly[0],8,"A Scene particle bypassed an 8-pixel Pixelization block.");
+        equivalent(sceneOnly[1],baseline[1],"Particle Pixelization Game isolation");
+        gameSettings.environment.pixelization={true,8};const auto both=capture();
+        uniformCells(both[0],8,"A Scene particle or its Glow escaped Pixelization.");
+        uniformCells(both[1],8,"A Game particle or its Glow escaped Pixelization.");
+        check(maxDifference(both[1],baseline[1])>10,"Pixelization did not change particle-only Game pixels.");
+        if(materialCase==3&&aa==AntiAliasing::Smaa&&glow) {
+            saveEvidence("particle-alpha-baseline-scene.png",baseline[0]);saveEvidence("particle-alpha-pixelized-scene.png",both[0]);
+            saveEvidence("particle-alpha-baseline-game.png",baseline[1]);saveEvidence("particle-alpha-pixelized-game.png",both[1]);
+        }
+        sceneSettings.environment.pixelization.enabled=false;const auto gameOnly=capture();
+        equivalent(gameOnly[0],baseline[0],"Particle Pixelization Scene disabled restoration");
+        equivalent(gameOnly[1],both[1],"Particle Pixelization Scene isolation");
+        gameSettings.environment.pixelization.enabled=false;const auto restored=capture();
+        equivalent(restored[0],baseline[0],"Particle Pixelization Scene exact restoration");
+        equivalent(restored[1],baseline[1],"Particle Pixelization Game exact restoration");
+    }
+    scene.particles=game.particles={};scene.particleMaterials=game.particleMaterials={};
+    std::cout<<"Particle-only Scene/Game Pixelization passed for Alpha/Additive/Masked sprites, generated soft-alpha coverage, Off/SMAA, Glow off/on, odd 161x121 blocks, view isolation and exact restoration on "<<renderer.backendName()<<".\n";
     resources.stop();renderer.drainPending(frame);
     std::cout<<"Post-processing Pixelization after SMAA, ordered Dither, perceptual Posterization, Vignette, combined effects, exact disabled restoration, RawData bypass and Scene/Game isolation passed on "<<renderer.backendName()<<".\n";
     if(!postProcessingOnly)std::cout<<"Fog background Scene/Game controls and reference checks passed.\n";
@@ -520,6 +633,6 @@ int main(int argc,char** argv) {
         Sdl sdl;
         std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(
             SDL_CreateWindow("Crimson fog background regression",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
-        check(bool(window),SDL_GetError());exercise(window.get(),argc==2);return 0;
+        check(bool(window),SDL_GetError());exercise(window.get(),argc==2,std::filesystem::absolute(argv[0]).parent_path()/"shader-tools");return 0;
     } catch(const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}
 }
