@@ -2629,7 +2629,6 @@
     "00e951bb-d858-5f0c-a72d-e49ccc904661": "Content/models/quader-60f83346cc510018b3bbc1183974957e09e36525f4d4a876a8283f82de3fa64b/source.gltf",
     "012a7183-669f-534e-977d-dc9947563a3f": ".crimson/cache/quader-imports/a8695214-0c58-5bed-bd3b-77a26ce5f828/0e8e3bc8-4c10-5bef-9a64-475d1f8bd670/model.gltf",
     "0153a740-0e28-5b95-b32a-2d9d5f0588f1": "Content/models/quader-c57ef68f060467eaef0aa806a1982d9cd5b257fa0158f7d1c645ccb98f033c7f/manifest.json",
-    "01744d53-f388-5d0a-8687-4884c88cc83c": ".crimson/cache/quader-imports/a8695214-0c58-5bed-bd3b-77a26ce5f828/6718d52b-8e37-5ee1-89f1-20857cd4521b/source.gltf",
     "018f17ab-1f88-5dbe-80d7-bf114d972307": "Content/models/quader-c3bdaa7309997c9c60ee80e5e1a2f36e92803f9b1dd82d5a40f548d546aafd10/manifest.json",
     "019c9b88-746b-53cf-b65b-4a260d0d2f70": "Content/models/quader-e1a794451d2e283dca5e865cfb716ea3409cf6f06af76c1772a1f51b23e482ab/manifest.json",
     "01a3413f-af2d-5049-85e7-097c6a90fa75": "Content/New Particle Effect.crimson-particle",
@@ -3089,6 +3088,7 @@
     "3b56113c-9e78-554c-b97b-46479fefe3f4": "Content/Box_008 collision-411be4be.crimson-model/model.gltf",
     "3b5a4c19-c44f-564e-b9a1-50e3edf71553": "Content/textures/default_albedo_original.png",
     "3c5177bd-377d-5ded-bdac-1f6bf083f951": ".crimson/cache/quader-imports/a8695214-0c58-5bed-bd3b-77a26ce5f828/653c6de9-c5ca-525c-b441-f207b22ebabd/buffers/0.bin",
+    "3c564044-a6c7-4892-950d-6a47cb31e3b0": "Content/3c564044-a6c7-4892-950d-6a47cb31e3b0.crimson-material",
     "3c9dd702-27fa-5636-8c1c-6ec4c5266a3b": ".crimson/cache/quader-imports/a8695214-0c58-5bed-bd3b-77a26ce5f828/596818d1-2348-581a-9663-70ab80f96d6d/model.gltf",
     "3cab2460-21e2-5769-a49e-ba309a6a0e93": "Content/Cylinder_001-56fae594.crimson-model/manifest.json",
     "3cb53b5b-95d5-5d55-880b-5fa9400abd8a": "Content/Box_005-ee61d558.crimson-model/source.gltf",
@@ -3445,7 +3445,6 @@
     "66e91e45-2094-54bc-aca6-47f31761b416": "Content/models/quader-8d0d822732f55724fa4e4f1e975f9ae3c7ba3b9bc12111f65f8a6eb582e3aa92/source.gltf",
     "66fe2809-a216-515f-b025-080e5d2264cd": "Content/Cylinder_001-48236d97.crimson-model/manifest.json",
     "6717cfc9-e470-58ab-9c1a-5df124deb15d": "Content/quader-c499b0cea2a97c54a3858fd44b4405ca8e204febc8d6dcd5579054500bf25fef.png",
-    "6718d52b-8e37-5ee1-89f1-20857cd4521b": ".crimson/cache/quader-imports/a8695214-0c58-5bed-bd3b-77a26ce5f828/6718d52b-8e37-5ee1-89f1-20857cd4521b/manifest.json",
     "676913ae-a2f8-57f3-a22b-7413c4fe2531": "Content/models/quader-b32c5aa428be55e64324baf8d4404f246708e5128d87e05b5bf8326018f69a79/model.gltf",
     "6775e852-11f4-5308-8064-0cc6e96fcc22": "Content/Pillar-5c1c2951.crimson-model/source.gltf",
     "67b8a73b-2200-51eb-8ad9-5590f8eeb201": "Content/Skeletons/67b8a73b-2200-51eb-8ad9-5590f8eeb201.crimson-material",
@@ -3886,7 +3885,6 @@
     "9a82e56e-5eb4-502e-8252-a3de52e55139": ".crimson/cache/quader-imports/a8695214-0c58-5bed-bd3b-77a26ce5f828/9a82e56e-5eb4-502e-8252-a3de52e55139/manifest.json",
     "9aad1d48-76de-5b60-8233-36fa93b9e0e8": "Content/Default material.crimson-material",
     "9ab9660b-8f47-5464-a1b5-b4154f4a4736": "Content/models/quader-8bb2c5aa089b08044ad392b70493b932836a34306ecf2b761a576655d48cf41d/manifest.json",
-    "9abc271f-47ad-5943-b510-c4b89be45b11": ".crimson/cache/quader-imports/a8695214-0c58-5bed-bd3b-77a26ce5f828/6718d52b-8e37-5ee1-89f1-20857cd4521b/buffers/0.bin",
     "9ad676ed-7e3b-5c32-a025-537c09cfeeb2": "Content/models/quader-0506dee7b7f2f2adcbba09858578a4d609377fdd0e5e1bd99b7c6717cdc9057b/manifest.json",
     "9b0c1b57-07cd-5da1-a176-d5e91c127c55": "Content/Box_005 collision-5b635f0f.crimson-model/model.gltf",
     "9b140b23-7060-5523-9fdc-3a0243f2d1ae": "Content/models/quader-9e57a81de084752918dc663ee25c90d16c61f8992e6cd1988a625c0905e933e2/source.gltf",
@@ -4320,7 +4318,6 @@
     "d05b2c66-8522-5cdc-a0e3-9b8cc9383060": "Content/models/quader-4d72f75f51b9537e4471671223ff0a6ddf722d1343fccaca36a7bf34c252a03e/buffers/0.bin",
     "d074c9a6-1cea-5164-8731-08322a5a719e": "Content/textures/quader-0a96e2ed58a9f94af1a7d92c8db6dbdf169fc81c70da2c0177262fdba741f35e-2.png",
     "d07c6e59-cdae-57c9-82eb-5f729af62411": "Content/models/quader-ac61aa1a84a28c2b6bae1f7ff006a06af688372ea02d8516f65ffe83fae9482a/buffers/0.bin",
-    "d0a1b67a-6cfd-544d-8189-cc1750ab01a1": ".crimson/cache/quader-imports/a8695214-0c58-5bed-bd3b-77a26ce5f828/6718d52b-8e37-5ee1-89f1-20857cd4521b/model.gltf",
     "d0a32b11-60a3-5fef-80ee-186a68daf2ed": "Content/models/quader-b942b30fad631bb98554caa36dcac451ce834dcae37181e550be0e4d31d4217e/buffers/0.bin",
     "d0ac21b6-9762-5282-a73f-a9472ecffb62": "Content/models/quader-9b2a3297b9afd1db84d6d01122ac15e1b99ef7fd88d8d2da9ff8291dad796b76/manifest.json",
     "d0b41734-bcdf-5d7a-82ab-02cce5a20ca5": "Content/Box_012 collision-1dbf8ac0.crimson-model/source.gltf",
@@ -4749,7 +4746,7 @@
     "ffe67bd8-acf6-5d5b-ac6b-4fd7b4804d60": "Content/Box_005 collision-5b635f0f.crimson-model/source.gltf",
     "ffe852b4-ad1b-5ef9-b90c-cd37a201113e": ".crimson/cache/quader-imports/a8695214-0c58-5bed-bd3b-77a26ce5f828/ffe852b4-ad1b-5ef9-b90c-cd37a201113e/manifest.json"
   },
-  "revision": 462,
+  "revision": 465,
   "uuidReferences": true,
   "version": 1
 }
