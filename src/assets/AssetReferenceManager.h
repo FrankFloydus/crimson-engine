@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -18,6 +19,7 @@ struct AssetUsage {
     std::string targetId, ownerId, ownerName, slot;
     bool active{}, historical{};
     bool editorState{}; // Archived settings/session data are not usable authored owners.
+    std::uint64_t entityId{}; // Optional stable scene occurrence; zero for asset/history owners.
 };
 struct SceneImpact { std::string id, name; std::size_t entities{}; };
 struct AssetDeletionPlan {
@@ -66,7 +68,7 @@ public:
     const std::string& status() const { return status_; }
     const std::vector<AssetUsage>& usages() const { return usages_; }
     void setUsages(std::vector<AssetUsage> usages);
-    std::vector<AssetUsage> users(const std::string& id) const;
+    std::vector<AssetUsage> users(const std::string& id,std::stop_token={}) const;
     std::vector<AssetUsage> authoredUsers(const std::string& id,
                                         std::span<const std::string> removedOwners = {}) const;
     void replace(std::span<const AssetEntry> deletedAssets,

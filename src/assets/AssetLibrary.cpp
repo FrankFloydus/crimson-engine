@@ -1,4 +1,5 @@
 #include "AssetLibrary.h"
+#include "AssetReferenceReport.h"
 #include "crimson-renderer/MaterialGraphGpu.h"
 #include "scene/EnvironmentSerialization.h"
 #include "BuiltinGeometry.h"
@@ -41,6 +42,7 @@
 #include <set>
 #include <stdexcept>
 #include <type_traits>
+#include <tuple>
 
 namespace crimson {
 namespace {
@@ -1051,6 +1053,7 @@ void AssetLibrary::updateResources(std::uint32_t bgfxFrame) {
     const auto message=textureStreamer_->diagnostic(); if(!message.empty()) status_=message;
 }
 void AssetLibrary::onFileChanged(const std::filesystem::path& changed) {
+    ++referenceSourceRevision_;
     // These small durable files may retain a model without a scene/catalog
     // change. External edits must invalidate the destructive ownership proof.
     const auto filename=changed.filename();
@@ -2216,11 +2219,12 @@ void AssetLibrary::saveEnvironment(const EnvironmentSettings& environment) {
 }
 
 namespace {
-std::vector<SceneSnapshot> savedScenes(const std::filesystem::path& root) {
+std::vector<SceneSnapshot> savedScenes(const std::filesystem::path& root,std::stop_token stop={}) {
     std::vector<SceneSnapshot> result;
     std::vector<std::string> diagnostics;const auto entries=scanSceneAssets(root,&diagnostics);
     if(!diagnostics.empty())throw std::runtime_error("Cannot inspect all saved scene references: "+diagnostics.front());
     for(const auto& entry:entries){
+        if(stop.stop_requested())throw std::runtime_error("Asset reference request cancelled.");
         const auto& id=entry.id;try{result.push_back(readSceneSnapshot(root,id));}
         catch(const std::exception& error){throw std::runtime_error("Cannot inspect scene "+id+": "+error.what());}
     }return result;
@@ -2368,44 +2372,58 @@ size_t replaceDeletedRagdolls(SceneSnapshot& snapshot,const AssetReferenceManage
     Scene::validate(snapshot.records,snapshot.properties);return changed;
 }
 }
-void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
+void appendSceneAssetUsages(std::vector<AssetUsage>& usages,std::span<const EntityRecord> records,const std::string& id,const std::string& name,bool isActive) {
+        for(const auto& record:records){const auto first=usages.size();if(record.model)usages.push_back({record.model->id,id,name,record.name,isActive,false});
+            if(record.model&&!record.modelAnimation.asset.empty())usages.push_back({record.modelAnimation.asset.id,id,name,record.name+" / Animation",isActive,false});
+            if(record.model&&!record.modelRagdoll.asset.empty())usages.push_back({record.modelRagdoll.asset.id,id,name,record.name+" / Ragdoll",isActive,false});
+            if(record.effects)for(const auto& effect:record.effects->starting)usages.push_back({effect.id,id,name,record.name+" / Starting Effect",isActive,false});
+            if(record.controller)usages.push_back({record.controller->profile.id,id,name,record.name+" / Navigation Agent Profile",isActive,false});
+            if(record.navigationVolume)for(const auto& profile:record.navigationVolume->profiles)usages.push_back({profile.id,id,name,record.name+" / Supported Agent Profile",isActive,false});
+            if(record.collider && !record.collider->source.empty())usages.push_back({record.collider->source.id,id,name,record.name+" / Collider source",isActive,false});
+            for(size_t slot=0;slot<record.modelMaterials.size();++slot)if(!record.modelMaterials[slot].empty())
+                usages.push_back({record.modelMaterials[slot].id,id,name,record.name+" / Material slot "+std::to_string(slot+1),isActive,false});
+            for(const auto& blend:record.blendSettings)
+                usages.push_back({blend.material.id,id,name,record.name+" / Material slot "+std::to_string(blend.slot+1)+" / Blend settings",isActive,false});
+            if(record.particle&&!record.particle->empty())usages.push_back({record.particle->id,id,name,record.name+" / Particle effect",isActive,false});
+            if(record.decal){if(!record.decal->asset.empty())usages.push_back({record.decal->asset.id,id,name,record.name+" / Decal surface",isActive,false});
+                if(!record.decal->seed.modelId.empty())usages.push_back({record.decal->seed.modelId,id,name,record.name+" / Decal seed geometry",isActive,false});}
+            if(record.environment&&!record.environment->environment.map.empty())usages.push_back({record.environment->environment.map,id,name,record.name+" / Environment",isActive,false});
+            for(auto i=first;i<usages.size();++i)usages[i].entityId=record.id;
+        }
+}
+
+std::vector<AssetUsage> collectAssetReferenceUsages(const AssetReferenceIndexInput& input,std::stop_token stop) {
+    const auto& projectRoot_=input.root;const auto& catalog_=input.catalog;const auto& materials_=input.materials;
+    const auto& materialDocumentId_=input.materialDocumentId;const auto& retainedQuaderModels_=input.retainedModels;
+    const auto& references_=*input.policy;
+    const auto modelResolvers=[&]{return input.resolvers;};
+    const auto check=[&]{if(stop.stop_requested())throw std::runtime_error("Asset reference request cancelled.");};
+    check();
     std::vector<AssetUsage> usages;
     std::unordered_set<std::string> usableMaterials;
     for(const auto& entry:catalog_)if(entry.kind==AssetKind::Material)try{if(std::filesystem::is_regular_file(resolveAssetPath(projectRoot_,entry.id)))usableMaterials.insert(entry.id);}catch(const std::exception&){}
-    for(const auto& stored:materials_){const auto material=stored->id==materialDocumentId_&&std::filesystem::is_regular_file(materialAssetPath(projectRoot_,stored->id))?std::make_shared<MaterialAsset>(loadMaterialAsset(projectRoot_,stored->id)):stored;
+    for(const auto& stored:materials_){check();const auto material=stored->id==materialDocumentId_&&std::filesystem::is_regular_file(materialAssetPath(projectRoot_,stored->id))?std::make_shared<MaterialAsset>(loadMaterialAsset(projectRoot_,stored->id)):stored;
         visitMaterialAssetTextures(*material,[&](const auto& id,MaterialTextureRole role){
             usages.push_back({id,material->id,material->name,role==MaterialTextureRole::Normal?"Normal texture":"Graph texture",false,false,!usableMaterials.contains(material->id)});
         });
         for(const auto& id:materialMaterialReferences(*material))
             usages.push_back({id,material->id,material->name,"Blend material layer",false,false,!usableMaterials.contains(material->id)});
     }
-    for(const auto& entry:catalog_)if(entry.kind==AssetKind::Particle){const auto effect=loadParticleAsset(projectRoot_,entry.id);
+    for(const auto& entry:catalog_)if(entry.kind==AssetKind::Particle){check();const auto effect=loadParticleAsset(projectRoot_,entry.id);
         if(!effect.emitter.material.empty()&&!isEngineAssetId(effect.emitter.material.id))usages.push_back({effect.emitter.material.id,effect.id,effect.name,"Particle material"});}
-    for(const auto& entry:catalog_)if(entry.kind==AssetKind::Decal) {
+    for(const auto& entry:catalog_)if(entry.kind==AssetKind::Decal) {check();
         const auto decal=loadDecalAsset(projectRoot_,entry.id);for(const auto& id:decalMaterialReferences(decal))usages.push_back({id,decal.id,decal.name,"Decal material"});
         if(!references_.deleted(decal.material.id))if(const auto stage=stagedDecalMaterial(projectRoot_,decal))
             for(const auto& image:materialTextureReferences(*stage))usages.push_back({image,decal.id,decal.name,"Decal material texture"});
     }
-    for(const auto& id:decalDocumentReferences_)if(!id.empty())usages.push_back({id,decalDocumentId_,"Open decal surface","Decal material",true,false});
-    for(const auto& id:decalDocumentHistory_)if(!id.empty())usages.push_back({id,decalDocumentId_,"Open decal surface","Decal material undo / redo history",true,true});
-    for(const auto& entry:catalog_)if(entry.kind==AssetKind::Animation) {
+    for(const auto& entry:catalog_)if(entry.kind==AssetKind::Animation) {check();
         const auto animation=loadAnimationAsset(projectRoot_,entry.id);
         usages.push_back({animation.sourceModel.id,animation.id,animation.name,"Animation source model"});
     }
-    for(const auto& id:animationDocumentReferences_)if(!id.empty())usages.push_back({id,animationDocumentId_,"Open animation","Animation source model",true,false});
-    for(const auto& id:animationDocumentHistory_)if(!id.empty())usages.push_back({id,animationDocumentId_,"Open animation","Animation source model undo / redo history",true,true});
-    for(const auto& entry:catalog_)if(entry.kind==AssetKind::Ragdoll) {
+    for(const auto& entry:catalog_)if(entry.kind==AssetKind::Ragdoll) {check();
         const auto ragdoll=loadRagdollAsset(projectRoot_,entry.id);
         usages.push_back({ragdoll.sourceModel.id,ragdoll.id,ragdoll.name,"Ragdoll source model"});
     }
-    for(const auto& id:ragdollDocumentReferences_)if(!id.empty())usages.push_back({id,ragdollDocumentId_,"Open ragdoll","Ragdoll source model",true,false});
-    for(const auto& id:ragdollDocumentHistory_)if(!id.empty())usages.push_back({id,ragdollDocumentId_,"Open ragdoll","Ragdoll source model undo / redo history",true,true});
-    for(const auto& id:particleDocumentReferences_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,particleDocumentId_,"Open particle effect","Particle material",true,false});
-    for(const auto& id:particleDocumentHistory_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,particleDocumentId_,"Open particle effect","Particle material undo / redo history",true,true});
-    for(const auto& id:materialDocumentReferences_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,materialDocumentId_,"Open material","Material texture",true,false});
-    for(const auto& id:blendDocumentReferences_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,materialDocumentId_,"Open material","Blend material layer",true,false});
-    for(const auto& id:blendDocumentHistory_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,materialDocumentId_,"Open material","Blend layer undo / redo history",true,true});
-    for(const auto& id:materialDocumentHistory_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,materialDocumentId_,"Open material","Material texture undo / redo history",true,true});
     // Inspect lightweight material metadata for every package, including models
     // never opened in the viewport. Authored usage cannot depend on residency.
     std::set<std::string> referencedModels;
@@ -2413,7 +2431,7 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     // Hidden old geometry still owns material/image dependencies while saved
     // scenes, live entities or history can load that generation.
     for(const auto& id:retainedQuaderModels_)if(!references_.deleted(id))referencedModels.insert(id);
-    for(const auto& id:referencedModels) {
+    for(const auto& id:referencedModels) {check();
         const auto model=loadModelMaterialMetadata(resolveAssetPath(projectRoot_,id),projectRoot_,modelResolvers());
         for(size_t index=0;index<model->materials.size();++index) {
             const auto materialId=index<model->materialIds.size()?model->materialIds[index]:importedMaterialId(model->id,index);
@@ -2428,25 +2446,40 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
                     native?"Texture":material.name+" / Texture"});
         }
     }
-    const auto addScene=[&](const std::vector<EntityRecord>& records,const std::string& id,const std::string& name,bool isActive){
-        for(const auto& record:records){if(record.model)usages.push_back({record.model->id,id,name,record.name,isActive,false});
-            if(record.model&&!record.modelAnimation.asset.empty())usages.push_back({record.modelAnimation.asset.id,id,name,record.name+" / Animation",isActive,false});
-            if(record.model&&!record.modelRagdoll.asset.empty())usages.push_back({record.modelRagdoll.asset.id,id,name,record.name+" / Ragdoll",isActive,false});
-            if(record.effects)for(const auto& effect:record.effects->starting)usages.push_back({effect.id,id,name,record.name+" / Starting Effect",isActive,false});
-            if(record.controller)usages.push_back({record.controller->profile.id,id,name,record.name+" / Navigation Agent Profile",isActive,false});
-            if(record.navigationVolume)for(const auto& profile:record.navigationVolume->profiles)usages.push_back({profile.id,id,name,record.name+" / Supported Agent Profile",isActive,false});
-            if(record.collider && !record.collider->source.empty())usages.push_back({record.collider->source.id,id,name,record.name+" / Collider source",isActive,false});
-            for(size_t slot=0;slot<record.modelMaterials.size();++slot)if(!record.modelMaterials[slot].empty())
-                usages.push_back({record.modelMaterials[slot].id,id,name,record.name+" / Material slot "+std::to_string(slot+1),isActive,false});
-            for(const auto& blend:record.blendSettings)
-                usages.push_back({blend.material.id,id,name,record.name+" / Material slot "+std::to_string(blend.slot+1)+" / Blend settings",isActive,false});
-            if(record.particle&&!record.particle->empty())usages.push_back({record.particle->id,id,name,record.name+" / Particle effect",isActive,false});
-            if(record.decal){if(!record.decal->asset.empty())usages.push_back({record.decal->asset.id,id,name,record.name+" / Decal surface",isActive,false});
-                if(!record.decal->seed.modelId.empty())usages.push_back({record.decal->seed.modelId,id,name,record.name+" / Decal seed geometry",isActive,false});}
-            if(record.environment&&!record.environment->environment.map.empty())usages.push_back({record.environment->environment.map,id,name,record.name+" / Environment",isActive,false});}
-    };
-    for(const auto& scene:savedScenes(projectRoot_))addScene(scene.records,scene.id,scene.name,false);
-    if(active){addScene(active->scene().records(),active->assetId(),active->displayName(),true);
+    for(const auto& scene:savedScenes(projectRoot_,stop)){check();appendSceneAssetUsages(usages,scene.records,scene.id,scene.name,false);}
+    usages.insert(usages.end(),input.liveUsages.begin(),input.liveUsages.end());
+    for(const auto& file:{"material.json","environment.json","preview.json","editor-session.json"}){
+        const auto source=resolveAssetPath(projectRoot_,"assets/"+std::string(file));if(!std::filesystem::exists(source))continue;
+        try{std::ifstream stream(source);const auto j=nlohmann::json::parse(stream);
+            for(const auto* slot:{"albedoMap","roughnessMap","metallicMap","normalMap","map","model","scene"})if(j.contains(slot)&&j[slot].is_string()){
+                // These preserved files belong to the retired sphere/preview
+                // workflow or editor session. They remain resolvable history,
+                // rather than surviving scene-editor resource owners.
+                const auto id=j[slot].get<std::string>();if(!id.empty())usages.push_back({id,"assets/"+std::string(file),file,slot,false,false,true});}}
+        catch(const std::exception& e){throw std::runtime_error("Cannot inspect legacy resource references in "+std::string(file)+": "+e.what());}
+    }
+    check();return usages;
+}
+
+AssetReferenceIndexInput AssetLibrary::referenceIndexInput(const SceneDocument* active) const {
+    AssetReferenceIndexInput result;result.root=projectRoot_;result.catalog=catalog_;result.locations=storedAssetPaths(projectRoot_);
+    result.materials=materials_;result.retainedModels.assign(retainedQuaderModels_.begin(),retainedQuaderModels_.end());
+    result.materialDocumentId=materialDocumentId_;result.policy=references_.resolutionSnapshot();result.resolvers=modelResolvers();
+    result.storageRevision=contentStorageRevision(projectRoot_);result.requestRevision=referenceReportRevision(active);
+    auto& usages=result.liveUsages;
+    for(const auto& id:decalDocumentReferences_)if(!id.empty())usages.push_back({id,decalDocumentId_,"Open decal surface","Decal material",true,false});
+    for(const auto& id:decalDocumentHistory_)if(!id.empty())usages.push_back({id,decalDocumentId_,"Open decal surface","Decal material undo / redo history",true,true});
+    for(const auto& id:animationDocumentReferences_)if(!id.empty())usages.push_back({id,animationDocumentId_,"Open animation","Animation source model",true,false});
+    for(const auto& id:animationDocumentHistory_)if(!id.empty())usages.push_back({id,animationDocumentId_,"Open animation","Animation source model undo / redo history",true,true});
+    for(const auto& id:ragdollDocumentReferences_)if(!id.empty())usages.push_back({id,ragdollDocumentId_,"Open ragdoll","Ragdoll source model",true,false});
+    for(const auto& id:ragdollDocumentHistory_)if(!id.empty())usages.push_back({id,ragdollDocumentId_,"Open ragdoll","Ragdoll source model undo / redo history",true,true});
+    for(const auto& id:particleDocumentReferences_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,particleDocumentId_,"Open particle effect","Particle material",true,false});
+    for(const auto& id:particleDocumentHistory_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,particleDocumentId_,"Open particle effect","Particle material undo / redo history",true,true});
+    for(const auto& id:materialDocumentReferences_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,materialDocumentId_,"Open material","Material texture",true,false});
+    for(const auto& id:blendDocumentReferences_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,materialDocumentId_,"Open material","Blend material layer",true,false});
+    for(const auto& id:blendDocumentHistory_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,materialDocumentId_,"Open material","Blend layer undo / redo history",true,true});
+    for(const auto& id:materialDocumentHistory_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,materialDocumentId_,"Open material","Material texture undo / redo history",true,true});
+    if(active){appendSceneAssetUsages(usages,active->scene().records(),active->assetId(),active->displayName(),true);
         for(const auto& id:active->historicalModelReferences())usages.push_back({id,active->assetId(),active->displayName(),"Undo / redo history",true,true});
         for(const auto& id:active->historicalMaterialReferences())usages.push_back({id,active->assetId(),active->displayName(),"Undo / redo history / Material slot",true,true});
         for(const auto& id:active->historicalParticleReferences())usages.push_back({id,active->assetId(),active->displayName(),"Particle undo / redo history",true,true});}
@@ -2455,18 +2488,46 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     if(active)for(const auto& id:active->historicalAnimationReferences())usages.push_back({id,active->assetId(),active->displayName(),"Animation undo / redo history",true,true});
     if(active)for(const auto& id:active->historicalRagdollReferences())usages.push_back({id,active->assetId(),active->displayName(),"Ragdoll undo / redo history",true,true});
     if(active)for(const auto& id:active->historicalDecalReferences())usages.push_back({id,active->assetId(),active->displayName(),"Decal undo / redo history",true,true});
-    for(const auto& file:{"material.json","environment.json","preview.json","editor-session.json"}){
-        const auto source=resolveAssetPath(projectRoot_,"assets/"+std::string(file));if(!std::filesystem::exists(source))continue;
-        try{std::ifstream input(source);const auto j=nlohmann::json::parse(input);
-            for(const auto* slot:{"albedoMap","roughnessMap","metallicMap","normalMap","map","model","scene"})if(j.contains(slot)&&j[slot].is_string()){
-                // These preserved files belong to the retired sphere/preview
-                // workflow or editor session. They remain resolvable history,
-                // rather than surviving scene-editor resource owners.
-                const auto id=j[slot].get<std::string>();if(!id.empty())usages.push_back({id,"assets/"+std::string(file),file,slot,false,false,true});}}
-        catch(const std::exception& e){throw std::runtime_error("Cannot inspect legacy resource references in "+std::string(file)+": "+e.what());}
-    }
-    references_.setUsages(std::move(usages));
+    return result;
 }
+std::uint64_t AssetLibrary::referenceReportRevision(const SceneDocument* active) const {
+    // Residency/browser hydration is intentionally absent: it changes no authored reference.
+    auto revision=mix(referenceSourceRevision_,references_.revision());revision=mix(revision,modelOwnershipRevision_);
+    for(const auto value:{nextMaterialRevision_,nextParticleRevision_,nextDecalRevision_,nextAnimationRevision_,nextRagdollRevision_})revision=mix(revision,value);
+    revision=mix(revision,contentStorageRevision(projectRoot_));
+    if(active){revision=mix(revision,active->documentGeneration());revision=mix(revision,active->scene().generation());revision=mix(revision,active->scene().revision());revision=mix(revision,active->history().size());revision=mix(revision,active->loadedFingerprint());}
+    return revision;
+}
+void AssetLibrary::refreshReferenceIndex(const SceneDocument* active) {
+    references_.setUsages(collectAssetReferenceUsages(referenceIndexInput(active)));
+}
+
+AssetReferenceReport makeAssetReferenceReport(const AssetReferenceIndexInput& input,const std::string& target,std::stop_token stop) {
+    if(!input.policy)throw std::runtime_error("Asset reference policy is unavailable.");
+    if(contentStorageRevision(input.root)!=input.storageRevision)throw std::runtime_error("Asset locations changed; refresh references.");
+    auto usages=collectAssetReferenceUsages(input,stop);
+    if(contentStorageRevision(input.root)!=input.storageRevision)throw std::runtime_error("Asset locations changed; refresh references.");
+    auto policy=*input.policy;policy.setUsages(usages);
+    AssetReferenceReport report;report.targetId=target;report.targetName=target;report.catalog=input.catalog;report.requestRevision=input.requestRevision;
+    for(const auto& item:input.catalog)if(item.id==target)report.targetName=item.name;
+    report.uses=policy.users(target,stop);
+    std::unordered_map<std::string,std::vector<std::size_t>> owners;
+    for(std::size_t i=0;i<usages.size();++i)owners[usages[i].ownerId].push_back(i);
+    std::vector<std::string> pending{target};std::unordered_set<std::string> visited;
+    while(!pending.empty()) {
+        if(stop.stop_requested())throw std::runtime_error("Asset reference request cancelled.");
+        auto owner=std::move(pending.back());pending.pop_back();if(!visited.insert(owner).second)continue;
+        const auto found=owners.find(owner);if(found==owners.end())continue;
+        for(const auto index:found->second) {const auto& usage=usages[index];
+            report.dependencies.push_back(usage);const auto resolved=policy.resolve(usage.targetId);
+            if(!resolved.empty()&&!visited.contains(resolved))pending.push_back(resolved);
+        }
+    }
+    const auto order=[](const AssetUsage& x,const AssetUsage& y){return std::tie(x.ownerName,x.ownerId,x.slot,x.targetId,x.active,x.historical,x.editorState,x.entityId)<std::tie(y.ownerName,y.ownerId,y.slot,y.targetId,y.active,y.historical,y.editorState,y.entityId);};
+    for(auto* rows:{&report.uses,&report.dependencies}){std::sort(rows->begin(),rows->end(),order);rows->erase(std::unique(rows->begin(),rows->end(),[&](const auto& x,const auto& y){return !order(x,y)&&!order(y,x);}),rows->end());}
+    return report;
+}
+
 void AssetLibrary::refreshQuaderModelCatalog(){
     CRIMSON_PROFILE_ZONE("Quader bundle catalog refresh");
     // Keep pruned IDs retired for this session as well: a completed background

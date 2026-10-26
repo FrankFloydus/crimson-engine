@@ -17,8 +17,7 @@ struct Projection {
     std::unordered_map<EntityId,EntityId> owners;
     std::unordered_map<EntityId,EntityId> inspectorOwners;
 };
-Projection project(const Scene& scene) {
-    const auto records=scene.records();
+Projection project(std::span<const EntityRecord> records) {
     std::unordered_map<EntityId,std::vector<const EntityRecord*>> children;
     children.reserve(records.size());
     for(const auto& record:records)children[record.parent].push_back(&record);
@@ -50,8 +49,87 @@ Projection project(const Scene& scene) {
     }
     return result;
 }
+std::string searchKey(std::string_view text) {
+    const auto first=text.find_first_not_of(" \t\r\n");if(first==std::string_view::npos)return {};
+    std::string key(text.substr(first,text.find_last_not_of(" \t\r\n")-first+1));
+    for(auto& c:key)if(c>='A'&&c<='Z')c=static_cast<char>(c-'A'+'a');
+    return key;
 }
-std::vector<SceneOutlinerRow> sceneOutlinerRows(const Scene& scene) {return project(scene).rows;}
+bool matches(const EntityRecord& record,SceneOutlinerFilter type) {
+    switch(type) {
+    case SceneOutlinerFilter::All:return true;
+    case SceneOutlinerFilter::Models:return hasSceneComponent(record,SceneComponentKind::Model);
+    case SceneOutlinerFilter::Lights:return record.point||record.spot||record.directional;
+    case SceneOutlinerFilter::Cameras:return hasSceneComponent(record,SceneComponentKind::Camera);
+    case SceneOutlinerFilter::Colliders:return hasSceneComponent(record,SceneComponentKind::Collider);
+    case SceneOutlinerFilter::Particles:return hasSceneComponent(record,SceneComponentKind::Particle);
+    case SceneOutlinerFilter::Actors:return hasSceneComponent(record,SceneComponentKind::Actor);
+    case SceneOutlinerFilter::Decals:return hasSceneComponent(record,SceneComponentKind::Decal);
+    case SceneOutlinerFilter::Environment:return hasSceneComponent(record,SceneComponentKind::Environment);
+    case SceneOutlinerFilter::Navigation:return record.navigation||record.navigationVolume;
+    case SceneOutlinerFilter::Quader:return hasSceneComponent(record,SceneComponentKind::Quader);
+    }
+    return false;
+}
+}
+std::vector<SceneOutlinerRow> sceneOutlinerRows(const Scene& scene) {return project(scene.records()).rows;}
+const char* sceneOutlinerFilterName(SceneOutlinerFilter value) {
+    switch(value) {
+    case SceneOutlinerFilter::All:return "All types";
+    case SceneOutlinerFilter::Models:return "Models";
+    case SceneOutlinerFilter::Lights:return "Lights";
+    case SceneOutlinerFilter::Cameras:return "Cameras";
+    case SceneOutlinerFilter::Colliders:return "Colliders";
+    case SceneOutlinerFilter::Particles:return "Particles";
+    case SceneOutlinerFilter::Actors:return "Actors";
+    case SceneOutlinerFilter::Decals:return "Decals";
+    case SceneOutlinerFilter::Environment:return "Environment";
+    case SceneOutlinerFilter::Navigation:return "Navigation";
+    case SceneOutlinerFilter::Quader:return "Quader";
+    }
+    return "All types";
+}
+std::vector<EntityId> sceneOutlinerRange(std::span<const EntityId> displayed,EntityId anchor,EntityId target) {
+    const auto first=std::find(displayed.begin(),displayed.end(),anchor),last=std::find(displayed.begin(),displayed.end(),target);
+    if(first==displayed.end()||last==displayed.end())return {};
+    return {std::min(first,last),std::max(first,last)+1};
+}
+std::span<const EntityId> SceneOutlinerProjection::children(EntityId parent) const {
+    const auto found=children_.find(parent);return found==children_.end()?std::span<const EntityId>{}:std::span<const EntityId>{found->second};
+}
+void SceneOutlinerProjection::synchronize(const Scene& scene,std::string_view search,SceneOutlinerFilter filter,EntityId keepVisible) {
+    const bool sourceChanged=owner_!=&scene||generation_!=scene.generation()||revision_!=scene.revision();
+    if(sourceChanged) {
+        records_=scene.records();auto projection=project(records_);
+        baseRows_=std::move(projection.rows);owners_=std::move(projection.owners);baseParents_.clear();recordIndices_.clear();names_.clear();
+        names_.reserve(records_.size());recordIndices_.reserve(records_.size());baseParents_.reserve(baseRows_.size());
+        for(std::size_t index=0;index<records_.size();++index){recordIndices_.emplace(records_[index].id,index);names_.push_back(searchKey(records_[index].name));}
+        for(const auto& row:baseRows_)baseParents_.emplace(row.entity,row.parent);
+        owner_=&scene;generation_=scene.generation();revision_=scene.revision();++sourceBuilds_;
+    }
+    const auto key=searchKey(search);
+    if(!sourceChanged&&search_==key&&filter_==filter&&keepVisible_==keepVisible)return;
+    search_=key;filter_=filter;keepVisible_=keepVisible;rows_.clear();parents_.clear();children_.clear();
+    std::unordered_set<EntityId> retained;
+    const auto include=[&](EntityId id) {
+        const auto owner=owners_.find(id);if(owner==owners_.end())return;
+        for(id=owner->second;id&&retained.insert(id).second;) {
+            const auto parent=baseParents_.find(id);if(parent==baseParents_.end())break;id=parent->second;
+        }
+    };
+    if(filtered()) {
+        std::unordered_set<EntityId> named;
+        if(!search_.empty())for(std::size_t index=0;index<records_.size();++index)
+            if(names_[index].find(search_)!=std::string::npos)named.insert(owners_.at(records_[index].id));
+        for(std::size_t index=0;index<records_.size();++index)
+            if(matches(records_[index],filter_)&&(search_.empty()||named.contains(owners_.at(records_[index].id))))include(records_[index].id);
+        include(keepVisible_);
+    }
+    for(const auto& row:baseRows_)if(!filtered()||retained.contains(row.entity)) {
+        rows_.push_back(row);parents_.emplace(row.entity,row.parent);children_[row.parent].push_back(row.entity);
+    }
+    ++filterBuilds_;
+}
 EntityId sceneEntityOwner(const Scene& scene,EntityId id) {
     const auto record=scene.find(id);if(!record)return NoEntity;
     if(!record->actor&&!record->model&&!record->particle&&record->camera&&record->cameraFollow&&record->cameraFollow->target==record->parent)
@@ -59,7 +137,7 @@ EntityId sceneEntityOwner(const Scene& scene,EntityId id) {
     return id;
 }
 std::vector<EntityId> sceneEntityParts(const Scene& scene,EntityId id) {
-    const auto projection=project(scene);
+    const auto projection=project(scene.records());
     const auto found=projection.owners.find(id);if(found==projection.owners.end())return {};
     const auto owner=found->second;std::vector<EntityId> result{owner};
     for(const auto part:projection.order)if(part!=owner&&projection.inspectorOwners.at(part)==owner)result.push_back(part);

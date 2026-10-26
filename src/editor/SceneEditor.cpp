@@ -1,4 +1,5 @@
 #include "SceneEditor.h"
+#include "tools/PlayControls.h"
 #include "SceneShortcuts.h"
 #include "tools/ScenePanels.h"
 #include "tools/AssetBrowser.h"
@@ -336,9 +337,10 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     pumpOpen(document,renderer);
     const auto previousPanels=panels_;
     bool resetLayout=false;
-    bool togglePlay=false;
+    PlayAction playAction=PlayAction::None;
     EditorCameraAction cameraAction=EditorCameraAction::None;
     EntityId cameraEntity=NoEntity;
+    std::optional<Camera> bookmarkCamera;
     document.setPreviewCamera(settings.camera);
     // Resolve one document at a time so modal ownership and Cancel remain clear.
     if (quitRequested) collisionLayers.requestExit();
@@ -458,11 +460,21 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
             }
             ImGui::EndMenu();
         }
+        const PlayControlsContext playControls{document.transient(),playPaused_,
+            (document.transactionActive()&&!viewport_.vertexPaintActive())||opening_||deletion_||pending_!=Pending::None||
+                viewportCommandsBlocked()||ImGui::GetTopMostPopupModal(),
+            document.scene().properties().playerCharacter!=NoEntity};
+        if(ImGui::BeginMenu("Play")) {
+            const auto action=drawPlayMenu(playControls);
+            if(action!=PlayAction::None){viewport_.finishVertexPaintCommand(document,renderer);playAction=action;}
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("View")) {
             ImGui::MenuItem("Outliner",nullptr,&panels_.outliner);
             ImGui::MenuItem("Inspector",nullptr,&panels_.inspector);
             ImGui::MenuItem("Asset Browser","Ctrl+Space",&panels_.assetBrowser);
             ImGui::MenuItem("Game",nullptr,&panels_.game);
+            ImGui::MenuItem("Camera Bookmarks",nullptr,&panels_.cameraBookmarks);
             if(ImGui::BeginMenu("Camera")) {
                 if(decalFocus)decals.finishInteraction();
             else if(ragdollFocus)ragdolls->finishInteraction();
@@ -509,8 +521,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
             if (ImGui::MenuItem("Reset layout")) resetLayout=true;
             ImGui::EndMenu();
         }
-        const char* playLabel=document.transient()?"Stop":"Play";
-        const float playWidth=ImGui::CalcTextSize(playLabel).x+ImGui::GetStyle().FramePadding.x*2;
+        const float playWidth=playToolbarWidth(playControls);
         const float playPosition=ImGui::GetWindowWidth()-playWidth-ImGui::GetStyle().WindowPadding.x;
         if(captures)drawProfilingMenu(*captures,document.transient(),playPosition-ImGui::GetStyle().ItemSpacing.x);
         const auto titlePosition=ImGui::GetCursorScreenPos();
@@ -521,9 +532,10 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
             ImGui::PopClipRect();
         }
         ImGui::SameLine(playPosition);
-        ImGui::BeginDisabled((document.transactionActive() && !viewport_.vertexPaintActive()) || opening_ || deletion_ || pending_!=Pending::None || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup));
-        if(ImGui::Button(playLabel)){viewport_.finishVertexPaintCommand(document,renderer);togglePlay=true;}
-        ImGui::EndDisabled();
+        auto toolbarControls=playControls;
+        toolbarControls.blocked|=ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup);
+        const auto toolbarAction=drawPlayToolbar(toolbarControls);
+        if(toolbarAction!=PlayAction::None){viewport_.finishVertexPaintCommand(document,renderer);playAction=toolbarAction;}
         ImGui::EndMainMenuBar();
     }
     if (((previousPanels.inspector && !panels_.inspector) || (previousPanels.outliner && !panels_.outliner)) &&
@@ -531,6 +543,13 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     if (resetLayout) { ImGui::DockBuilderRemoveNode(ImGui::GetID("CrimsonDockSpace")); panels_={}; }
     layout();
     preferences_.draw(renderer.graphicsBackend());
+    if(cameraBookmarks_) {
+        const bool allowed=!document.transient()&&!playTransitionBlocked()&&!navigationActive&&!viewportBusy()&&!document.transactionActive()&&
+            !materials.transactionActive()&&!particles.transactionActive()&&!profiles.transactionActive()&&!collisionLayers.transactionActive()&&
+            !effects.transactionActive()&&!animations.transactionActive()&&(!ragdolls||!ragdolls->transactionActive())&&!decals.transactionActive();
+        bookmarkCamera=cameraBookmarksPanel_.draw(*cameraBookmarks_,document.assetId(),settings.camera,allowed,panels_.cameraBookmarks);
+        if(bookmarkCamera)cameraAction=EditorCameraAction::RecallBookmark;
+    }
     viewport_.drawVertexPaintControls(document,assets,renderer);
     const auto* context=ImGui::GetCurrentContext();
     const auto preferencesWindow=[&](const ImGuiWindow* window) {
@@ -539,7 +558,9 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     const bool preferencesMouse=preferencesWindow(context->HoveredWindow) ||
         (context->ActiveId && preferencesWindow(context->ActiveIdWindow)) || preferencesWindow(context->MovingWindow);
     const bool gameKeyboard=context->NavWindow && std::string_view(context->NavWindow->RootWindow->Name)=="Game";
-    const bool preferencesKeyboard=preferencesMouse || preferencesWindow(context->NavWindow) || gameKeyboard;
+    const bool toolKeyboard=context->NavWindow&&(std::string_view(context->NavWindow->RootWindow->Name)=="Camera Bookmarks"||
+        std::string_view(context->NavWindow->RootWindow->Name)=="Asset References");
+    const bool preferencesKeyboard=preferencesMouse || preferencesWindow(context->NavWindow) || gameKeyboard || toolKeyboard;
     const bool actionPending=opening_ || openingPopup_ || deletePopup_;
     const auto navigationRecords=document.scene().records();
     const auto navigationVolume=std::find_if(navigationRecords.begin(),navigationRecords.end(),[](const auto& record){return record.navigationVolume && record.navigationVolume->enabled;});
@@ -584,6 +605,39 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     frame.createDecal=browser.createDecal;frame.decalFolder=std::move(browser.decalFolder);frame.openDecal=browser.openDecal.empty()?std::move(openDecal):std::move(browser.openDecal);
     frame.createMaterial=browser.createMaterial;frame.createBlendMaterial=browser.createBlendMaterial;frame.materialFolder=std::move(browser.materialFolder);
     frame.openMaterial=browser.openMaterial.empty()?std::move(openMaterial):std::move(browser.openMaterial);
+    if(!browser.findReferences.empty()&&assets.resources()) {
+        finishScenePanelEdit(document);viewport_.finishVertexPaintCommand(document,renderer);
+        assetReferences_.open(std::move(browser.findReferences),assets,&document,*assets.resources());
+    }
+    if(assets.resources()) {
+        const auto reference=assetReferences_.draw(assets,&document,*assets.resources());
+        if(reference.entityId||!reference.assetId.empty()) {
+            finishScenePanelEdit(document);viewport_.finishVertexPaintCommand(document,renderer);
+        }
+        if(reference.entityId&&reference.sceneId==document.assetId()&&
+            (!reference.documentGeneration||reference.documentGeneration==document.documentGeneration())&&
+            document.scene().contains(reference.entityId)&&!viewportBusy()&&!document.transactionActive()) {
+            document.select({reference.entityId});panels_.outliner=panels_.inspector=true;
+        } else if(!reference.assetId.empty()) {
+            panels_.assetBrowser=true;browser_.reveal(reference.assetId,assets);
+            const auto found=std::find_if(assets.catalog().begin(),assets.catalog().end(),[&](const auto& entry){return entry.id==reference.assetId;});
+            if(found!=assets.catalog().end())switch(found->kind) {
+            case AssetKind::Scene:
+                if(reference.entityId) {
+                    referenceSelection_=std::pair{reference.assetId,reference.entityId};referenceSelectionGeneration_=document.documentGeneration();
+                }
+                request(Pending::Open,reference.assetId,document,settings.camera,renderer);break;
+            case AssetKind::Material:frame.openMaterial=reference.assetId;break;
+            case AssetKind::Particle:frame.openParticle=reference.assetId;break;
+            case AssetKind::NavigationAgentProfile:frame.openNavigationAgentProfile=reference.assetId;break;
+            case AssetKind::GameplayEffect:frame.openGameplayEffect=reference.assetId;break;
+            case AssetKind::Animation:frame.openAnimation=reference.assetId;break;
+            case AssetKind::Ragdoll:frame.openRagdoll=reference.assetId;break;
+            case AssetKind::Decal:frame.openDecal=reference.assetId;break;
+            default:break;
+            }
+        }
+    }
     if (browser.newScene) request(Pending::New,{},document,settings.camera,renderer);
     if (!browser.openScene.empty()) request(Pending::Open,browser.openScene,document,settings.camera,renderer);
     if (!browser.deleteAssetIds.empty()) {
@@ -627,13 +681,22 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
         }
     }
     modals(document,settings.camera,assets,renderer);
+    if(referenceSelection_) {
+        if(!document.transient()&&document.assetId()==referenceSelection_->first&&
+            document.documentGeneration()!=referenceSelectionGeneration_&&!document.transactionActive()) {
+            if(document.scene().contains(referenceSelection_->second)) {
+                document.select({referenceSelection_->second});panels_.outliner=panels_.inspector=true;
+            }
+            referenceSelection_.reset();
+        } else if(!opening_&&pending_==Pending::None&&deferred_==Pending::None)referenceSelection_.reset();
+    }
     frame.viewport.inputBlocked |= io.WantTextInput || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) ||
         ImGui::GetDragDropPayload() != nullptr || (document.transactionActive() && !cameraGestureActive_) || actionPending || preferencesMouse;
     frame.documentReplaced=documentReplaced_;
-    frame.togglePlay=togglePlay;
-    if(!documentReplaced_ && !togglePlay && !document.transient() && !playTransitionBlocked() &&
+    frame.playAction=playAction;
+    if(!documentReplaced_ && playAction==PlayAction::None && !document.transient() && !playTransitionBlocked() &&
         !document.transactionActive() && !viewportBusy() && !ImGui::GetTopMostPopupModal()) {
-        frame.cameraAction=cameraAction;frame.cameraEntity=cameraEntity;
+        frame.cameraAction=cameraAction;frame.cameraEntity=cameraEntity;frame.bookmarkCamera=bookmarkCamera;
     }
     return frame;
 }

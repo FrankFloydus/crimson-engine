@@ -103,6 +103,7 @@ target_sources(crimson-scene PRIVATE src/assets/RagdollAsset.cpp src/scene/Light
 target_sources(crimson-scene PRIVATE src/editor/VertexPaintGesture.cpp)
 target_sources(crimson-scene PRIVATE src/editor/VertexPaintFootprint.cpp)
 target_sources(crimson-scene PRIVATE src/editor/VertexPaintSurface.cpp)
+target_sources(crimson-scene PRIVATE src/editor/CameraBookmarks.cpp)
 
 add_library(crimson-materials src/assets/MaterialGraph.cpp src/assets/GrungeGenerator.cpp src/assets/MaterialAsset.cpp src/editor/MaterialDocument.cpp src/editor/MaterialGraphActions.cpp src/assets/DecalAsset.cpp src/editor/DecalDocument.cpp)
 target_include_directories(crimson-materials PUBLIC src)
@@ -265,6 +266,8 @@ add_executable(crimson-renderer WIN32
     src/tools/GameView.cpp src/tools/LightingControls.cpp src/tools/LightInspectorControls.cpp
     src/tools/GameViewInteraction.cpp
     src/tools/CommandBar.cpp
+    src/tools/CameraBookmarksPanel.cpp
+    src/tools/AssetReferencesPanel.cpp
     src/tools/InspectorTransform.cpp
     src/tools/CameraAuthoringControls.cpp
     src/tools/SceneOutlinerColor.cpp
@@ -963,6 +966,14 @@ if(BUILD_TESTING)
     target_link_libraries(camera_pilot_tests PRIVATE crimson-scene)
     target_compile_options(camera_pilot_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME camera_pilot_core COMMAND camera_pilot_tests)
+    add_executable(camera_bookmark_tests tests/camera_bookmark_tests.cpp)
+    target_link_libraries(camera_bookmark_tests PRIVATE crimson-scene)
+    target_compile_options(camera_bookmark_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME camera_bookmark_core COMMAND camera_bookmark_tests)
+    add_executable(editor_iteration_ui_tests tests/editor_iteration_ui_tests.cpp src/tools/CameraBookmarksPanel.cpp)
+    target_link_libraries(editor_iteration_ui_tests PRIVATE crimson-scene imgui::imgui SDL3::SDL3)
+    target_compile_options(editor_iteration_ui_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME editor_iteration_ui_core COMMAND editor_iteration_ui_tests)
 
     add_executable(render_pass_plan_tests tests/render_pass_plan_tests.cpp)
     target_link_libraries(render_pass_plan_tests PRIVATE crimson-camera)
@@ -1255,6 +1266,14 @@ if(BUILD_TESTING)
     target_link_libraries(asset_browser_ui_tests PRIVATE ${CC_DECAL_ACCEPTANCE_LINKS} crimson-decal-resources shell32)
     add_test(NAME asset_browser_ui_core COMMAND asset_browser_ui_tests "${CMAKE_CURRENT_BINARY_DIR}/verification/asset-browser-ui.json")
     set_tests_properties(asset_browser_ui_core PROPERTIES TIMEOUT 120)
+    add_executable(asset_reference_report_tests tests/asset_reference_report_tests.cpp ${CC_BROWSER_UI_SOURCES}
+        src/tools/AssetReferencesPanel.cpp)
+    target_include_directories(asset_reference_report_tests PRIVATE ${CC_DECAL_ACCEPTANCE_INCLUDES})
+    target_compile_definitions(asset_reference_report_tests PRIVATE ${CC_DECAL_ACCEPTANCE_DEFINITIONS} CC_ASSET_REFERENCE_UI_TEST=1)
+    target_compile_options(asset_reference_report_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(asset_reference_report_tests PRIVATE ${CC_DECAL_ACCEPTANCE_LINKS} crimson-decal-resources)
+    add_test(NAME asset_reference_report_core COMMAND asset_reference_report_tests)
+    set_tests_properties(asset_reference_report_core PROPERTIES TIMEOUT 120)
 
     add_executable(asset_library_deletion_tests tests/asset_library_deletion_tests.cpp
         src/assets/AssetLibrary.cpp src/assets/AssetLibraryDecals.cpp src/assets/AsyncImports.cpp src/resources/TextureStreamer.cpp
@@ -1550,7 +1569,7 @@ if(BUILD_TESTING)
     target_link_libraries(ssgi_scene_motion_capture PRIVATE crimson-quader crimson-material-gpu crimson-resources crimson-scene crimson-particles crimson-runtime crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode bgfx::bimg imgui::imgui lodepng mikktspace::mikktspace assimp::assimp meshoptimizer::meshoptimizer nlohmann_json::nlohmann_json d3d11)
 endif()
 
-foreach(CC_TARGET crimson-renderer ragdoll_library_tests gpu_streaming_tests float_texture_streaming_tests environment_tests clustered_lighting_gpu_tests material_graph_publication_tests asset_library_deletion_tests native_resource_tests asset_deletion_runtime_tests asset_browser_ui_tests decal_host_acceptance_tests point_shadow_render_tests material_height_render_tests blend_material_render_tests material_refraction_render_tests decal_generated_render_tests ssr_render_tests directional_shadow_quality_tests material_mapping_render_tests forward_plus_render_tests ssgi_render_tests glow_render_tests ssao_render_tests fog_background_render_tests smaa_render_tests mesh_instancing_render_tests player_parenting_render_tests forward_plus_room_benchmark renderer_backend_benchmark ssgi_scene_motion_capture)
+foreach(CC_TARGET crimson-renderer ragdoll_library_tests gpu_streaming_tests float_texture_streaming_tests environment_tests clustered_lighting_gpu_tests material_graph_publication_tests asset_library_deletion_tests native_resource_tests asset_deletion_runtime_tests asset_browser_ui_tests asset_reference_report_tests decal_host_acceptance_tests point_shadow_render_tests material_height_render_tests blend_material_render_tests material_refraction_render_tests decal_generated_render_tests ssr_render_tests directional_shadow_quality_tests material_mapping_render_tests forward_plus_render_tests ssgi_render_tests glow_render_tests ssao_render_tests fog_background_render_tests smaa_render_tests mesh_instancing_render_tests player_parenting_render_tests forward_plus_room_benchmark renderer_backend_benchmark ssgi_scene_motion_capture)
     if(TARGET ${CC_TARGET})
         target_link_libraries(${CC_TARGET} PRIVATE Crimson::Renderer Crimson::HostShaders d3d12 dxgi)
         target_include_directories(${CC_TARGET} BEFORE PRIVATE "${CRIMSON_FORWARD_GENERATED_DIR}")

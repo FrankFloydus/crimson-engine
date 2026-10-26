@@ -26,8 +26,9 @@
 namespace crimson {
 using Json=nlohmann::json;
 EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& assets, Renderer& renderer)
-    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),navigationProfileEditor_(root),collisionLayersEditor_(root),gameplayEffectEditor_(root),animationEditor_(root),ragdollEditor_(root),decalEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),decals_(assets,resources_),navigationPreview_(resources_,root),collisionOverlays_(resources_),quader_(root) {
+    : root_(root),document_(root),play_(root),cameraBookmarks_(root),particleEditor_(root),materialEditor_(root),navigationProfileEditor_(root),collisionLayersEditor_(root),gameplayEffectEditor_(root),animationEditor_(root),ragdollEditor_(root),decalEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),decals_(assets,resources_),navigationPreview_(resources_,root),collisionOverlays_(resources_),quader_(root) {
     restoreSession(assets);
+    editor_.setCameraBookmarks(&cameraBookmarks_);
     documentEpoch_=document_.documentGeneration();
     previews_=std::make_unique<AssetPreviews>(root,assets,resources_,renderer,prepared_);
     preparedEnvironment_="<unprepared>";
@@ -83,7 +84,7 @@ void EditorSession::restoreSession(AssetLibrary& assets) {
             std::ifstream input(path); const auto saved=Json::parse(input);
             if (saved.at("version") != 1) throw std::runtime_error("Unsupported editor session version.");
             recoveredLegacy_=saved.value("recoveredLegacyPreview",false);
-            if(saved.contains("panels")) { const auto& panels=saved.at("panels");editor_.setPanels({panels.value("outliner",true),panels.value("inspector",true),panels.value("assetBrowser",true),panels.value("game",false)}); }
+            if(saved.contains("panels")) { const auto& panels=saved.at("panels");editor_.setPanels({panels.value("outliner",true),panels.value("inspector",true),panels.value("assetBrowser",true),panels.value("game",false),panels.value("cameraBookmarks",false)}); }
             if(saved.contains("overlays")) { const auto& overlays=saved.at("overlays");editor_.setOverlays({overlays.value("collisions",true),overlays.value("grid",true),overlays.value("transformGizmo",true),overlays.value("navigationMesh",true)}); }
             const auto active=saved.value("scene",std::string{});
             if (!active.empty() && !document_.load(active)) { status_=document_.status(); unresolvedScene_=active; }
@@ -92,6 +93,9 @@ void EditorSession::restoreSession(AssetLibrary& assets) {
                 camera.position=it.value().at("position").get<Vec3>(); camera.target=it.value().at("target").get<Vec3>();
                 camera.up=it.value().at("up").get<Vec3>(); camera.fov=it.value().value("fov",45.0f);
                 camera.nearPlane=it.value().value("near",.01f); camera.farPlane=it.value().value("far",2048.0f);
+                const auto axis=it.value().value("fovAxis",std::string{"shorter"});
+                if(axis!="shorter"&&axis!="vertical")continue;
+                camera.fovAxis=axis=="vertical"?CameraFovAxis::Vertical:CameraFovAxis::ShorterDimension;
                 if (math::finite(camera.position) && math::finite(camera.target) && math::finite(camera.up) &&
                     math::finite(camera.fov) && math::finite(camera.nearPlane) && math::finite(camera.farPlane) &&
                     camera.fov > 0 && camera.fov < 180 && camera.nearPlane > 0 && camera.farPlane > camera.nearPlane)
@@ -134,10 +138,11 @@ void EditorSession::saveSession() noexcept {
         if (!document_.assetId().empty()) cameras_[document_.assetId()]=play_.playing()?editCameraBeforePlay_:cameraPilot_.freeCamera().value_or(settings_.camera);
         Json cameras=Json::object();
         for (const auto& [id,camera] : cameras_) cameras[id]={{"position",camera.position},{"target",camera.target},{"up",camera.up},
-            {"fov",camera.fov},{"near",camera.nearPlane},{"far",camera.farPlane}};
+            {"fov",camera.fov},{"near",camera.nearPlane},{"far",camera.farPlane},
+            {"fovAxis",camera.fovAxis==CameraFovAxis::Vertical?"vertical":"shorter"}};
         writeFileAtomically(resolveAssetPath(root_,"assets/editor-session.json"),Json{{"version",1},{"scene",unresolvedScene_.empty() ? document_.assetId() : unresolvedScene_},
             {"recoveredLegacyPreview",recoveredLegacy_},{"cameras",std::move(cameras)},
-            {"panels",{{"outliner",editor_.panels().outliner},{"inspector",editor_.panels().inspector},{"assetBrowser",editor_.panels().assetBrowser},{"game",editor_.panels().game}}},
+            {"panels",{{"outliner",editor_.panels().outliner},{"inspector",editor_.panels().inspector},{"assetBrowser",editor_.panels().assetBrowser},{"game",editor_.panels().game},{"cameraBookmarks",editor_.panels().cameraBookmarks}}},
             {"overlays",{{"collisions",editor_.overlays().collisions},{"grid",editor_.overlays().grid},{"transformGizmo",editor_.overlays().transformGizmo},{"navigationMesh",editor_.overlays().navigationMesh}}}}.dump(2));
     } catch (...) { /* Session state is expendable; authored scenes were saved explicitly. */ }
 }
@@ -273,9 +278,9 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
 void EditorSession::cancelInteraction(Renderer& renderer) {
     cameraPilot_.cancelGesture(activeDocument(),settings_.camera);cameraGestureCancel_=false;
     editor_.cancelInteraction(activeDocument(),renderer);particleEditor_.cancelInteraction();materialEditor_.cancelInteraction();navigationProfileEditor_.cancelInteraction();collisionLayersEditor_.cancelInteraction();gameplayEffectEditor_.cancelInteraction();animationEditor_.cancelInteraction();ragdollEditor_.cancelInteraction();decalEditor_.cancelInteraction();gameInput_.cancel();pendingDecalPlacement_.reset();decals_.clear();focusGame_=false;skipSimulationTime_=true;
-    playShortcuts_.cancel();playActionPending_=PlayAction::None;
+    playShortcuts_.cancel();playActionPending_=PlayAction::None;waitingForCollision_=false;playStartView_.reset();
 }
-void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,bool stop) {
+void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,bool stop,std::optional<Camera> startView) {
     ragdollEditor_.cancelInteraction();
     attributeDebug_.reset();
     cameraPilot_.useEditorCamera(activeDocument(),settings_.camera);cameraGestureCancel_=false;
@@ -283,17 +288,20 @@ void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,boo
     editor_.cancelInteraction(activeDocument(),renderer);navigation.cancel();gameInput_.cancel();
     pendingDrops_.clear();pendingDecalPlacement_.reset();decals_.clear();renderer.cancelPicking();skipSimulationTime_=true;playStatus_.clear();
     if(play_.playing()) {
-        play_.stop();settings_.camera=editCameraBeforePlay_;
+        play_.stop();settings_.camera=editCameraBeforePlay_;playStartView_.reset();
         if(deferredSceneReload_ && !document_.assetId().empty())changedFiles_.push_back(resolveAssetPath(root_,document_.assetId()));
         deferredSceneReload_=false;
     } else if(!stop) {
         editCameraBeforePlay_=settings_.camera;
-        if(play_.start(document_)) { editor_.showGame();focusGame_=true; }
+        playStartView_=startView;
+        const bool started=startView?play_.startFromView(document_,*startView):play_.start(document_);
+        if(started) { editor_.showGame();focusGame_=true;playStartView_.reset(); }
         else {
             playStatus_=play_.status();
             if(playStatus_.starts_with("Preparing mesh collision")) {
                 waitingForCollision_=true;waitingSceneGeneration_=document_.documentGeneration();waitingSceneRevision_=document_.scene().revision();
             }
+            else playStartView_.reset();
         }
     }
     documentEpoch_=activeDocument().documentGeneration();
@@ -302,22 +310,35 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
                           uint32_t bgfxFrame, bool quitRequested, profiling::CaptureController* captures) {
     const bool forceStop=editor_.needsAuthoringDocument() || quitRequested || (play_.playing() && !editor_.panels().game);
     if(waitingForCollision_) {
-        if(forceStop || document_.documentGeneration()!=waitingSceneGeneration_ || document_.scene().revision()!=waitingSceneRevision_ || playActionPending_==PlayAction::Stop)waitingForCollision_=false;
+        if(forceStop || document_.documentGeneration()!=waitingSceneGeneration_ || document_.scene().revision()!=waitingSceneRevision_ || playActionPending_==PlayAction::Stop) {
+            waitingForCollision_=false;playStartView_.reset();
+        }
         else {
             bool ready=true;
             for(const auto& record:document_.scene().records())if(record.collider && record.collider->shape==ColliderShape::Trimesh && (record.collider->mesh || !record.collider->source.empty())) {
                 const auto source=colliderMeshResult(*record.collider,[this](const auto& id){return collisions_.query(id);});
                 if(!source.mesh || !source.current) {
                     ready=false;playStatus_=source.diagnostic;
-                    if(!playStatus_.starts_with("Preparing mesh collision"))waitingForCollision_=false;
+                    if(!playStatus_.starts_with("Preparing mesh collision")){waitingForCollision_=false;playStartView_.reset();}
                     break;
                 }
             }
-            if(ready){waitingForCollision_=false;playActionPending_=PlayAction::Start;}
+            if(ready){waitingForCollision_=false;playActionPending_=playStartView_?PlayAction::StartHere:PlayAction::Start;}
         }
     }
     if(play_.playing() && (forceStop || playActionPending_==PlayAction::Stop))transitionPlay(renderer,navigation,true);
-    else if(!play_.playing() && !forceStop && playActionPending_==PlayAction::Start)transitionPlay(renderer,navigation,false);
+    else if(!play_.playing() && !forceStop && (playActionPending_==PlayAction::Start||playActionPending_==PlayAction::StartHere))
+        transitionPlay(renderer,navigation,false,playActionPending_==PlayAction::StartHere?playStartView_:std::nullopt);
+    else if(play_.playing()&&!forceStop&&(playActionPending_==PlayAction::TogglePause||playActionPending_==PlayAction::Step)) {
+        gameInput_.cancel();playShortcuts_.cancel();focusGame_=false;skipSimulationTime_=true;
+        if(playActionPending_==PlayAction::TogglePause) {
+            if(!play_.setPaused(!play_.paused()))playStatus_=play_.status();
+            focusGame_=!play_.paused();
+        } else {
+            const auto view=resolveGameCamera(play_.presentationScene()).value_or(settings_.camera);
+            if(!play_.step(view))playStatus_=play_.status();
+        }
+    }
     playActionPending_=PlayAction::None;
     auto& document=activeDocument();
     if(cameraGestureCancel_) {
@@ -326,6 +347,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(quitRequested) {cameraPilot_.useEditorCamera(document,settings_.camera);navigation.cancel();}
     cameraPilot_.sync(document,settings_.camera);
     editor_.setCameraViewState(cameraPilot_.selectedCamera(),cameraPilot_.piloting(),cameraPilot_.gestureActive());
+    editor_.setPlayPaused(play_.paused());
     const auto previousAsset=document.assetId();
     const float simulationSeconds=simulationSuspended_ || skipSimulationTime_?0.f:ImGui::GetIO().DeltaTime;
     materialRealSeconds_=std::chrono::duration<double>(std::chrono::steady_clock::now()-materialClockStart_).count();
@@ -377,7 +399,11 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     });
     const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_,navigationProfileEditor_,collisionLayersEditor_,gameplayEffectEditor_,animationEditor_,decalEditor_,gameplay,captures,&ragdollEditor_,lightPreview);
     const auto sceneCamera=frame.viewportCamera.value_or(settings_.camera);
-    if(frame.togglePlay)playActionPending_=play_.playing()?PlayAction::Stop:PlayAction::Start;
+    if(frame.playAction!=PlayAction::None) {
+        playActionPending_=frame.playAction;
+        if(frame.playAction==PlayAction::StartHere)playStartView_=sceneCamera;
+        else if(frame.playAction==PlayAction::Start||frame.playAction==PlayAction::Stop)playStartView_.reset();
+    }
     if(frame.createParticle) particleEditor_.requestCreate(frame.particleFolder,assets);
     if(!frame.openParticle.empty()) particleEditor_.requestOpen(frame.openParticle,assets);
     if(frame.createMaterial)materialEditor_.requestCreate(frame.materialFolder,assets);
@@ -510,15 +536,19 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(captures)gameView_.drawCaptureStatus(captures->status());
     if(!gameOpen) { editor_.hideGame();renderer.releaseGameViewport();if(play_.playing())playActionPending_=PlayAction::Stop; }
     const auto playShortcut=playShortcuts_.consume({play_.playing(),quitRequested || editor_.playTransitionBlocked(),
-        navigation.active() || document.transactionActive() || particleEditor_.transactionActive() || materialEditor_.transactionActive() || navigationProfileEditor_.transactionActive() || collisionLayersEditor_.transactionActive() || gameplayEffectEditor_.transactionActive() || animationEditor_.transactionActive() || ragdollEditor_.transactionActive() || decalEditor_.transactionActive()});
-    if(playShortcut!=PlayAction::None)playActionPending_=playShortcut;
+        navigation.active() || document.transactionActive() || particleEditor_.transactionActive() || materialEditor_.transactionActive() || navigationProfileEditor_.transactionActive() || collisionLayersEditor_.transactionActive() || gameplayEffectEditor_.transactionActive() || animationEditor_.transactionActive() || ragdollEditor_.transactionActive() || decalEditor_.transactionActive(),play_.paused()});
+    if(playShortcut!=PlayAction::None) {
+        playActionPending_=playShortcut;
+        if(playShortcut==PlayAction::StartHere)playStartView_=sceneCamera;
+        else if(playShortcut==PlayAction::Start||playShortcut==PlayAction::Stop)playStartView_.reset();
+    }
     auto gameCamera=resolveGameCamera(document.scene());
     auto* gameWindow=game.viewport.windowId?SDL_GetWindowFromID(game.viewport.windowId):nullptr;
     // ImGui focus selects the dock/tab; a detached Game also needs native
     // keyboard focus. Its platform window may only exist on the next frame.
     if(focusGame_ && gameWindow && SDL_GetKeyboardFocus()!=gameWindow)SDL_RaiseWindow(gameWindow);
-    gameInput_.setViewport(game.viewport,play_.playing() && gameWindow && game.pixelWidth>0 && gameCamera.has_value(),game.viewport.inputBlocked || simulationSuspended_ || command.inputActive);
-    if(!game.focused || !gameWindow || SDL_GetKeyboardFocus()!=gameWindow)gameInput_.cancel();
+    gameInput_.setViewport(game.viewport,play_.playing() && !play_.paused() && gameWindow && game.pixelWidth>0 && gameCamera.has_value(),game.viewport.inputBlocked || simulationSuspended_ || command.inputActive || play_.paused());
+    if(play_.paused() || !game.focused || !gameWindow || SDL_GetKeyboardFocus()!=gameWindow)gameInput_.cancel();
     else if(game.clicked)gameInput_.acquireFromImageClick();
     else if(focusGame_)gameInput_.acquire();
     if(game.attributeDebugCycle && game.focused && !command.inputActive && !simulationSuspended_)
@@ -539,6 +569,11 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
             if(const auto id=document.createCamera(sceneCamera,aspect))cameraPilot_.selectCamera(document,id,settings_.camera);
             break;
         }
+        case EditorCameraAction::RecallBookmark:
+            if(frame.bookmarkCamera&&CameraBookmarks::validCamera(*frame.bookmarkCamera)) {
+                cameraPilot_.useEditorCamera(document,settings_.camera);settings_.camera=*frame.bookmarkCamera;
+            }
+            break;
         case EditorCameraAction::None:break;
         }
     }

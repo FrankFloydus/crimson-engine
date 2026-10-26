@@ -327,12 +327,69 @@ void savedSceneCompatibility(const std::filesystem::path& root) {
     }
     std::cout<<"Read and dry-serialized "<<scenes.size()<<" existing project scenes without modifying their files.\n";
 }
+void filteredOutlinerProjection(const std::filesystem::path& root) {
+    std::vector<EntityRecord> records;
+    const auto add=[&](EntityId id,const char* name,EntityId parent=NoEntity)->EntityRecord& {
+        auto& value=records.emplace_back();value.id=id;value.name=name;value.parent=parent;value.order=static_cast<std::uint32_t>(id);return value;
+    };
+    add(1,"Level");add(2,"Imported",1);
+    add(3,"Lamp left",2).point.emplace();add(4,"Lamp right",2).spot.emplace();add(5,"Sun",2).directional.emplace();
+    add(6,"Stone WAll",1).model=AssetRef<ModelAsset>{BuiltinBoxModelId};add(7,"Wall collision",6).collider.emplace();
+    add(8,"Guard").actor.emplace();auto& eye=add(9,"Eye Camera",8);eye.camera.emplace();eye.cameraFollow=SceneCameraFollow{8};
+    add(10,"Smoke").particle=AssetRef<ParticleEffectAsset>{};add(11,"World environment").environment.emplace();
+    add(12,"Paths").navigationVolume.emplace();add(13,"Imported project").quader.emplace();
+    add(14,"Wall mark",6).decal.emplace().projection=SceneDecalProjection::Box;
+    SceneDocument document(root);require(document.edit("Filter fixture",[&](auto& target,auto&){target=records;})&&document.save("Outliner filter"),"Cannot seed the Outliner filter fixture.");
+    const auto fingerprint=sceneFileFingerprint(root,document.assetId()),history=document.history().size();
+    SceneOutlinerProjection projection;projection.synchronize(document.scene());
+    const auto all=sceneOutlinerRows(document.scene());require(projection.rows()==all&&projection.sourceBuilds()==1&&projection.filterBuilds()==1,"The cached Outliner changed ordinary hierarchy or duplicated its first build.");
+    require(!projection.contains(9)&&projection.contains(8),"An inline Actor camera acquired a duplicate row.");
+    for(unsigned frame=0;frame<256;++frame)projection.synchronize(document.scene());
+    require(projection.sourceBuilds()==1&&projection.filterBuilds()==1,"Stable Outliner frames rescanned source metadata or filtering.");
+    projection.synchronize(document.scene(),"  lAmP  ",SceneOutlinerFilter::Lights);
+    require(projection.filtered()&&projection.rows()==std::vector<SceneOutlinerRow>{{1,0},{2,1},{3,2},{4,2}},"Name/type filtering lost case-insensitive matches, ancestor context or deterministic ordering.");
+    require(projection.children(2).size()==2&&projection.children(2)[0]==3&&projection.children(2)[1]==4,"Filtered child order retained a hidden sibling.");
+    const auto builds=projection.filterBuilds();projection.synchronize(document.scene(),"LAMP",SceneOutlinerFilter::Lights);
+    require(projection.sourceBuilds()==1&&projection.filterBuilds()==builds,"Equivalent case/whitespace queries rebuilt an unchanged projection.");
+    const std::array<EntityId,4> displayed{1,2,3,4};
+    require(sceneOutlinerRange(displayed,3,4)==std::vector<EntityId>{3,4}&&sceneOutlinerRange(displayed,4,2)==std::vector<EntityId>{2,3,4}&&
+        sceneOutlinerRange(displayed,5,4).empty(),"Displayed range selection included a hidden anchor/sibling or reversed hierarchy order.");
+    projection.synchronize(document.scene(),"wall",SceneOutlinerFilter::Models);
+    require(projection.rows()==std::vector<SceneOutlinerRow>{{1,0},{6,1}},"The name/type conjunction admitted a differently typed matching descendant.");
+    projection.synchronize(document.scene(),{},SceneOutlinerFilter::Colliders);
+    require(projection.rows()==std::vector<SceneOutlinerRow>{{1,0},{6,1},{7,6}},"Collider filtering removed a nonmatching model ancestor.");
+    projection.synchronize(document.scene(),"eye",SceneOutlinerFilter::Cameras);
+    require(projection.rows()==std::vector<SceneOutlinerRow>{{8,0}},"Camera search did not find the inline camera through its existing Actor row.");
+    projection.synchronize(document.scene(),"guard",SceneOutlinerFilter::Cameras);
+    require(projection.rows()==std::vector<SceneOutlinerRow>{{8,0}},"Camera component filtering could not search the displayed owner's name.");
+    projection.synchronize(document.scene(),"eye",SceneOutlinerFilter::Actors);
+    require(projection.rows()==std::vector<SceneOutlinerRow>{{8,0}},"An inline-camera name alias did not retain its Actor's component filter match.");
+    projection.synchronize(document.scene(),"absent",SceneOutlinerFilter::All);
+    require(projection.rows().empty()&&projection.children(NoEntity).empty(),"An unmatched search retained unrelated rows.");
+    projection.synchronize(document.scene(),"Stone",SceneOutlinerFilter::All,3);
+    require(projection.rows()==std::vector<SceneOutlinerRow>{{1,0},{2,1},{3,2},{6,1}},"An active rename was not retained with its hierarchy while its name stopped matching.");
+    projection.synchronize(document.scene(),{},SceneOutlinerFilter::Particles);require(projection.rows()==std::vector<SceneOutlinerRow>{{10,0}},"Particle component filtering changed ownership.");
+    projection.synchronize(document.scene(),{},SceneOutlinerFilter::Environment);require(projection.rows()==std::vector<SceneOutlinerRow>{{11,0}},"Environment component filter failed.");
+    projection.synchronize(document.scene(),{},SceneOutlinerFilter::Navigation);require(projection.rows()==std::vector<SceneOutlinerRow>{{12,0}},"Navigation component filter failed.");
+    projection.synchronize(document.scene(),{},SceneOutlinerFilter::Quader);require(projection.rows()==std::vector<SceneOutlinerRow>{{13,0}},"Quader component filter failed.");
+    projection.synchronize(document.scene(),{},SceneOutlinerFilter::Actors);require(projection.rows()==std::vector<SceneOutlinerRow>{{8,0}},"Actor component filter failed.");
+    projection.synchronize(document.scene(),{},SceneOutlinerFilter::Decals);require(projection.rows()==std::vector<SceneOutlinerRow>{{1,0},{6,1},{14,6}},"Decal component filtering lost its model ancestor.");
+    document.select({3,4},4);projection.synchronize(document.scene());
+    require(projection.rows()==all&&projection.sourceBuilds()==1&&!document.dirty()&&document.history().size()==history&&sceneFileFingerprint(root,document.assetId())==fingerprint,
+        "Filtering or selection changed authored data/history, wrote the scene or invalidated source metadata.");
+    auto renamed=*document.scene().find(6);renamed.name="Brick";require(document.updateEntity(6,renamed),"Cannot rename a filter source.");
+    projection.synchronize(document.scene(),"brick");require(projection.rows()==std::vector<SceneOutlinerRow>{{1,0},{6,1}}&&projection.sourceBuilds()==2,"A source name edit did not invalidate cached matching.");
+    require(document.undo(),"Cannot undo the filter source rename.");projection.synchronize(document.scene(),"brick");require(projection.rows().empty(),"Undo retained a stale cached name.");
+    Scene posed;posed.apply(records,{});projection.synchronize(posed,"Lamp");const auto sourceBuilds=projection.sourceBuilds(),filterBuilds=projection.filterBuilds();
+    const std::array poses{ScenePoseUpdate{3,math::translation({1,2,3})}};posed.applyRuntimePoses(poses);projection.synchronize(posed,"Lamp");
+    require(projection.sourceBuilds()==sourceBuilds&&projection.filterBuilds()==filterBuilds,"Runtime-only poses rebuilt the authoring Outliner filter.");
+}
 }
 int main(int argc,char** argv) {
     try {
         if(argc==3&&std::string_view(argv[1])=="--project-root") {savedSceneCompatibility(std::filesystem::path(argv[2]));return 0;}
         const auto root=std::filesystem::temp_directory_path()/("crimson-component-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-        componentTransactions(root);playerRemovalAndCamera(root);followDependency(root);recipeAndVisualChildren(root);entityHierarchyProjection(root);reparentBoxToPlayer(root);legacyOutlinerMetadata(root);outlinerColorHistory(root);batchComponentRemoval(root);
+        componentTransactions(root);playerRemovalAndCamera(root);followDependency(root);recipeAndVisualChildren(root);entityHierarchyProjection(root);reparentBoxToPlayer(root);legacyOutlinerMetadata(root);outlinerColorHistory(root);batchComponentRemoval(root);filteredOutlinerProjection(root);
         std::cout<<"Composed actor recipes, real entity hierarchy, legacy metadata conversion and isolated history passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

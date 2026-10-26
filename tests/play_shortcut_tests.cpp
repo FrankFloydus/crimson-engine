@@ -74,6 +74,63 @@ void explicitPlayEdges() {
     for(const char* panel:{"Game","Inspector","Viewport","Particle effect###ParticleEffect","Sprite material###SpriteMaterial"})
         ui.frame([&] {shortcuts.handleEvent(stopKey());require(shortcuts.consume({.playing=true})==PlayAction::Stop,"Stop depended on which editor panel held focus.");},panel);
 }
+void iterationActionEdges() {
+    static_assert(static_cast<int>(PlayAction::None)==0 && static_cast<int>(PlayAction::Start)==1 && static_cast<int>(PlayAction::Stop)==2);
+    Ui ui;PlayShortcuts shortcuts;
+    const auto here=key(SDLK_F5,SDL_SCANCODE_F5,SDL_KMOD_LSHIFT);
+    const auto pause=key(SDLK_F6,SDL_SCANCODE_F6),step=key(SDLK_F7,SDL_SCANCODE_F7);
+    ui.frame([&] {
+        shortcuts.handleEvent(here);require(shortcuts.consume({})==PlayAction::StartHere,"Shift+F5 did not request Play From Here.");
+        require(shortcuts.consume({})==PlayAction::None,"Play From Here replayed its consumed edge.");
+        shortcuts.handleEvent(here);require(shortcuts.consume({.playing=true})==PlayAction::None,"Play From Here restarted a running session.");
+        shortcuts.handleEvent(pause);require(shortcuts.consume({})==PlayAction::None,"Pause started an idle editor.");
+        shortcuts.handleEvent(pause);require(shortcuts.consume({.playing=true})==PlayAction::TogglePause,"F6 did not pause running Play.");
+        shortcuts.handleEvent(pause);require(shortcuts.consume({.playing=true,.paused=true})==PlayAction::TogglePause,"F6 did not resume paused Play.");
+        shortcuts.handleEvent(step);require(shortcuts.consume({.playing=true})==PlayAction::None,"F7 stepped a running session.");
+        shortcuts.handleEvent(step);require(shortcuts.consume({.paused=true})==PlayAction::None,"F7 stepped an idle editor.");
+        shortcuts.handleEvent(step);require(shortcuts.consume({.playing=true,.paused=true})==PlayAction::Step,"F7 did not step paused Play.");
+        require(shortcuts.consume({.playing=true,.paused=true})==PlayAction::None,"One Step edge replayed another tick.");
+        shortcuts.handleEvent(step);shortcuts.handleEvent(pause);shortcuts.handleEvent(stopKey());
+        require(shortcuts.consume({.playing=true,.paused=true})==PlayAction::Stop,"Stop lost precedence over Pause/Step.");
+        for(auto event:{here,pause,step}) {
+            event.key.repeat=true;shortcuts.handleEvent(event);
+            require(shortcuts.consume({.playing=true,.paused=true})==PlayAction::None,"Held iteration shortcut repeated an action.");
+            event.key.repeat=false;event.key.mod=static_cast<SDL_Keymod>(event.key.mod|SDL_KMOD_CTRL);shortcuts.handleEvent(event);
+            require(shortcuts.consume({.playing=true,.paused=true})==PlayAction::None,"An extra modifier triggered an iteration shortcut.");
+        }
+        shortcuts.handleEvent(key(SDLK_F5,SDL_SCANCODE_F5));
+        require(shortcuts.consume({})==PlayAction::None,"Plain F5 triggered Shift+F5.");
+    });
+    for(const auto event:{here,pause,step})ui.frame([&] {
+        const bool starting=event.key.key==SDLK_F5;
+        const PlayShortcutContext context{!starting,false,false,true};
+        const auto expected=starting?PlayAction::StartHere:event.key.key==SDLK_F6?PlayAction::TogglePause:PlayAction::Step;
+        SDL_Event focus{};focus.type=SDL_EVENT_WINDOW_FOCUS_LOST;focus.window.windowID=8;
+        shortcuts.handleEvent(event);shortcuts.handleEvent(focus);
+        require(shortcuts.consume(context)==expected,"Another native window canceled an iteration shortcut.");
+        focus.window.windowID=7;shortcuts.handleEvent(event);shortcuts.handleEvent(focus);
+        require(shortcuts.consume(context)==PlayAction::None,"Originating focus loss retained an iteration shortcut.");
+        shortcuts.handleEvent(event);auto blocked=context;blocked.transitionBlocked=true;
+        require(shortcuts.consume(blocked)==PlayAction::None && shortcuts.consume(context)==PlayAction::None,"A modal transition retained an iteration edge.");
+        shortcuts.handleEvent(event);blocked=context;blocked.startBlocked=true;
+        require(shortcuts.consume(blocked)==PlayAction::None,"An authoring transaction allowed an iteration action.");
+        const auto id=ImGui::GetID("Iteration drag");ImGui::SetActiveID(id,ImGui::GetCurrentWindow());
+        shortcuts.handleEvent(event);ImGui::ClearActiveID();
+        require(shortcuts.consume(context)==PlayAction::None,"A property gesture's function key leaked after release.");
+        shortcuts.handleEvent(event);ImGui::GetIO().MouseDown[ImGuiMouseButton_Right]=true;
+        require(shortcuts.consume(context)==PlayAction::None,"Scene navigation allowed an iteration action.");
+        ImGui::GetIO().MouseDown[ImGuiMouseButton_Right]=false;
+        shortcuts.handleEvent(event);ImGui::OpenPopup("Iteration ownership");
+        if(ImGui::BeginPopup("Iteration ownership")) {
+            require(shortcuts.consume(context)==PlayAction::None,"A popup did not own the queued iteration shortcut.");
+            ImGui::CloseCurrentPopup();ImGui::EndPopup();
+        }else require(false,"The iteration fixture did not open its popup.");
+        shortcuts.handleEvent(event);SDL_Event mapping{};mapping.type=SDL_EVENT_KEYMAP_CHANGED;shortcuts.handleEvent(mapping);
+        require(shortcuts.consume(context)==PlayAction::None,"Changing layout replayed an iteration shortcut.");
+        shortcuts.handleEvent(event);shortcuts.cancel();
+        require(shortcuts.consume(context)==PlayAction::None,"Cancel retained an iteration shortcut.");
+    });
+}
 void focusAndCaptureDiscardEdges() {
     Ui ui;PlayShortcuts shortcuts;
     ui.frame([&] {
@@ -139,6 +196,7 @@ int main() {
     };
     run("logical and physical keys, modifiers and repeat edges",bindingIdentityAndModifiers);
     run("explicit Start/Stop across editor panel focus",explicitPlayEdges);
+    run("Play From Here, Pause and Step edges and ownership",iterationActionEdges);
     run("focus, capture and transitions discard pending edges",focusAndCaptureDiscardEdges);
     run("text and popup ownership across the event/frame boundary",textAndPopupOwnInput);
     return failures?1:0;

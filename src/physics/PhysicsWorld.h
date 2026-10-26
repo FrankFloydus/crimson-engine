@@ -115,6 +115,10 @@ public:
     // planar slope travel, jumps, unsupported falling and landing do not contribute.
     float characterStepHeight(EntityId) const;
     std::optional<AgentTraversalSettings> acceptedCharacterTraversal(EntityId) const;
+    // Tests the accepted native capsule at a proposed feet position, with its
+    // movement mask and peer blockers. Touching support is valid; penetration
+    // beyond 1 mm, malformed positions and unavailable capsules return false.
+    bool canPlaceCharacter(EntityId,const Vec3& feet) const;
     bool grounded(EntityId) const;
     bool characterLocked(EntityId) const;
     // Drop queued input and jump grace without interrupting airborne motion.

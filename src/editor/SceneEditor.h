@@ -1,6 +1,8 @@
 #pragma once
 #include "SceneViewport.h"
 #include "tools/AssetBrowser.h"
+#include "tools/CameraBookmarksPanel.h"
+#include "tools/AssetReferencesPanel.h"
 #include "tools/GameplayInspectorContext.h"
 #include "runtime/SceneLights.h"
 #include "EditorPreferences.h"
@@ -22,7 +24,7 @@ class GameplayEffectEditor;
 class AnimationEditor;
 class RagdollEditor;
 class DecalEditor;
-struct PanelVisibility { bool outliner{true}, inspector{true}, assetBrowser{true}, game{false}; };
+struct PanelVisibility { bool outliner{true}, inspector{true}, assetBrowser{true}, game{false},cameraBookmarks{false}; };
 struct OverlayVisibility { bool collisions{true}, grid{true}, transformGizmo{true},navigationMesh{true}; };
 // Authoring UI and document transitions. It does not own GPU resources or the world.
 class SceneEditor {
@@ -46,6 +48,8 @@ public:
     bool showPaintSubdivisions() const {return viewport_.showPaintSubdivisions();}
     const PanelVisibility& panels() const { return panels_; }
     void setPanels(const PanelVisibility& panels) { panels_=panels; }
+    void setCameraBookmarks(CameraBookmarks* bookmarks){cameraBookmarks_=bookmarks;}
+    void setPlayPaused(bool paused){playPaused_=paused;}
     const OverlayVisibility& overlays() const { return overlays_; }
     void setOverlays(const OverlayVisibility& overlays) { overlays_=overlays; }
     void setCameraViewState(EntityId camera, bool piloting, bool gestureActive=false) {
@@ -80,6 +84,12 @@ private:
     AssetBrowserPanel browser_;
     EditorPreferences preferences_;
     PanelVisibility panels_;
+    CameraBookmarks* cameraBookmarks_{};
+    CameraBookmarksPanel cameraBookmarksPanel_;
+    AssetReferencesPanel assetReferences_;
+    std::optional<std::pair<std::string,EntityId>> referenceSelection_;
+    std::uint64_t referenceSelectionGeneration_{};
+    bool playPaused_{};
     OverlayVisibility overlays_;
     EntityId viewedCamera_{};
     bool pilotingCamera_{},cameraGestureActive_{};

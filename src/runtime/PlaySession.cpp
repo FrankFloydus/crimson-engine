@@ -27,6 +27,47 @@ StepReturn returnStepOffset(double offset,double velocity,double response,double
     if((offset<=0 && result.offset>0) || (offset>=0 && result.offset<0))return {};
     return result;
 }
+EntityId playerCamera(const Scene& scene,EntityId actor) {
+    if(const auto active=scene.find(scene.properties().activeCamera);active && active->camera &&
+       ((!active->cameraFollow && active->parent==actor) || (active->cameraFollow && active->cameraFollow->target==actor)))return active->id;
+    return resolveOwnedActorCamera(scene,actor);
+}
+EntityId placePlayerFromView(SceneDocument& document,const Camera& view) {
+    const auto& scene=document.scene();
+    const auto actor=scene.properties().playerCharacter;
+    const auto player=scene.find(actor);
+    const auto cameraId=playerCamera(scene,actor);
+    const auto camera=scene.find(cameraId);
+    const auto actorWorld=scene.worldTransform(actor),cameraWorld=scene.worldTransform(cameraId);
+    if(!player || !player->actor || !player->controller || !player->movement || !player->movement->enabled ||
+       !player->playerInput || !player->playerInput->enabled || !camera || !camera->camera || !actorWorld || !cameraWorld ||
+       (camera->cameraFollow && camera->cameraFollow->target!=actor))
+        throw std::runtime_error("Play From Here requires a designated Player with an enabled controller and an owned Camera.");
+    if(!math::finite(view.position) || !math::finite(view.target) || math::length(view.target-view.position)<1e-6f)
+        throw std::runtime_error("Play From Here requires a finite Scene view direction.");
+    const auto parent=player->parent?scene.worldTransform(player->parent):std::optional{Mat4{}};
+    const auto inverseParent=parent?math::inverse(*parent):std::nullopt;
+    if(!inverseParent)throw std::runtime_error("Play From Here requires an invertible Player parent transform.");
+    const auto before=math::normalized(math::transformDirection(*cameraWorld,{0,0,-1}),{0,0,-1});
+    const auto forward=view.forward();
+    const double heading=std::atan2(-forward[0],-forward[2]);
+    const double cameraHeading=std::atan2(-before[0],-before[2]);
+    const double actorHeading=std::atan2((*actorWorld)[8],(*actorWorld)[10]);
+    // The motor stays upright with unit world scale. The complete parent
+    // inverse retains authored affine hierarchies, including scaled parents.
+    auto world=math::rotation(math::axisAngle({0,1,0},actorHeading+heading-cameraHeading));
+    const auto apply=[&] {
+        const ScenePoseUpdate pose{actor,*inverseParent*world};
+        if(!document.applyRuntimePoses(std::span{&pose,1}))throw std::runtime_error(document.status());
+    };
+    apply();
+    const auto relocatedEye=document.scene().worldTransform(cameraId);
+    if(!relocatedEye)throw std::runtime_error("Play From Here could not resolve the Player's Camera.");
+    const auto feet=view.position-math::transformPoint(*relocatedEye,{});
+    for(int axis=0;axis<3;++axis)world[12+axis]=feet[axis];
+    apply();
+    return actor;
+}
 }
 PlaySession::PlaySession(std::filesystem::path projectRoot):projectRoot_(std::move(projectRoot)){
     effects_.setDefinitions([this](const std::string& id) {
@@ -58,23 +99,52 @@ NavigationProjection PlaySession::projectToNavigation(const std::string& profile
     return navigation_?navigation_->project(profile,point):NavigationProjection{NavigationStatus::Unavailable,{},"Play is not active."};
 }
 bool PlaySession::start(const SceneDocument& authored) {
+    return startInternal(authored,nullptr);
+}
+bool PlaySession::startFromView(const SceneDocument& authored,const Camera& view) {
+    return startInternal(authored,&view);
+}
+bool PlaySession::startInternal(const SceneDocument& authored,const Camera* view) {
     CRIMSON_PROFILE_ZONE("Play session startup");
     if(playing())return true;
     try {
         auto document=std::make_unique<SceneDocument>(projectRoot_);
         if(!document->resetTransientFrom(authored)){status_=document->status();return false;}
+        const auto relocated=view?placePlayerFromView(*document,*view):NoEntity;
+        if(view) {
+            const auto camera=playerCamera(document->scene(),relocated);
+            if(document->scene().properties().activeCamera!=camera) {
+                if(!document->setActiveCamera(camera))throw std::runtime_error(document->status());
+                auto clean=std::make_unique<SceneDocument>(projectRoot_);
+                if(!clean->resetTransientFrom(*document))throw std::runtime_error(clean->status());
+                document=std::move(clean);
+            }
+        }
         if(!prepareMeshColliders(document->scene(),true))return false;
         presentation_.apply(document->scene().records(),document->scene().properties());
         document_=std::move(document);physics_=std::make_unique<PhysicsWorld>();particles_=SceneParticles{};
         if(!resources_){ownedResources_=std::make_unique<ResourceManager>();resources_=ownedResources_.get();}
         navigation_=std::make_unique<NavigationWorld>(*resources_,projectRoot_/".crimson"/"cache"/"navigation");
         physics_->setAgentProfiles([this](const std::string& id){const auto found=frameProfiles_.find(id);return found==frameProfiles_.end()?nullptr:found->second;});
-        reconcileProfiles();physics_->reconcile(document_->scene(),{},meshColliders_);reconcileNavigation();agents_.clear();
-        remainder_=lightSeconds_=0;ticks_=droppedTicks_=0;suspended_=failed_=false;
+        reconcileProfiles();physics_->reconcile(document_->scene(),{},meshColliders_);
+        if(relocated && !physics_->canPlaceCharacter(relocated,math::transformPoint(*document_->scene().worldTransform(relocated),{})))
+            throw std::runtime_error("Play From Here is blocked, or the Player's collision capsule is unavailable.");
+        reconcileNavigation();agents_.clear();
+        remainder_=lightSeconds_=0;ticks_=droppedTicks_=0;suspended_=failed_=paused_=resumePending_=false;
         firstPerson_.reset();pendingJump_=false;traceVisualization_.clear();traceCamera_=NoEntity;
         controlled_=inputOwner_=NoEntity;inputCancellation_=0;lastControlledPose_.reset();
         editRevision_=document_->scene().revision();reconcileAttributes();reconcileAgents();resetInterpolation();reconcileParticles(0);
         runtimeAnimations_.clear();advanceRagdollRuntime(0,false);
+        if(view) {
+            controlled_=relocated;lastControlledPose_=document_->scene().worldTransform(relocated);
+            reconcileFirstPerson(relocated,true);
+            if(!firstPerson_)throw std::runtime_error("Play From Here could not initialize the Player's Camera.");
+            const auto forward=view->forward();
+            firstPerson_->yaw=firstPerson_->initialYaw=std::atan2(-forward[0],-forward[2]);
+            firstPerson_->pitch=std::clamp(std::asin(std::clamp(static_cast<double>(forward[1]),-1.0,1.0)),
+                -89.0*std::numbers::pi/180,89.0*std::numbers::pi/180);
+            refreshPresentation();reconcileParticles(0);
+        }
         status_=physics_->status()+particles_.status();return true;
     } catch(const std::exception& error){stop();status_="Cannot enter Play: "+std::string(error.what());return false;}
 }
@@ -86,7 +156,7 @@ void PlaySession::stop() {
     triggerEvents_.clear();
     meshColliders_.clear();
     particles_=SceneParticles{};navigation_.reset();agents_.clear();enemies_.clear();physics_.reset();document_.reset();previous_.clear();current_.clear();frameProfiles_.clear();acceptedProfiles_.clear();supportedProfiles_.clear();
-    presentation_.apply({},{});remainder_=lightSeconds_=0;ticks_=droppedTicks_=0;editRevision_=agentsRevision_=0;suspended_=failed_=false;status_.clear();
+    presentation_.apply({},{});remainder_=lightSeconds_=0;ticks_=droppedTicks_=0;editRevision_=agentsRevision_=0;suspended_=failed_=paused_=resumePending_=false;status_.clear();
     navigationUpdate_={};navigationDomain_=navigationSceneRevision_=navigationGeometryRevision_=0;navigationVolume_.reset();navigationTransaction_=navigationCoalescing_=false;
     firstPerson_.reset();pendingJump_=false;traceVisualization_.clear();traceCamera_=NoEntity;
     controlled_=inputOwner_=NoEntity;inputCancellation_=0;lastControlledPose_.reset();
@@ -368,9 +438,7 @@ bool PlaySession::clearActorMovement(EntityId id) {
 void PlaySession::reconcileFirstPerson(EntityId actor,bool reset) {
     const auto& scene=document_->scene();
     const auto playerRecord=scene.find(actor);
-    auto cameraId=resolveOwnedActorCamera(scene,actor);
-    if(const auto active=scene.find(scene.properties().activeCamera);active && active->camera &&
-       ((!active->cameraFollow && active->parent==actor) || (active->cameraFollow && active->cameraFollow->target==actor)))cameraId=active->id;
+    const auto cameraId=playerCamera(scene,actor);
     const auto record=scene.find(cameraId);
     const auto actorWorld=scene.worldTransform(actor),cameraWorld=scene.worldTransform(cameraId);
     if(!playerRecord || !record || !record->camera || !actorWorld || !cameraWorld ||
@@ -448,15 +516,43 @@ void PlaySession::resetInterpolation(){
     }
 }
 void PlaySession::advance(double seconds,GameInput& input,const Camera& camera,bool active) {
-    if(!active)input.cancel();
+    if(!active || paused_)input.cancel();
     advanceInternal(seconds,{},camera,active,&input);
 }
 void PlaySession::advance(double seconds,Vec2 movement,const Camera& camera,bool active) {
     advanceInternal(seconds,movement,camera,active);
 }
-void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& camera,bool active,GameInput* input) {
+bool PlaySession::setPaused(bool paused) {
+    if(!playing() || failed_)return false;
+    if(paused_==paused)return true;
+    try {
+        paused_=paused;resumePending_=!paused;
+        remainder_=0;clearPlayerRoute();inputOwner_=NoEntity;triggerEvents_.clear();
+        resetInterpolation();refreshPresentation();reconcileParticles(0);
+        return true;
+    }catch(const std::exception& error) {
+        triggerEvents_.clear();traceVisualization_.clear();remainder_=0;failed_=true;status_="Play simulation stopped: "+std::string(error.what());return false;
+    }
+}
+bool PlaySession::step(const Camera& camera) {
+    if(!playing() || !paused_ || failed_)return false;
+    try {
+        clearPlayerRoute();inputOwner_=NoEntity;remainder_=0;
+        const auto before=ticks_;
+        advanceInternal(FixedStep,{},camera,true,nullptr,true);
+        if(failed_ || ticks_!=before+1)return false;
+        resetInterpolation();refreshPresentation();reconcileParticles(0);
+        return true;
+    }catch(const std::exception& error) {
+        triggerEvents_.clear();traceVisualization_.clear();remainder_=0;failed_=true;status_="Play simulation stopped: "+std::string(error.what());return false;
+    }
+}
+void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& camera,bool active,GameInput* input,bool singleStep) {
     CRIMSON_PROFILE_ZONE("Play frame");
-    triggerEvents_.clear();
+    // A stepped batch remains inspectable through paused render/reconcile
+    // frames. The next Step or Resume owns its replacement; ordinary running
+    // advances retain their existing latest-advance contract, including dt=0.
+    if(!paused_ || singleStep)triggerEvents_.clear();
     if(!document_ || failed_)return;
     try {
         if(ownedResources_)resources_->pump();
@@ -467,7 +563,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         reconcileAttributes();
         prepareMeshColliders(document_->scene(),false);
         reconcileProfiles();
-        advanceRagdollRuntime(0,active);
+        advanceRagdollRuntime(0,active && (!paused_ || singleStep));
         physics_->reconcile(document_->scene(),document_->transformEditRoots(),meshColliders_);
         reconcileNavigation();
         const auto controlled=document_->scene().properties().playerCharacter;
@@ -501,6 +597,11 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         else firstPerson_.reset();
         if(firstPerson_ && (physics_->characterLocked(controlled) || controlledRecord->movement->stairSmoothingTime<=0))
             clearFirstPersonStep();
+        if(paused_ && !singleStep) {
+            clearPlayerRoute();inputOwner_=NoEntity;remainder_=0;
+            if(!active)suspended_=true;
+            refreshPresentation();reconcileParticles(0);status_=physics_->status()+particles_.status();return;
+        }
         if(!active) {
             traceVisualization_.clear();
             clearFirstPersonStep();
@@ -513,7 +614,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
             fireTrace=input->consumeTrace();
             updateFirstPerson(*input,*controlledRecord->playerInput,*controlledRecord->movement,0);
         }
-        if(suspended_){seconds=0;suspended_=false;remainder_=0;resetInterpolation();}
+        if(!singleStep && (suspended_ || resumePending_)){seconds=0;suspended_=resumePending_=false;remainder_=0;resetInterpolation();}
         if(!std::isfinite(seconds) || seconds<0)seconds=0;
         traceVisualization_.advance(seconds);
         // Large stalls are discarded here rather than replayed as future work.

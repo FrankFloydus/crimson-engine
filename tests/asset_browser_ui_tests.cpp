@@ -21,6 +21,9 @@ struct EditorPerformanceProbe {
     static const auto& rename(const AssetBrowserPanel& panel){return panel.renameId_;}
     static const auto& deferred(const AssetBrowserPanel& panel){return panel.deferredClick_;}
     static const auto& drag(const AssetBrowserPanel& panel){return panel.dragPrimary_;}
+    static const auto& folder(const AssetBrowserPanel& panel){return panel.folder_;}
+    static bool queryCleared(const AssetBrowserPanel& panel){return !panel.searchText_[0]&&panel.filter_==BrowserAssetFilter::All;}
+    static void hideByQuery(AssetBrowserPanel& panel){panel.searchText_.fill(0);panel.searchText_[0]='!';panel.filter_=BrowserAssetFilter::Materials;}
 };
 namespace browser_ui_test {
 struct Card {std::size_t index;ImRect bounds;ImGuiID id;bool visible,hovered;};
@@ -28,6 +31,7 @@ bool clip=true;
 int columns{};
 std::vector<Card> cards;
 nlohmann::json keyboard;
+ImRect findReferences;
 }
 bool assetBrowserClipRowsForTest(){return browser_ui_test::clip;}
 void assetBrowserSubmittedCardForTest(std::size_t index,ImRect bounds,ImGuiID id,bool visible){
@@ -41,6 +45,7 @@ void assetBrowserKeyboardForTest(bool enabled,bool selectAllPressed){
         {"active_window",context.ActiveIdWindow?context.ActiveIdWindow->Name:""},{"popup_count",context.OpenPopupStack.size()},
         {"key_a_down",ImGui::IsKeyDown(ImGuiKey_A)},{"drag_active",context.DragDropActive}};
 }
+void assetBrowserFindReferencesForTest(ImRect bounds){browser_ui_test::findReferences=bounds;}
 }
 namespace {
 using namespace crimson;
@@ -250,12 +255,29 @@ void popupOwnership(BrowserUi& ui){
     io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);ui.tick();io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);ui.tick();
     require(ImGui::GetCurrentContext()->OpenPopupStack.empty(),"The private asset context menu did not close.");
 }
+void referencesAndReveal(BrowserUi& ui){
+    ui.catalog(10000);ui.scroll(0);const auto id=ui.id(9900);
+    EditorPerformanceProbe::hideByQuery(ui.panel);ui.tick();
+    require(ui.panel.reveal(id,ui.assets),"Reveal rejected an existing cached asset.");ui.tick();ui.tick();ui.tick();
+    require(EditorPerformanceProbe::queryCleared(ui.panel)&&ui.assets.browserSelection().primary()==id,
+        "Reveal did not clear category/search or select its stable asset identity.");
+    require(EditorPerformanceProbe::folder(ui.panel)==ui.assets.browserCatalog().parent(id),"Reveal did not navigate to the cached asset parent.");
+    const auto found=std::find_if(browser_ui_test::cards.begin(),browser_ui_test::cards.end(),[&](const auto& card){return card.visible&&ui.id(card.index)==id;});
+    require(found!=browser_ui_test::cards.end(),"Reveal left its far-away target clipped outside the actual browser viewport.");
+    require(!ui.panel.reveal("missing-reference-owner",ui.assets)&&ui.assets.browserSelection().primary()==id,"A missing owner destroyed the current browser navigation/selection.");
+    const auto source=*found;ui.mouse(source);auto& io=ImGui::GetIO();
+    browser_ui_test::findReferences={};io.AddMouseButtonEvent(ImGuiMouseButton_Right,true);ui.tick();io.AddMouseButtonEvent(ImGuiMouseButton_Right,false);ui.tick();ui.tick();
+    require(!ImGui::GetCurrentContext()->OpenPopupStack.empty()&&browser_ui_test::findReferences.GetWidth()>0,"Asset context menu omitted Find References.");
+    const auto point=browser_ui_test::findReferences.GetCenter();io.AddMousePosEvent(point.x,point.y);ui.tick();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);ui.tick();io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);ui.tick();
+    require(ui.actions.findReferences==id,"The actual Find References context action returned the wrong owner identity.");
+}
 }
 int main(int argc,char** argv){
     try{
         BrowserUi ui;Json report;report["large_folder"]=benchmark(ui,10000);report["small_folder"]=benchmark(ui,8);
-        report["selection"]=selectionAndRename(ui);dragAndDeferredOwnership(ui);popupOwnership(ui);
-        report["interaction_checks"]={"full_catalog_keyboard_range","ctrl_multi_selection","full_catalog_ctrl_a","offscreen_rename","deferred_press","pre_drag_active_id","offscreen_drag","offscreen_context_menu"};
+        report["selection"]=selectionAndRename(ui);dragAndDeferredOwnership(ui);popupOwnership(ui);referencesAndReveal(ui);
+        report["interaction_checks"]={"full_catalog_keyboard_range","ctrl_multi_selection","full_catalog_ctrl_a","offscreen_rename","deferred_press","pre_drag_active_id","offscreen_drag","offscreen_context_menu","reference_reveal","find_references_context_action"};
         if(argc>1){const fs::path file=argv[1];if(file.has_parent_path())fs::create_directories(file.parent_path());std::ofstream output(file);output<<report.dump(2)<<'\n';require(static_cast<bool>(output),"Cannot publish private browser UI timings.");}
         std::cout<<report.dump(2)<<"\nActual browser row clipping, complete-catalog selection and offscreen interaction ownership passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}

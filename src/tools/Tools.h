@@ -3,6 +3,7 @@
 #include "crimson-renderer/RenderTypes.h"
 #include <crimson/renderer/forward/ForwardTypes.hpp>
 #include "scene/MaterialSlotAssignment.h"
+#include "editor/PlayShortcuts.h"
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -23,7 +24,7 @@ struct DecalSurfacePlacement {
     PickResult hit;
 };
 
-enum class EditorCameraAction { None, EditorCamera, SelectCamera, TogglePilot, CreateCamera };
+enum class EditorCameraAction { None, EditorCamera, SelectCamera, TogglePilot, CreateCamera, RecallBookmark };
 
 struct EditorFrame {
     ViewportRegion viewport;
@@ -32,7 +33,8 @@ struct EditorFrame {
     std::optional<Camera> viewportCamera;
     EditorCameraAction cameraAction{EditorCameraAction::None};
     std::uint64_t cameraEntity{};
-    bool togglePlay{false};
+    std::optional<Camera> bookmarkCamera;
+    PlayAction playAction{PlayAction::None};
     bool materialChanged{false};
     bool environmentChanged{false};
     std::string modelDropId;
@@ -73,6 +75,7 @@ struct EditorFrame {
 };
 
 struct BrowserActions {
+    std::string findReferences;
     bool newScene{false};
     std::string openScene, deleteScene;
     std::vector<std::string> deleteAssetIds;

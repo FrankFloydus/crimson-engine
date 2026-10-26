@@ -1031,6 +1031,41 @@ std::span<const TriggerEvent> PhysicsWorld::triggerEvents() const{return impl_->
 std::vector<EntityId> PhysicsWorld::triggerOverlaps(EntityId id) const {
     const auto found=impl_->overlaps.find(id);return found==impl_->overlaps.end()?std::vector<EntityId>{}:std::vector<EntityId>(found->second.begin(),found->second.end());
 }
+bool PhysicsWorld::canPlaceCharacter(EntityId id,const Vec3& feet) const {
+    const auto found=impl_->characters.find(id);
+    if(found==impl_->characters.end() || !found->second.profileCurrent || !math::finite(feet))return false;
+    const auto& character=found->second;
+    const auto* shape=character.motor->GetShape();
+    const auto base=JPH::RVec3(feet[0],feet[1],feet[2]);
+    const auto transform=character.motor->GetCenterOfMassTransform().PostTranslated(base-character.motor->GetPosition());
+    class PlacementCollector final:public JPH::CollideShapeCollector {
+    public:
+        bool blocked{};
+        void AddHit(const JPH::CollideShapeResult& hit) override {
+            if(hit.mPenetrationDepth>.001f) {blocked=true;ForceEarlyOut();}
+        }
+    } collector;
+    class PlacementBodies final:public JPH::BodyFilter {
+    public:
+        std::function<bool(EntityId)> accepts;
+        bool ShouldCollideLocked(const JPH::Body& body) const override{return accepts(body.GetUserData());}
+    } bodies;
+    bodies.accepts=[&](EntityId target) {
+        if(target==id || impl_->characters.contains(target))return false;
+        const auto owner=impl_->queryOwners.find(target);
+        if(owner!=impl_->queryOwners.end() && owner->second==id)return false;
+        return (character.collision.mask&impl_->bodyFilter(target).layers)!=0;
+    };
+    JPH::CollideShapeSettings settings;settings.mBackFaceMode=JPH::EBackFaceMode::CollideWithBackFaces;
+    impl_->world.GetNarrowPhaseQuery().CollideShape(shape,JPH::Vec3::sOne(),transform,settings,base,collector,{}, {},bodies);
+    if(collector.blocked)return false;
+    for(const auto& [target,peer]:impl_->characters) {
+        if(target==id || !(character.collision.mask&peer.collision.layers))continue;
+        peer.motor->GetTransformedShape().CollideShape(shape,JPH::Vec3::sOne(),transform,settings,base,collector);
+        if(collector.blocked)return false;
+    }
+    return true;
+}
 PhysicsTraceResult PhysicsWorld::trace(const PhysicsTrace& request,const PhysicsQueryFilter& filter,PhysicsTraceMode mode) const {
     CRIMSON_PROFILE_ZONE("PhysicsWorld::trace");
     PhysicsTraceResult result;

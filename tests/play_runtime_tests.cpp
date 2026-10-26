@@ -6,6 +6,7 @@
 #include "scene/BuiltinModels.h"
 #include "scene/SceneExtraction.h"
 #include "scene/SceneOutlinerRows.h"
+#include "assets/GameplayEffectAsset.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -145,6 +146,231 @@ void particlesUseRuntimeClock() {
     const auto* particle=play.particles().instance(4);require(particle && std::abs(particle->elapsed()-10*PlaySession::FixedStep)<1e-8,"Runtime effects did not share the fixed clock.");
     require(particle->particles().back().position[0]>.5f,"Child emitter births did not follow the moving parent.");
     play.stop();require(!play.particles().instance(4),"Stop retained transient particles.");
+}
+void addPlayerCamera(SceneDocument& document,bool follow=true) {
+    require(document.edit("Player eye",[&](auto& records,auto& properties) {
+        EntityRecord eye;eye.id=4;eye.parent=2;eye.name="Player Camera";eye.camera=SceneCamera{73.f,.035f,1234.f};
+        if(follow)eye.cameraFollow=SceneCameraFollow{2,{.25f,1.6f,-.15f},Mat4{}};
+        else eye.local=math::translation({.25f,1.6f,-.15f})*math::eulerRotationXYZ({.2f,-.3f,.17f})*math::scaling({.8f,1.2f,.9f});
+        records.push_back(eye);properties.activeCamera=4;
+    }),"Cannot prepare the Player eye.");
+}
+void playFromHereTransformsAndIsolation() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";
+    for(const bool follow:{false,true}) {
+        SceneDocument authored(root);fixture(authored);addPlayerCamera(authored,follow);
+        auto parent=math::translation({-3,.2f,2})*math::eulerRotationXYZ({.13f,.37f,-.08f})*math::scaling({2.f,.7f,1.6f});
+        parent[4]+=.15f;
+        const auto originalPlayer=math::translation({0,.05f,0})*math::rotation(math::axisAngle({0,1,0},.27));
+        const auto inverseParent=math::inverse(parent);require(inverseParent.has_value(),"The parent fixture is singular.");
+        require(authored.edit("Affine parent and separate authored camera",[&](auto& records,auto& properties) {
+            EntityRecord group;group.id=10;group.name="Scaled and sheared group";group.local=parent;records.push_back(group);
+            for(auto& record:records)if(record.id==2){record.parent=10;record.local=*inverseParent*originalPlayer;}
+            EntityRecord cinematic;cinematic.id=11;cinematic.name="Authored active Camera";cinematic.camera.emplace();
+            cinematic.local=math::translation({-20,8,5});records.push_back(cinematic);properties.activeCamera=11;
+        }),"Cannot prepare the affine Player fixture.");
+        authored.select({2},2);
+        const auto before=authored.scene().records();const auto roles=authored.scene().properties();
+        const auto history=authored.history().size(),revision=authored.scene().revision();const bool dirty=authored.dirty();
+        const auto basis=*authored.scene().worldTransform(4);
+        PlaySession play(root);
+        for(int cycle=0;cycle<3;++cycle) {
+            Camera view;view.position={5.f+cycle,3.2f,-4.f};
+            const auto direction=math::normalized(Vec3{.7f,-.24f,-.6f});view.target=view.position+direction;view.fov=99;
+            require(play.startFromView(authored,view),"Play From Here rejected a clear parented Player.");
+            const auto resolved=resolveGameCamera(play.presentationScene());
+            require(resolved && math::length(resolved->position-view.position)<3e-4f && math::dot(resolved->forward(),direction)>.99999f,
+                "Play From Here lost the actual eye position or initial view orientation.");
+            require(resolved->fov==73 && resolved->nearPlane==.035f && resolved->farPlane==1234,
+                "Play From Here replaced the authored Player lens with the editor lens.");
+            const auto actual=*play.presentationScene().worldTransform(4);
+            for(int a=0;a<3;++a)for(int b=0;b<3;++b) {
+                double original{},relocated{};
+                for(int row=0;row<3;++row){original+=basis[4*a+row]*basis[4*b+row];relocated+=actual[4*a+row]*actual[4*b+row];}
+                require(std::abs(original-relocated)<2e-4,"Play From Here changed the eye's residual affine basis.");
+            }
+            const auto playerWorld=*play.document().scene().worldTransform(2);
+            require(std::abs(playerWorld[4])<2e-5f && std::abs(playerWorld[5]-1)<2e-5f && std::abs(playerWorld[6])<2e-5f,
+                "Play From Here inherited parent scale or tilt into the upright collision capsule.");
+            require(play.document().scene().find(4)->cameraFollow==authored.scene().find(4)->cameraFollow &&
+                play.document().scene().find(10)->local==parent && play.document().scene().properties().activeCamera==4 &&
+                !play.document().dirty() && play.document().history().size()==0,
+                "Play From Here changed follow definitions, its parent, or the clean transient history.");
+            play.advance(0,Vec2{},view);
+            const auto initialized=resolveGameCamera(play.presentationScene());
+            require(initialized && math::length(initialized->position-view.position)<3e-4f && math::dot(initialized->forward(),direction)>.99999f,
+                "The first ordinary Play frame reset the initial eye look.");
+            play.stop();
+            const auto after=authored.scene().records();require(after.size()==before.size(),"Play From Here added authored entities.");
+            for(std::size_t i=0;i<after.size();++i)require(sameEntity(after[i],before[i]),"Play From Here modified an authored record.");
+            require(sameProperties(authored.scene().properties(),roles) && authored.history().size()==history &&
+                authored.scene().revision()==revision && authored.dirty()==dirty && authored.selection().primary==2,
+                "Play From Here changed authored roles, history, revision, dirtiness or selection.");
+        }
+        require(play.start(authored),"Normal Play failed after repeated Play From Here.");
+        require(play.document().scene().properties().activeCamera==11 &&
+            math::length(math::transformPoint(*play.document().scene().worldTransform(2),{})-Vec3{0,.05f,0})<1e-5f,
+            "Normal Play retained a previous relocated Player or temporary active-camera choice.");play.stop();
+    }
+}
+void playFromHereClearance() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";
+    SceneDocument authored(root);fixture(authored);addPlayerCamera(authored);
+    require(authored.edit("Placement blockers",[](auto& records,auto&) {
+        EntityRecord wall;wall.id=6;wall.name="Solid blocker";wall.collider=SceneCollider{{2,4,2}};wall.local=math::translation({5,2,0});records.push_back(wall);
+        EntityRecord peer;peer.id=7;peer.name="Other Character";peer.actor.emplace();peer.controller.emplace();peer.local=math::translation({-5,0,0});records.push_back(peer);
+        EntityRecord sensor;sensor.id=8;sensor.name="Nonblocking trigger";sensor.collider=SceneCollider{{2,4,2}};
+        sensor.collider->mode=ColliderMode::Trigger;sensor.collider->collision={TriggerCollisionLayer,AllCollisionLayers};
+        sensor.local=math::translation({10,2,0});records.push_back(sensor);
+    }),"Cannot prepare placement blockers.");
+    const auto before=authored.scene().records();const auto history=authored.history().size();PlaySession play(root);
+    const auto attempt=[&](const Vec3& feet) {
+        Camera view;view.position=feet+authored.scene().find(4)->cameraFollow->offset;view.target=view.position+Vec3{0,0,-1};
+        return play.startFromView(authored,view);
+    };
+    require(!attempt({5,0,0}) && !play.playing() && play.status().find("blocked")!=std::string::npos,
+        "Play From Here admitted a capsule penetrating solid collision.");
+    require(!attempt({-5,0,0}) && !play.playing(),"Play From Here admitted a capsule overlapping another Character.");
+    require(!attempt({0,-.1f,0}) && !play.playing(),"Play From Here admitted a capsule penetrating its support.");
+    require(attempt({0,0,0}),"Touching the floor incorrectly blocked Play From Here.");play.stop();
+    require(attempt({10,0,0}),"A trigger incorrectly blocked Play From Here.");play.stop();
+    Camera invalid;invalid.position={0,2,0};invalid.target=invalid.position;
+    require(!play.startFromView(authored,invalid) && !play.playing(),"A degenerate Scene view started Play From Here.");
+    const auto after=authored.scene().records();require(after.size()==before.size()&&authored.history().size()==history,"Failed placement changed authored history.");
+    for(std::size_t i=0;i<after.size();++i)require(sameEntity(after[i],before[i]),"Failed placement modified authored records.");
+    SceneDocument missing(root);fixture(missing);
+    require(!play.startFromView(missing,camera()) && !play.playing(),"Play From Here invented a missing Player camera.");
+}
+SDL_Event gameKey(SDL_Scancode code) {
+    SDL_Event event{};event.type=SDL_EVENT_KEY_DOWN;event.key.windowID=9;event.key.scancode=code;event.key.down=true;return event;
+}
+void pauseAndExactSingleStep() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";
+    SceneDocument authored(root);fixture(authored);addPlayerCamera(authored);
+    auto effect=std::make_shared<ParticleEffectAsset>(defaultParticleEffect());effect->id=newAssetId();effect->emitter.rate=60;
+    auto periodic=std::make_shared<GameplayEffectAsset>();periodic->id=newAssetId();periodic->name="Fixed tick fixture";
+    periodic->durationPolicy=EffectDurationPolicy::HasDuration;periodic->duration=1;periodic->period=PlaySession::FixedStep;
+    periodic->executeOnApplication=false;periodic->modifiers={{stats::MovementSpeed,EffectModifierOperation::AddBase,{1}}};
+    const auto clip=newAssetId();
+    require(authored.edit("Iteration clocks",[&](auto& records,auto&) {
+        for(auto& record:records)if(record.id==3) {
+            record.model=AssetRef<ModelAsset>{BuiltinBoxModelId};record.modelAnimation.asset=AssetRef<AnimationAsset>{clip};
+            record.modelAnimation.startTime=.25;record.modelAnimation.speed=2;
+        }
+        EntityRecord emitter;emitter.id=5;emitter.parent=2;emitter.name="Emitter";emitter.particle=AssetRef<ParticleEffectAsset>{effect->id};records.push_back(emitter);
+    }),"Cannot prepare iteration clocks.");
+    PlaySession play(root);play.setParticleDefinitions([effect](const std::string&){return ParticleDefinitionVersion{effect,1,{}};});
+    play.setGameplayEffects([periodic](const std::string& id){return id==periodic->id?EffectDefinitionSnapshot{periodic,1,{}}:EffectDefinitionSnapshot{};});
+    require(!play.setPaused(true) && !play.step(camera()),"Idle editor accepted Pause or Step.");
+    require(play.start(authored) && !play.paused() && !play.step(camera()),"Play started paused or accepted Step while running.");
+    const auto applied=play.applyEffect(2,2,periodic->id);require(static_cast<bool>(applied),"Cannot prepare periodic clock fixture.");
+    GameInput input;input.setViewport({0,0,800,600,true,false,9},true,false);input.acquire();
+    play.advance(0,input,camera());
+    for(int i=0;i<4;++i)play.advance(PlaySession::FixedStep,input,camera());
+    // Queue press edges on a render frame with no physics tick, then pause.
+    input.handleEvent(gameKey(SDL_SCANCODE_W));input.handleEvent(gameKey(SDL_SCANCODE_SPACE));
+    play.advance(0,input,camera());
+    input.handleEvent(gameKey(SDL_SCANCODE_F));
+    SDL_Event look{};look.type=SDL_EVENT_MOUSE_MOTION;look.motion.windowID=9;look.motion.xrel=80;look.motion.yrel=40;input.handleEvent(look);
+    require(play.setPaused(true) && play.paused(),"Cannot pause Play.");
+    const auto ticks=play.tickCount(),dropped=play.droppedTicks();const auto seconds=play.acceptedSeconds();
+    const auto position=math::transformPoint(*play.document().scene().worldTransform(2),{});
+    const auto remaining=play.effects().active(2).front().remaining;
+    const auto animationSeconds=[&] {auto extracted=extractScene(play.presentationScene());play.prepareRagdollPresentation(extracted);return extracted.models.front().animationSeconds;};
+    const auto animation=animationSeconds(),particleSeconds=play.particles().instance(5)->elapsed();
+    for(int i=0;i<3;++i) {
+        play.advance(5,input,camera());play.advance(.7,Vec2{1,1},camera(),false);
+    }
+    require(play.paused() && play.tickCount()==ticks && play.droppedTicks()==dropped && play.acceptedSeconds()==seconds &&
+        play.particles().instance(5)->elapsed()==particleSeconds && animationSeconds()==animation &&
+        play.effects().active(2).front().remaining==remaining,
+        "Paused wall time advanced simulation, effects, particles, animation or accepted presentation time.");
+    require(!input.ownsKeyboard() && input.movement()==Vec2{} && !input.consumeJump() && !input.consumeTrace() && input.consumeLookDelta()==Vec2{},
+        "Pause retained Game input ownership or pending gameplay edges.");
+    require(play.step(camera()) && play.paused() && play.tickCount()==ticks+1 && play.droppedTicks()==dropped,
+        "Single Step did not execute exactly one tick while staying paused.");
+    require(std::abs(play.acceptedSeconds()-seconds-PlaySession::FixedStep)<1e-10 &&
+        std::abs(play.particles().instance(5)->elapsed()-particleSeconds-PlaySession::FixedStep)<1e-10 &&
+        std::abs(animationSeconds()-animation-2*PlaySession::FixedStep)<1e-10 &&
+        std::abs(*play.effects().active(2).front().remaining-*remaining+PlaySession::FixedStep)<1e-10,
+        "Single Step did not share the exact fixed interval across runtime clocks.");
+    const auto stepped=math::transformPoint(*play.document().scene().worldTransform(2),{});
+    const auto presented=math::transformPoint(*play.presentationScene().worldTransform(2),{});
+    require(math::length(stepped-presented)<1e-6f && std::hypot(stepped[0]-position[0],stepped[2]-position[2])<1e-4f && stepped[1]<=position[1]+1e-4f,
+        "Single Step displayed an old sample or replayed paused movement/jump input.");
+    play.advance(10,input,camera());require(play.tickCount()==ticks+1 && play.paused(),"A Step resumed ordinary simulation.");
+    require(play.setPaused(false),"Cannot resume Play.");play.advance(10,input,camera());
+    require(play.tickCount()==ticks+1 && play.acceptedSeconds()==seconds+PlaySession::FixedStep,"Resume caught up paused wall time.");
+    play.advance(PlaySession::FixedStep,input,camera());require(play.tickCount()==ticks+2,"Resumed Play did not accept its next ordinary tick.");
+    for(int cycle=0;cycle<3;++cycle) {
+        require(play.setPaused(true) && play.step(camera()) && play.setPaused(false),"Repeated Pause/Step/Resume failed.");
+        const auto before=play.tickCount();play.advance(20,input,camera());require(play.tickCount()==before,"A later Resume replayed wall time.");
+    }
+    require(play.setPaused(true),"Cannot pause before Stop.");play.stop();
+    require(!play.playing() && !play.paused() && play.tickCount()==0 && play.acceptedSeconds()==0,"Stop retained paused runtime state.");
+    require(play.start(authored) && !play.paused(),"A new Play run inherited Pause.");play.stop();
+}
+void pausedStepRetainsTriggerBatch() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";
+    SceneDocument authored(root);fixture(authored);
+    require(authored.edit("Stepped trigger",[](auto& records,auto&) {
+        EntityRecord trigger;trigger.id=4;trigger.name="Player detector";trigger.collider=SceneCollider{{3,4,3}};
+        trigger.collider->mode=ColliderMode::Trigger;trigger.collider->collision={TriggerCollisionLayer,CharacterCollisionLayer};
+        trigger.local=math::translation({0,2,0});records.push_back(trigger);
+    }),"Cannot prepare the stepped trigger.");
+    PlaySession play(root);require(play.start(authored)&&play.setPaused(true)&&play.step(camera()),"Cannot step an initially paused trigger world.");
+    const std::vector<TriggerEvent> entered(play.triggerEvents().begin(),play.triggerEvents().end());
+    require(entered.size()==1&&entered[0].trigger==4&&entered[0].other==2&&entered[0].kind==TriggerEventKind::Enter,
+        "Single Step did not publish its initial trigger Enter.");
+    for(int frame=0;frame<3;++frame) {
+        play.advance(0,Vec2{},camera());play.advance(10,Vec2{},camera(),false);
+        require(std::vector<TriggerEvent>(play.triggerEvents().begin(),play.triggerEvents().end())==entered,
+            "A paused render or focus frame consumed the stepped trigger batch.");
+    }
+    require(play.step(camera())&&play.triggerEvents().empty(),"A later Step replayed its predecessor's trigger batch.");
+    require(play.document().edit("Move stepped trigger away",[](auto& records,auto&) {
+        for(auto& record:records)if(record.id==4)record.local=math::translation({20,2,0});
+    }),"Cannot edit the paused trigger.");
+    play.advance(0,Vec2{},camera());require(play.step(camera()),"Cannot step the edited trigger.");
+    const std::vector<TriggerEvent> exited(play.triggerEvents().begin(),play.triggerEvents().end());
+    require(exited.size()==1&&exited[0].kind==TriggerEventKind::Exit&&exited[0].reason==TriggerEventReason::Configuration,
+        "The edited trigger did not publish a stepped configuration Exit.");
+    play.advance(0,Vec2{},camera());
+    require(std::vector<TriggerEvent>(play.triggerEvents().begin(),play.triggerEvents().end())==exited,
+        "Paused reconciliation consumed the stepped Exit.");
+    require(play.setPaused(false)&&play.triggerEvents().empty(),"Resume retained a stale stepped trigger batch.");
+    play.advance(0,Vec2{},camera());require(play.triggerEvents().empty(),"An ordinary zero-tick advance replayed stepped events.");
+}
+void pauseAndStepContainDefinitionFailures() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";
+    SceneDocument authored(root);fixture(authored);
+    auto effect=std::make_shared<ParticleEffectAsset>(defaultParticleEffect());effect->id=newAssetId();
+    require(authored.edit("Throwing particle definition",[&](auto& records,auto&) {
+        EntityRecord emitter;emitter.id=4;emitter.name="Failure fixture";emitter.particle=AssetRef<ParticleEffectAsset>{effect->id};records.push_back(emitter);
+    }),"Cannot prepare the definition-failure fixture.");
+    const auto original=authored.scene().records();const auto history=authored.history().size();
+    std::uint64_t queries{},throwAt{};PlaySession play(root);
+    play.setParticleDefinitions([&](const std::string&) {
+        if(++queries==throwAt)throw std::runtime_error("Fixture particle definition failed.");
+        return ParticleDefinitionVersion{effect,1,{}};
+    });
+    require(play.start(authored),"Cannot start the definition-failure fixture.");
+    throwAt=queries+1;
+    require(!play.setPaused(true)&&play.playing()&&play.status().find("Fixture particle definition failed")!=std::string::npos,
+        "Pause let a definition exception escape or lost its useful failure status.");
+    require(!play.step(camera())&&!play.setPaused(false),"A failed Pause resumed simulation without Stop.");
+    play.stop();throwAt=0;
+    require(play.start(authored)&&play.setPaused(true),"Stop did not reset a failed Pause.");
+    // The fixed tick and advanceInternal's presentation each query once; the
+    // third query is Step's final completed-pose publication outside that owner.
+    throwAt=queries+3;const auto before=play.tickCount();
+    require(!play.step(camera())&&queries==throwAt&&play.tickCount()==before+1&&
+        play.status().find("Fixture particle definition failed")!=std::string::npos,
+        "Step's completed-pose publication let a definition exception escape or executed another tick.");
+    require(!play.step(camera()),"A failed Step accepted another physics tick.");play.stop();throwAt=0;
+    require(play.start(authored)&&!play.paused()&&play.tickCount()==0,"Stop did not reset a failed Step.");play.stop();
+    const auto after=authored.scene().records();require(after.size()==original.size()&&authored.history().size()==history,"Definition failures changed authored history.");
+    for(std::size_t index=0;index<after.size();++index)require(sameEntity(after[index],original[index]),"Definition failures changed authored records.");
 }
 void particlePreprocessIsReadyBeforePlayReturns() {
     const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";SceneDocument authored(root);fixture(authored);
@@ -313,4 +539,4 @@ void composedActorsShareNavigationAndKeepIndependentCommands() {
 }
 
 }
-int main(){try{lifecycleAndEditing();flatPlayerPresentationPreservesRuntime();fixedTimingAndInterpolation();particlesUseRuntimeClock();particlePreprocessIsReadyBeforePlayReturns();followCameraTransformLocks();directionalInputRespectsRoleAndComponentChanges();composedActorsShareNavigationAndKeepIndependentCommands();std::cout<<"Play runtime checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{lifecycleAndEditing();flatPlayerPresentationPreservesRuntime();fixedTimingAndInterpolation();particlesUseRuntimeClock();playFromHereTransformsAndIsolation();playFromHereClearance();pauseAndExactSingleStep();pausedStepRetainsTriggerBatch();pauseAndStepContainDefinitionFailures();particlePreprocessIsReadyBeforePlayReturns();followCameraTransformLocks();directionalInputRespectsRoleAndComponentChanges();composedActorsShareNavigationAndKeepIndependentCommands();std::cout<<"Play runtime checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

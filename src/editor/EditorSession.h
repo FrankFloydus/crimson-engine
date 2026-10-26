@@ -2,6 +2,7 @@
 #include "SceneEditor.h"
 #include "ExternalSceneObservation.h"
 #include "CameraPilot.h"
+#include "CameraBookmarks.h"
 #include "EditorResources.h"
 #include "assets/AssetLibrary.h"
 #include "tools/ParticleEditor.h"
@@ -84,6 +85,7 @@ private:
     AttributeDebug attributeDebug_;
     SceneEditor editor_;
     CameraPilot cameraPilot_;
+    CameraBookmarks cameraBookmarks_;
     ParticleEditor particleEditor_;
     MaterialEditor materialEditor_;
     NavigationAgentProfileEditor navigationProfileEditor_;
@@ -131,12 +133,13 @@ private:
     bool focusGame_{},deferredSceneReload_{};
     bool cameraGestureCancel_{};
     bool waitingForCollision_{};
+    std::optional<Camera> playStartView_;
     std::uint64_t waitingSceneGeneration_{},waitingSceneRevision_{};
     Camera editCameraBeforePlay_;
     std::string playStatus_;
     SceneDocument& activeDocument() { return play_.playing()?play_.document():document_; }
     const SceneDocument& activeDocument() const { return play_.playing()?play_.document():document_; }
-    void transitionPlay(Renderer&,Navigation&,bool stop);
+    void transitionPlay(Renderer&,Navigation&,bool stop,std::optional<Camera> startView=std::nullopt);
     void restoreSession(AssetLibrary&);
     void saveSession() noexcept;
 };

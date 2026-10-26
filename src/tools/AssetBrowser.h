@@ -12,12 +12,13 @@ class AssetBrowserPanel {
 public:
     BrowserActions draw(AssetLibrary& assets, SDL_Window* window, int previewSize = 128, Renderer* renderer = nullptr);
     void handleExternalDrop(const SDL_Event&,AssetLibrary&,bool enabled=true,bool blocked=false);
+    bool reveal(const std::string& id,AssetLibrary&);
     std::uint32_t thumbnailDemand() const { return thumbnailDemand_; }
 private:
     std::uint32_t thumbnailDemand_{128};
     AssetBrowserFileDrop externalDrop_;
     const AssetLibrary* library_{};
-    std::string folder_, renameId_, message_, deferredClick_, dragPrimary_;
+    std::string folder_, renameId_, message_, deferredClick_, dragPrimary_,revealId_;
     std::array<char,512> renameText_{};
     std::array<char,512> searchText_{};
     BrowserAssetFilter filter_{BrowserAssetFilter::All};

@@ -151,12 +151,16 @@ std::string AssetReferenceManager::resolveParticleTexture(const std::string& id)
     const auto result=resolve(id);return result==GrayTextureId?std::string{}:result;
 }
 void AssetReferenceManager::setUsages(std::vector<AssetUsage> usages){usages_=std::move(usages);}
-std::vector<AssetUsage> AssetReferenceManager::users(const std::string& id)const{
-    std::vector<AssetUsage> result;std::vector<std::string> pending{id};std::unordered_set<std::string> visited;std::set<std::tuple<std::string,std::string,std::string,bool,bool,bool>> emitted;
+std::vector<AssetUsage> AssetReferenceManager::users(const std::string& id,std::stop_token stop)const{
+    std::vector<AssetUsage> result;std::vector<std::string> pending{id};std::unordered_set<std::string> visited;std::set<std::tuple<std::string,std::string,std::string,bool,bool,bool,std::uint64_t>> emitted;
     while(!pending.empty()){const auto target=pending.back();pending.pop_back();if(!visited.insert(target).second)continue;
-        for(const auto& u:usages_)if(u.targetId==target||resolve(u.targetId)==target){
-            if(emitted.emplace(u.targetId,u.ownerId,u.slot,u.active,u.historical,u.editorState).second)result.push_back(u);
-            if(!u.ownerId.empty()&&u.ownerId!=target)pending.push_back(u.ownerId);
+        if(stop.stop_requested())throw std::runtime_error("Asset reference request cancelled.");
+        std::size_t tested{};for(const auto& u:usages_){
+            if((tested++&1023u)==0&&stop.stop_requested())throw std::runtime_error("Asset reference request cancelled.");
+            if(u.targetId==target||resolve(u.targetId)==target){
+                if(emitted.emplace(u.targetId,u.ownerId,u.slot,u.active,u.historical,u.editorState,u.entityId).second)result.push_back(u);
+                if(!u.ownerId.empty()&&u.ownerId!=target)pending.push_back(u.ownerId);
+            }
         }
     }return result;
 }

@@ -10,6 +10,7 @@
 #include "editor/CollisionLayersDocument.h"
 #include "SceneOutlinerColor.h"
 #include "SceneOutlinerUi.h"
+#include "SceneOutlinerFilterUi.h"
 #include "CameraAuthoringControls.h"
 #include "InspectorTransform.h"
 #include "ColliderInspector.h"
@@ -122,6 +123,9 @@ struct PanelsState {
     std::vector<EntityId> lastSelection;
     std::vector<EntityId> dragged;
     std::unordered_set<EntityId> expand;
+    SceneOutlinerProjection outliner;
+    std::array<char,256> outlinerSearch{};
+    SceneOutlinerFilter outlinerFilter{SceneOutlinerFilter::All};
     EntityId anchor{}, nameId{}, renameId{}, pendingClick{}, lastPrimary{};
     bool renameFocus{}, pendingCtrl{}, pendingShift{};
     std::array<char,1025> name{};
@@ -219,12 +223,10 @@ void selectRow(SceneDocument& document, PanelsState& state, EntityId id, bool to
     finishScenePanelEdit(document);
     auto ids=document.selection().ids;
     if (range && state.anchor) {
-        const auto first=std::find(state.visible.begin(),state.visible.end(),state.anchor);
-        const auto last=std::find(state.visible.begin(),state.visible.end(),id);
-        if (first!=state.visible.end() && last!=state.visible.end()) {
+        const auto displayed=sceneOutlinerRange(state.visible,state.anchor,id);
+        if (!displayed.empty()) {
             if (!toggle) ids.clear();
-            const auto low=std::min(first,last), high=std::max(first,last);
-            for (auto it=low;it<=high;++it) if (std::find(ids.begin(),ids.end(),*it)==ids.end()) ids.push_back(*it);
+            for (const auto entity:displayed) if (std::find(ids.begin(),ids.end(),entity)==ids.end()) ids.push_back(entity);
             document.select(std::move(ids),id); return;
         }
     }
@@ -1504,37 +1506,43 @@ void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEd
         ImGui::End();return;
     }
     drawSceneOutlinerAddMenu(!blocked,[&]{finishScenePanelEdit(document);addMenu(document);});
+    const auto filterInteraction=drawSceneOutlinerFilterControls(state.outlinerSearch.data(),state.outlinerSearch.size(),state.outlinerFilter,!blocked);
+    if(filterInteraction.activated||filterInteraction.changed)finishScenePanelEdit(document);
+    state.outliner.synchronize(document.scene(),state.outlinerSearch.data(),state.outlinerFilter,state.renameId);
+    const bool filtered=state.outliner.filtered();
+    if(filtered) {
+        state.visible.clear();state.visible.reserve(state.outliner.rows().size());
+        for(const auto& row:state.outliner.rows())state.visible.push_back(row.entity);
+    }
     if(!blocked && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
-       !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) && ImGui::IsKeyPressed(ImGuiKey_F2,false))
+       !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) && ImGui::IsKeyPressed(ImGuiKey_F2,false) &&
+       (!filtered||state.outliner.contains(document.selection().primary)))
         startRename(document,state,document.selection().primary);
-    const auto records=document.scene().records();
-    std::unordered_map<EntityId,const EntityRecord*> byId;
-    for(const auto& record:records)byId.emplace(record.id,&record);
-    std::unordered_map<EntityId,std::vector<EntityId>> children;
-    for(const auto& row:sceneOutlinerRows(document.scene()))children[row.parent].push_back(row.entity);
+    if(filtered)ImGui::PushID("Filtered hierarchy");
     struct Work {EntityId id{};bool close{};};
     std::vector<Work> pending;
-    for(auto it=children[NoEntity].rbegin();it!=children[NoEntity].rend();++it)pending.push_back({*it});
+    const auto roots=state.outliner.children(NoEntity);
+    for(auto it=roots.rbegin();it!=roots.rend();++it)pending.push_back({*it});
     std::vector<EntityId> visible;
     std::function<void()> action;
     bool rowHovered=false;
     while(!pending.empty()) {
         const auto item=pending.back();pending.pop_back();
         if(item.close){ImGui::TreePop();continue;}
-        const auto& record=*byId.at(item.id);
+        const auto& record=state.outliner.record(item.id);
         visible.push_back(record.id);
         const auto id=std::to_string(record.id);
         const bool renaming=state.renameId==record.id;
         const bool ownsRename=renaming && (state.active==Edit::InlineName || !document.transactionActive());
         ImGui::BeginDisabled(!allowEdits || canceled || (blocked && !ownsRename));
         const bool entitySelected=selected(document,record.id);
-        const bool leaf=children[record.id].empty();
+        const bool leaf=state.outliner.children(record.id).empty();
         const auto flags=sceneOutlinerRowFlags(entitySelected,leaf,renaming);
-        if(state.expand.erase(record.id))ImGui::SetNextItemOpen(true);
+        if(!filtered&&state.expand.erase(record.id))ImGui::SetNextItemOpen(true);
         bool open{};
         {
             SceneOutlinerRowColorScope appearance(sceneOutlinerColor(record));
-            open=ImGui::TreeNodeEx(id.c_str(),flags,"%s",renaming?"":record.name.c_str());appearance.finish(entitySelected);
+            open=sceneOutlinerTreeNode(id.c_str(),flags,renaming?"":record.name.c_str(),filtered);appearance.finish(entitySelected);
         }
         const auto rowMin=ImGui::GetItemRectMin(),rowMax=ImGui::GetItemRectMax();
         rowHovered|=sceneOutlinerRowHovered();
@@ -1592,9 +1600,11 @@ void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEd
         ImGui::EndDisabled();
         if(open && !leaf) {
             pending.push_back({record.id,true});
-            for(auto it=children[record.id].rbegin();it!=children[record.id].rend();++it)pending.push_back({*it});
+            const auto children=state.outliner.children(record.id);
+            for(auto it=children.rbegin();it!=children.rend();++it)pending.push_back({*it});
         }
     }
+    if(filtered)ImGui::PopID();
     state.visible=std::move(visible);
     const bool backgroundBlocked=scenePanelEditBlocked(allowEdits,canceled,document.transactionActive(),owner(state.active)==Panel::Inspector,paintStrokeActive);
     ImGui::BeginDisabled(backgroundBlocked);

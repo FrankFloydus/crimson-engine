@@ -93,6 +93,14 @@ A scale axis may be zero. This collapses the model and hides its draw; it remain
 
 Use **View** to show/hide Game, Outliner, Inspector and Asset Browser; **Ctrl+Space** toggles the Asset Browser. The scene Viewport remains present. **View → Collisions**, **Grid** and **Transform Gizmo** toggle their overlays; Collisions is the master switch for collision wire and fill in both Scene and Game. These switches and panel visibility survive restart. Single-panel dock panes hide their tab bar automatically; tabbed stacks retain their tabs. Splitters resize panes and docking/layout, including Game, remain saved in `crimson_ui.ini`. The main window restores its size, position, monitor and maximized state. **View → Reset layout** restores the default arrangement. **Edit → Preferences** opens a draggable, resizable window without dimming or blocking the editor. Background and major/minor grid changes appear immediately; preferences are saved application-wide.
 
+## Editor iteration tools
+
+The Outliner now has **Search** and a type filter beside **Add**. Matching entities remain visible with their ancestor context; clearing the filters restores the ordinary tree. Open **View → Camera Bookmarks** to save named views, click a row to return, or right-click to update/rename/delete it. Bookmarks belong to their saved scene and store editor metadata without editing camera entities.
+
+Right-click an asset and choose **Find References** to inspect **Uses** and **Dependencies**, select current-scene users or open their owners. Reports are prepared only on request; **Refresh** updates a stale snapshot.
+
+Use **Play → Play From Here / Shift+F5** to place the existing Player at the Scene camera's view for one transient Play run. The capsule must fit the level's collision. During Play, **F6 / Pause / Resume** holds or resumes simulation; **F7 / Step** advances one 1/60 second tick while paused. **P** still starts from the authored spawn and **Shift+Escape** stops. See [the iteration tools guide](docs/EDITOR_ITERATION_TOOLS.md) for controls, persistence and limits.
+
 ## Scenes and entities
 
 The Outliner's **Add** menu stays available above the tree, including in a full or scrolled list. Right-click empty Outliner space for the background Add menu. Click an entity's name/arrow area to interact with its row; left-click blank space beside or below rows to clear selection.

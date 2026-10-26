@@ -1128,6 +1128,16 @@ Play creates an independent transient `SceneDocument` from the authored scene, i
 
 Custom game UI remains C++ authored. A gameplay UI framework, animation state graph and audio implementation remain separate slices from the implemented controller and imported clip playback.
 
+### Editor iteration tools
+
+The Outliner has transient case-insensitive name and component-category filters backed by `SceneOutlinerProjection`. Matching descendants retain ancestor context and use separate forced-open tree IDs; ordinary expansion survives clearing the query. Displayed-row range selection, inline Actor-camera ownership and active rename pinning remain coherent. Projection metadata is cached by scene identity/authoring revision/query, independently of runtime poses and selection.
+
+`editor/CameraBookmarks` owns bounded named views per saved scene UUID in `.crimson/camera-bookmarks.json`; loading writes nothing. Atomic mutations preserve the last accepted state on failure and reject external-file conflicts until explicit reload. `tools/CameraBookmarksPanel` recalls position, target, up and lens through `CameraPilot`'s free-editor mode without scene-camera or history edits. Session cameras also retain their FOV axis.
+
+Asset Browser **Find References** opens an on-demand asynchronous Uses/Dependencies report. Immutable catalog/location/reference-policy and live/open/history snapshots feed the same authoritative traversal used by deletion/retention. Reports have their own freshness identity; deletion-policy revision alone is insufficient. Stable frames only compare cheap revision values and draw cached clipped rows. Cancellation/stale rejection, active entity selection, ordinary dirty-scene open flows and typed asset navigation retain existing ownership. No report mutates content or warms renderer resources.
+
+`PlaySession::startFromView` places only the existing designated Player in the transient world using its real owned camera offset and full parent inverse. An accepted native capsule query rejects occupied placements; the owned camera becomes active only for that run. Ordinary Play remains authored-spawn behavior. Explicit paused state is independent of focus suspension. Pause releases Game input, Step advances one input-free fixed tick with completed presentation, and Resume discards paused wall time. Physics/ragdolls/particles/enemies/effects/imported animation/light clocks remain coherent. Stepped trigger batches remain observable while paused; ordinary unpaused latest-advance semantics and explicit material Ignore Pause wall time remain distinct. `EditorSession` queues all actions at its safe document boundary. Controls, limits and focused regressions are in [Editor iteration tools](EDITOR_ITERATION_TOOLS.md).
+
 ## 6. Build checks, user acceptance and future AI workflow
 
 For documentation-only changes, verify consistency, status labels, and entry-point links. No application build is required.

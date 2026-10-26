@@ -23,8 +23,14 @@ public:
     static constexpr std::uint64_t MaximumCatchUpTicks=8;
     explicit PlaySession(std::filesystem::path projectRoot);
     bool start(const SceneDocument& authored);
+    bool startFromView(const SceneDocument& authored,const Camera&);
     void stop();
     bool playing() const {return document_!=nullptr;}
+    bool paused() const {return paused_;}
+    bool setPaused(bool);
+    // A paused session accepts exactly one input-free fixed tick and presents
+    // its completed state. Calling Step never resumes ordinary simulation.
+    bool step(const Camera&);
     SceneDocument& document();
     const SceneDocument& document() const;
     const Scene& presentationScene() const {return presentation_;}
@@ -43,10 +49,11 @@ public:
     SceneParticles& particles(){return particles_;}
     const SceneParticles& particles() const{return particles_;}
     const std::string& status() const{return status_;}
-    double interpolation() const{return remainder_/FixedStep;}
+    double interpolation() const{return paused_?1.0:remainder_/FixedStep;}
     std::uint64_t tickCount() const{return ticks_;}
     std::uint64_t droppedTicks() const{return droppedTicks_;}
     double lightPresentationSeconds() const{return lightSeconds_;}
+    double acceptedSeconds() const{return lightSeconds_;}
     const EntityAttributes& attributes() const{return attributes_;}
     std::vector<AttributeSnapshot> attributeSnapshots(EntityId id) const{return attributes_.snapshot(id);}
     std::optional<AttributeValue> attributeValue(EntityId id,const GameplayTag& tag) const{return attributes_.value(id,tag);}
@@ -75,8 +82,10 @@ public:
     std::uint64_t actorNavigationRevision(EntityId) const;
     std::size_t navigationProfileCount() const{return supportedProfiles_.size();}
     std::uint64_t navigationBuildCount() const{return navigation_?navigation_->buildCount():0;}
-    // One batch contains all fixed ticks executed by the latest advance. Values
-    // remain valid until the next advance or Stop; observing them never drains it.
+    // One batch contains all fixed ticks executed by the latest advance. A
+    // stepped batch survives paused reconcile frames until the next Step or
+    // Resume. Running advances (including dt=0) and Stop replace/clear it;
+    // observing the batch never drains it.
     std::span<const TriggerEvent> triggerEvents() const{return triggerEvents_;}
     std::vector<EntityId> triggerOverlaps(EntityId trigger) const;
     std::optional<PhysicsRayHit> raycast(const Ray&,float maxDistance,const PhysicsQueryFilter& = {}) const;
@@ -196,8 +205,9 @@ private:
     std::string status_;
     std::uint64_t editRevision_{},agentsRevision_{},ticks_{},droppedTicks_{};
     double remainder_{},lightSeconds_{};
-    bool suspended_{},failed_{};
-    void advanceInternal(double,Vec2,const Camera&,bool,GameInput* = nullptr);
+    bool suspended_{},failed_{},paused_{},resumePending_{};
+    bool startInternal(const SceneDocument&,const Camera*);
+    void advanceInternal(double,Vec2,const Camera&,bool,GameInput* = nullptr,bool singleStep=false);
     void refreshPresentation();
     std::string firePlayerTrace(EntityId);
     void reconcileParticles(double);

@@ -25,6 +25,7 @@ namespace crimson {
 bool assetBrowserClipRowsForTest();
 void assetBrowserSubmittedCardForTest(std::size_t index,ImRect bounds,ImGuiID id,bool visible);
 void assetBrowserKeyboardForTest(bool enabled,bool selectAllPressed);
+void assetBrowserFindReferencesForTest(ImRect);
 #endif
 namespace {
 constexpr const char* ModelPayload="CC_MODEL_ASSET";
@@ -137,6 +138,15 @@ void AssetBrowserPanel::beginRename(const std::string& id,const std::string& nam
     focusRename_=true; message_.clear();
 }
 
+bool AssetBrowserPanel::reveal(const std::string& id,AssetLibrary& assets) {
+    auto& catalog=assets.browserCatalog();
+    if(!catalog.contains(id)||catalog.isFolder(id))return false;
+    externalDrop_.reset();library_=&assets;folder_=catalog.parent(id);
+    renameId_.clear();message_.clear();dragIds_.clear();dragPayload_.clear();deferredClick_.clear();dragPrimary_.clear();
+    focusRename_=false;searchText_.fill(0);filter_=BrowserAssetFilter::All;displayedRevision_=0;
+    assets.browserSelection().set(id);revealId_=id;return true;
+}
+
 BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,int previewSize,Renderer* renderer) {
     CRIMSON_PROFILE_ZONE("Asset Browser UI");
     BrowserActions actions;
@@ -190,6 +200,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
         } catch (const std::exception& error) { message_=error.what(); }
     };
 
+    if(!revealId_.empty()){ImGui::SetNextWindowFocus();ImGui::SetNextWindowCollapsed(false);}
     if (ImGui::Begin("Asset Browser")) {
         const auto addExternalTarget=[&](ImRect rect,const std::string& destination) {
             auto* current=ImGui::GetCurrentWindow();rect.ClipWith(current->ClipRect);
@@ -323,7 +334,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
             };
             // Clipping may not remove the widget which owns an unfinished
             // interaction. In particular, dragging can scroll its source away.
-            include(renameId_);include(deferredClick_);include(dragPrimary_);
+            include(renameId_);include(deferredClick_);include(dragPrimary_);include(revealId_);
             const auto& context=*ImGui::GetCurrentContext();
             const auto* gridWindow=ImGui::GetCurrentWindow();
             const bool ownsActive=context.ActiveId && context.ActiveIdWindow==gridWindow;
@@ -345,6 +356,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                 const bool editing=renameId_==item.id;
                 if (editing) ImGui::Dummy(cardSize);
                 else ImGui::InvisibleButton("card",cardSize);
+                if(revealId_==item.id){ImGui::SetScrollHereY(.5f);revealId_.clear();}
                 const bool cardVisible=ImGui::IsItemVisible();
 #if defined(CC_ASSET_BROWSER_UI_TEST)
                 assetBrowserSubmittedCardForTest(index,ImRect(origin,end),ImGui::GetID("card"),cardVisible);
@@ -483,6 +495,10 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                         }
                     }
                     if(!item.folder) {
+                        if(ImGui::MenuItem("Find References"))actions.findReferences=item.id;
+#if defined(CC_ASSET_BROWSER_UI_TEST)
+                        assetBrowserFindReferencesForTest(ImRect(ImGui::GetItemRectMin(),ImGui::GetItemRectMax()));
+#endif
                         const auto location=resolveBrowserAssetLocation(assets.projectRoot(),AssetEntry{item.id,item.name,item.kind});
                         if(ImGui::MenuItem("Open at Location",nullptr,false,location.available)) {
                             message_.clear();openBrowserAssetLocation(location,message_);

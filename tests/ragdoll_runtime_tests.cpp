@@ -52,6 +52,48 @@ void animationHandoffAndFixedClocks(){
     play.advance(1,Vec2{},Camera{},false);play.advance(1,Vec2{},Camera{},true);require(std::abs(presented(play,2).animationSeconds-.5)<1e-8,"Suspension replayed elapsed wall time into animation.");tick(play,1);require(presented(play,2).animationSeconds>.5,"Resuming fixed ticks did not resume animation.");
     auto updated=std::make_shared<RagdollAsset>(*rig.definition);updated->bodies[0].mass=4;rig.definition=updated;play.advance(0,Vec2{},Camera{});require(!play.ragdollActive(1),"Changed shared definition retained stale live bodies on a manually activated instance.");
 }
+void pauseAndStepPublishCompletedRagdollPose(){
+    Project project;Rig rig;SceneDocument authored(project.root);scene(authored,rig,false,true);
+    PlaySession play(project.root),control(project.root);rig.configure(play);rig.configure(control);
+    require(play.start(authored)&&control.start(authored),"Cannot start paused ragdoll controls.");
+    tick(play,12);tick(control,12);
+    require(play.activateRagdoll(1)&&control.activateRagdoll(1),"Cannot activate the pause fixture ragdoll.");
+    tick(play,3);tick(control,3);
+    play.advance(PlaySession::FixedStep*.5,Vec2{},Camera{});
+    const auto interpolated=presented(play,1);
+    require(play.setPaused(true)&&control.setPaused(true),"Cannot pause the native ragdoll fixtures.");
+    const auto snapshot=presented(play,1);require(bool(snapshot.physicsPose),"Pause lost its native ragdoll pose.");
+    require(interpolated.physicsPose&&snapshot.physicsPose->worldTransforms[3][13]<interpolated.physicsPose->worldTransforms[3][13],
+        "Pause displayed an interpolated prior ragdoll pose instead of its completed physics sample.");
+    const auto before=snapshot.physicsPose->worldTransforms;
+    const auto animation=presented(play,2).animationSeconds;
+    const auto ticks=play.tickCount();const auto seconds=play.acceptedSeconds();
+    for(int frame=0;frame<3;++frame){
+        play.advance(5,Vec2{1,1},Camera{});play.advance(5,Vec2{},Camera{},false);
+        const auto held=presented(play,1);
+        require(held.physicsPose&&held.physicsPose->worldTransforms==before&&presented(play,2).animationSeconds==animation,
+            "Paused wall time or presentation changed a native ragdoll or animation pose.");
+    }
+    require(play.tickCount()==ticks&&play.acceptedSeconds()==seconds&&play.paused(),"Paused ragdolls advanced the session clock.");
+    for(int step=1;step<=3;++step){
+        require(play.step(Camera{})&&control.step(Camera{})&&play.paused(),"A ragdoll Step failed or resumed Play.");
+        const auto actual=presented(play,1),expected=presented(control,1);
+        require(actual.physicsPose&&expected.physicsPose,"Step lost a native ragdoll pose.");
+        const auto& poses=actual.physicsPose->worldTransforms;const auto& reference=expected.physicsPose->worldTransforms;
+        for(std::size_t bone=0;bone<poses.size();++bone)for(unsigned element=0;element<16;++element)
+            require(std::abs(poses[bone][element]-reference[bone][element])<1e-5f,"Suspended paused frames changed the next native ragdoll tick.");
+        require(poses[3][13]<before[3][13] && play.tickCount()==ticks+step &&
+            std::abs(play.acceptedSeconds()-seconds-step*PlaySession::FixedStep)<1e-10 &&
+            std::abs(presented(play,2).animationSeconds-animation-step*PlaySession::FixedStep)<1e-10,
+            "Step did not publish the completed falling pose and one exact animation tick.");
+        const auto sampled=presented(play,1);
+        require(sampled.physicsPose->worldTransforms==poses&&play.tickCount()==ticks+step,
+            "Rendering the stepped ragdoll advanced physics again.");
+    }
+    play.stop();scene(authored,rig,true,true);require(play.start(authored)&&play.setPaused(true),"Cannot pause before automatic ragdoll startup.");
+    play.advance(10,Vec2{},Camera{});require(!play.ragdollActive(1)&&play.tickCount()==0,"A paused zero-tick frame automatically started a ragdoll.");
+    require(play.step(Camera{})&&play.ragdollActive(1)&&play.tickCount()==1&&play.paused(),"Step did not admit automatic ragdolls for its single physics tick.");
+}
 void preparingAndInvalidSetups(){
     Project project;Rig rig;SceneDocument authored(project.root);scene(authored,rig,true,true);PlaySession play(project.root);rig.ready=false;rig.configure(play);require(play.start(authored),"Pending rig blocked Play start.");tick(play,2);require(!play.ragdollActive(1),"Unavailable rig became active.");rig.ready=true;tick(play,1);require(play.ragdollActive(1),"Ready assets did not retry a previously pending automatic rig.");
     play.stop();auto invalid=std::make_shared<RagdollAsset>(*rig.definition);invalid->bodies.clear();rig.definition=invalid;require(play.start(authored),"Empty unfinished setup blocked Play startup.");tick(play,2);require(!play.ragdollActive(1)&&!play.status().empty(),"Invalid ready setup did not publish a useful diagnostic.");
@@ -67,4 +109,4 @@ void collisionFilterEdits(){
     require(play.ragdollActive(1)&&!play.raycast(ray,2,filter),"Live ragdoll retained stale collision layers after an authored filter edit.");filter.mask=PlayerCollisionLayer;const auto player=play.raycast(ray,2,filter);require(player&&player->entity==1,"Updated ragdoll collision layers were not published.");
 }
 }
-int main(){try{headlessStartResetAndIsolation();animationHandoffAndFixedClocks();preparingAndInvalidSetups();collisionFilterEdits();std::cout<<"Headless ragdoll startup, current-animation handoff, fixed clocks, edits, pending assets and Play isolation passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{headlessStartResetAndIsolation();animationHandoffAndFixedClocks();pauseAndStepPublishCompletedRagdollPose();preparingAndInvalidSetups();collisionFilterEdits();std::cout<<"Headless ragdoll startup, current-animation handoff, fixed clocks, Pause/Step, edits, pending assets and Play isolation passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

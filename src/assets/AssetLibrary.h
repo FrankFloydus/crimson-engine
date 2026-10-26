@@ -32,6 +32,7 @@ struct SDL_Window;
 
 namespace crimson {
 class SceneDocument;
+struct AssetReferenceIndexInput;
 class AsyncImports;
 class TextureStreamer;
 struct PreparedTexture;
@@ -110,18 +111,18 @@ public:
     // Retire removed source meshes from pickers immediately; reclaim their
     // payload only when saved scenes, this document and its history release it.
     void collectUnusedQuaderModels(const SceneDocument& active);
-    void protectMaterialDocument(std::string id) { materialDocumentId_=std::move(id); }
+    void protectMaterialDocument(std::string id) { if(materialDocumentId_!=id)++referenceSourceRevision_;materialDocumentId_=std::move(id); }
     void refreshMaterials();
     std::shared_ptr<const MaterialAsset> createMaterial(const std::string& name="New Material");
     std::shared_ptr<const MaterialAsset> createBlendMaterial(const std::string& name="New Blend Material");
     std::shared_ptr<const MaterialAsset> copyMaterial(const std::string& id,const std::string& name={});
     void setParticleDocumentReferences(std::vector<std::string> active,std::vector<std::string> history) {
-        if(active!=particleDocumentReferences_||history!=particleDocumentHistory_)++catalogRevision_;
+        if(active!=particleDocumentReferences_||history!=particleDocumentHistory_){++catalogRevision_;++referenceSourceRevision_;}
         particleDocumentReferences_=std::move(active);particleDocumentHistory_=std::move(history);
     }
     void setMaterialDocumentReferences(std::vector<std::string> active,std::vector<std::string> history,
         std::vector<std::string> materials={},std::vector<std::string> materialHistory={}) {
-        if(active!=materialDocumentReferences_||history!=materialDocumentHistory_||materials!=blendDocumentReferences_||materialHistory!=blendDocumentHistory_)++catalogRevision_;
+        if(active!=materialDocumentReferences_||history!=materialDocumentHistory_||materials!=blendDocumentReferences_||materialHistory!=blendDocumentHistory_){++catalogRevision_;++referenceSourceRevision_;}
         materialDocumentReferences_=std::move(active);materialDocumentHistory_=std::move(history);
         blendDocumentReferences_=std::move(materials);blendDocumentHistory_=std::move(materialHistory);
     }
@@ -133,9 +134,9 @@ public:
     void refreshDecals();
     std::shared_ptr<const DecalAsset> createDecal(const std::string& name="New Decal");
     std::shared_ptr<const DecalAsset> copyDecal(const std::string& id,const std::string& name={});
-    void protectDecalDocument(std::string id) {decalDocumentId_=std::move(id);}
+    void protectDecalDocument(std::string id) {if(decalDocumentId_!=id)++referenceSourceRevision_;decalDocumentId_=std::move(id);}
     void setDecalDocumentReferences(std::vector<std::string> active,std::vector<std::string> history) {
-        if(active!=decalDocumentReferences_||history!=decalDocumentHistory_)++catalogRevision_;
+        if(active!=decalDocumentReferences_||history!=decalDocumentHistory_){++catalogRevision_;++referenceSourceRevision_;}
         decalDocumentReferences_=std::move(active);decalDocumentHistory_=std::move(history);
     }
     std::shared_ptr<const PreparedDecalSurface> preparedDecalMaterial(const std::string& id,std::uint32_t textureEdge=1024,ResourcePriority=ResourcePriority::Visible) const;
@@ -146,7 +147,7 @@ public:
     std::string particleDiagnostic(const std::string& id) const;
     void publishParticle(std::shared_ptr<const ParticleEffectAsset>);
     void refreshParticles();
-    void protectParticleDocument(std::string id) { particleDocumentId_=std::move(id); }
+    void protectParticleDocument(std::string id) { if(particleDocumentId_!=id)++referenceSourceRevision_;particleDocumentId_=std::move(id); }
     std::shared_ptr<const NavigationAgentProfile> findNavigationAgentProfile(const std::string& id) const;
     std::uint64_t navigationAgentProfileRevision(const std::string& id) const;
     std::string navigationAgentProfileDiagnostic(const std::string& id) const;
@@ -169,9 +170,9 @@ public:
     void publishAnimation(std::shared_ptr<const AnimationAsset>);
     void refreshAnimations();
     std::shared_ptr<const AnimationAsset> copyAnimation(const std::string& id,const std::string& name={});
-    void protectAnimationDocument(std::string id){animationDocumentId_=std::move(id);}
+    void protectAnimationDocument(std::string id){if(animationDocumentId_!=id)++referenceSourceRevision_;animationDocumentId_=std::move(id);}
     void setAnimationDocumentReferences(std::vector<std::string> active,std::vector<std::string> history) {
-        if(active!=animationDocumentReferences_||history!=animationDocumentHistory_){++catalogRevision_;++modelOwnershipRevision_;}
+        if(active!=animationDocumentReferences_||history!=animationDocumentHistory_){++catalogRevision_;++modelOwnershipRevision_;++referenceSourceRevision_;}
         animationDocumentReferences_=std::move(active);animationDocumentHistory_=std::move(history);
     }
     std::shared_ptr<const RagdollAsset> findRagdoll(const std::string& id) const;
@@ -181,9 +182,9 @@ public:
     void refreshRagdolls();
     std::shared_ptr<const RagdollAsset> createRagdoll(const std::string& modelId,const std::string& name={},const std::string& folder={});
     std::shared_ptr<const RagdollAsset> copyRagdoll(const std::string& id,const std::string& name={});
-    void protectRagdollDocument(std::string id){ragdollDocumentId_=std::move(id);}
+    void protectRagdollDocument(std::string id){if(ragdollDocumentId_!=id)++referenceSourceRevision_;ragdollDocumentId_=std::move(id);}
     void setRagdollDocumentReferences(std::vector<std::string> active,std::vector<std::string> history) {
-        if(active!=ragdollDocumentReferences_||history!=ragdollDocumentHistory_){++catalogRevision_;++modelOwnershipRevision_;}
+        if(active!=ragdollDocumentReferences_||history!=ragdollDocumentHistory_){++catalogRevision_;++modelOwnershipRevision_;++referenceSourceRevision_;}
         ragdollDocumentReferences_=std::move(active);ragdollDocumentHistory_=std::move(history);
     }
     ResourceManager* resources() const { return resources_; }
@@ -200,7 +201,7 @@ public:
     std::string modelDiagnostic(const std::string& id) const;
     void updateResources(std::uint32_t bgfxFrame);
     void onFileChanged(const std::filesystem::path& path);
-    void noteAssetWrite(const std::string& id) { ownWrites_.push_back(resolveAssetPath(projectRoot_,id)); }
+    void noteAssetWrite(const std::string& id) { ++referenceSourceRevision_;ownWrites_.push_back(resolveAssetPath(projectRoot_,id)); }
     std::vector<std::filesystem::path> takeOwnWrites() { auto result=std::move(ownWrites_);ownWrites_.clear();return result; }
     bool modelBindingsReady(const std::vector<ModelMaterialTextures>&) const;
     bool modelMaterialsReady(const ModelAsset&,std::span<const AssetRef<MaterialAsset>> materialOverrides={},const SceneBlendSettings& blendSettings={}) const;
@@ -214,6 +215,8 @@ public:
     std::vector<ModelMaterial> resolvedModelMaterials(const ModelAsset& model,std::span<const AssetRef<MaterialAsset>> materialOverrides={},const SceneBlendSettings& blendSettings={}) const;
     AssetReferenceManager& references() { return references_; }
     const AssetReferenceManager& references() const { return references_; }
+    AssetReferenceIndexInput referenceIndexInput(const SceneDocument* active=nullptr) const;
+    std::uint64_t referenceReportRevision(const SceneDocument* active=nullptr) const;
     AssetDeletionPlan planDeletion(const std::vector<std::string>& ids,const SceneDocument* active=nullptr);
     std::vector<AssetEntry> fallbackCandidates(const std::string& id) const;
     bool deleteAssets(const AssetDeletionPlan& plan,const std::unordered_map<std::string,std::string>& replacements={},SceneDocument* active=nullptr);
@@ -299,6 +302,7 @@ private:
     std::vector<std::string> particleDocumentReferences_,particleDocumentHistory_,materialDocumentReferences_,materialDocumentHistory_;
     std::vector<std::string> blendDocumentReferences_,blendDocumentHistory_;
     ResourceManager* resources_{};
+    std::uint64_t referenceSourceRevision_{1};
     std::unique_ptr<AsyncImports> asyncImports_;
     std::unique_ptr<TextureStreamer> textureStreamer_;
     struct ResizeImageSource {
