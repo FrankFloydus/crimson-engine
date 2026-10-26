@@ -4,6 +4,7 @@
 #include "editor/EditorSession.h"
 #include "editor/ResourceRuntime.h"
 #include "assets/AssetLibrary.h"
+#include "assets/BuiltinGeometry.h"
 #include "assets/AtomicFile.h"
 #include "assets/ContentStorage.h"
 #include "decals/DecalResolve.h"
@@ -11,9 +12,11 @@
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "crimson-renderer/MaterialGraphGpu.h"
 #include "crimson-renderer/Renderer.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include "resources/AssetId.h"
 #include "resources/CacheIO.h"
 #include "scene/SceneDocument.h"
+#include "scene/SceneExtraction.h"
 #include "GpuTestBackend.h"
 #include "quader_bundle_fixture.h"
 #include <SDL3/SDL.h>
@@ -21,6 +24,7 @@
 #include <lodepng.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -191,6 +195,111 @@ void materialThumbnails(SDL_Window* window,const fs::path& sourceRoot={}) {
     require(fingerprintFiles(originalFiles)==originalFingerprint,"The actual-project thumbnail probe changed an authored source.");
     runtime.stop();frame=renderer.drainPending(frame);tools.shutdown();
 }
+// Explicit saved-project diagnostic; every resource owner and write target uses
+// this disposable copy. This mode is deliberately outside the routine CTest set.
+void thumbnailProject(SDL_Window* window,const fs::path& source,const std::string& sceneId,const fs::path& output) {
+    Project project;
+    const auto original=fs::weakly_canonical(source);
+    std::vector<fs::path> originals;
+    std::cout<<"Staging thumbnail diagnostic from "<<original<<" into "<<project.root<<std::endl;
+    for(const char* name:{"Content","Engine","assets",".crimson"}) {
+        const auto from=original/name;if(!fs::is_directory(from))continue;
+        fs::create_directories(project.root/name);
+        for(const auto& item:fs::directory_iterator(from)) {
+            const auto filename=item.path().filename();
+            if(filename=="branding"||filename==".resource-transactions"||filename.string().starts_with(".staging"))continue;
+            if(filename=="cache") {
+                fs::create_directories(project.root/name/filename);
+                for(const char* cache:{"mesh-lods","texture-mips","shaders"})
+                    if(fs::is_directory(item.path()/cache))fs::copy(item.path()/cache,project.root/name/filename/cache,fs::copy_options::recursive);
+            }else {
+                fs::copy(item.path(),project.root/name/filename,fs::copy_options::recursive);
+                if(item.is_regular_file())originals.push_back(item.path());
+                else for(const auto& file:fs::recursive_directory_iterator(item.path()))if(file.is_regular_file())originals.push_back(file.path());
+            }
+        }
+    }
+    initializeContentStorage(project.root);
+    const auto sceneFile=resolveAssetPath(project.root,sceneId);
+    const auto relativeScene=sceneFile.lexically_relative(project.root);
+    require(!relativeScene.empty()&&*relativeScene.begin()!="..","Copied thumbnail scene escaped its disposable project.");
+    std::sort(originals.begin(),originals.end());
+    const auto originalFingerprint=fingerprintFiles(originals);
+    ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));
+    ImGuiOwner context;ImGuiBgfx tools(renderer);AssetLibrary assets(project.root,&resources);
+    ResourceRuntime runtime(project.root,resources,assets,renderer,tools);EditorResources prepared(assets,renderer,resources,project.root);
+    AssetPreviews previews(project.root,assets,resources,renderer,prepared);TestGpuContext gpu;
+    renderer.resizeViewport(64,64);renderer.setGridVisible(false);bgfx::reset(64,64,BGFX_RESET_NONE);
+    const auto snapshot=readSceneSnapshot(project.root,sceneId);Scene scene;scene.apply(snapshot.records,snapshot.properties);
+    const auto extracted=extractScene(scene);const auto& settings=extracted.environment.environment;
+    const auto sourceEnvironment=settings.source==EnvironmentSource::Hdri?assets.references().resolveEnvironment(settings.map):std::string{};
+    const auto environmentId=sourceEnvironment.empty()?std::string(StudioEnvironmentId):sourceEnvironment;
+    auto environment=std::make_shared<PreparedEnvironment>();environment->key=0x54484d50524f4a;
+    environment->settings={2,8,8,16,16,16};environment->data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{.25f,.25f,.25f})},environment->settings);
+    ResourceRequestOptions options;options.variant="ibl";options.priority=ResourcePriority::Preview;
+    if(!sourceEnvironment.empty())options.dependencies={resolveAssetPath(project.root,sourceEnvironment)};
+    const auto releaseEnvironment=std::make_shared<std::atomic_bool>(false);
+    const auto gate=resources.request<PreparedEnvironment>(AssetRef<PreparedEnvironment>{environmentId},[environment,releaseEnvironment](std::stop_token stop){
+        while(!releaseEnvironment->load()&&!stop.stop_requested())std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        if(stop.stop_requested())throw std::runtime_error("Saved-project thumbnail environment gate canceled.");
+        return ResourceLoadResult<PreparedEnvironment>{environment,sizeof(PreparedEnvironment),environment->key,{}};
+    },options);
+    const std::array visible{sceneId};std::uint32_t frame{};const auto begin=Clock::now(),deadline=begin+std::chrono::seconds{90};
+    std::optional<Clock::time_point> gated,released,settled;auto samples=nlohmann::json::array();
+    std::vector<double> allTimes,planningTimes,gatedTimes,releasedTimes,settledTimes;bool gateVerified{};
+    while(Clock::now()<deadline) {
+        runtime.preFrame(nullptr,frame);prepared.beginFrame();renderer.advanceStreaming();frame=renderer.advance_frame();gpu.flush();
+        const std::string phase=settled?"settled":released?"released":gated?"gated":"planning";
+        const auto pumpBegin=Clock::now();previews.pump(frame,visible,128);
+        const auto pumpMs=std::chrono::duration<double,std::milli>(Clock::now()-pumpBegin).count();prepared.endFrame();
+        const auto now=Clock::now();const auto stats=previews.stats();const auto diagnostic=previews.diagnostic(sceneId);
+        const bool published=bgfx::isValid(renderer.thumbnailTexture(sceneId));
+        if(!gated&&stats.sourcePlanBuilds&&diagnostic=="Preparing thumbnail environment")gated=now;
+        // Hold longer than the production 5 s resource-interest idle grace.
+        if(gated&&!releaseEnvironment->load()&&now-*gated>=std::chrono::seconds{6}) {
+            gateVerified=gate.state()!=ResourceState::Ready;releaseEnvironment->store(true);released=now;
+            std::cout<<"Released thumbnail environment gate after retained-plan idle interval."<<std::endl;
+        }
+        if(releaseEnvironment->load()&&!settled&&(published||stats.decalPreparationFailures))settled=now;
+        samples.push_back({{"frame",frame},{"elapsed_ms",std::chrono::duration<double,std::milli>(now-begin).count()},
+            {"phase",phase},{"pump_ms",pumpMs},{"diagnostic",diagnostic},{"published",published},{"runtime_status",runtime.status()},
+            {"asset_status",assets.status()},{"prepared_status",prepared.status()},
+            {"source_plan_builds",stats.sourcePlanBuilds},{"source_plan_hits",stats.sourcePlanHits},{"decal_preparations",stats.decalPreparations},
+            {"decal_failures",stats.decalPreparationFailures},{"render_requests",stats.renderRequests},{"resident_hits",stats.residentHits},{"disk_hits",stats.diskHits}});
+        allTimes.push_back(pumpMs);if(phase=="planning")planningTimes.push_back(pumpMs);if(phase=="gated")gatedTimes.push_back(pumpMs);
+        if(phase=="released"||phase=="settled")releasedTimes.push_back(pumpMs);if(phase=="settled")settledTimes.push_back(pumpMs);
+        shared::profiling::frame_mark();
+        if(released&&now-*released>=std::chrono::seconds{15})break;
+        std::this_thread::sleep_for(std::chrono::milliseconds{16});
+    }
+    releaseEnvironment->store(true);
+    const auto summarize=[](std::vector<double> values) {
+        if(values.empty())return nlohmann::json{{"frames",0},{"max_ms",0},{"p50_ms",0},{"p95_ms",0}};
+        std::sort(values.begin(),values.end());return nlohmann::json{{"frames",values.size()},{"max_ms",values.back()},
+            {"p50_ms",values[(values.size()-1)/2]},
+            {"p95_ms",values[static_cast<std::size_t>(std::ceil(values.size()*.95))-1]}};
+    };
+    const auto stats=previews.stats();
+    const auto resourceStats=resources.stats();
+    const bool originalsUnchanged=fingerprintFiles(originals)==originalFingerprint;
+    nlohmann::json report{{"source_project",original.generic_string()},{"scene_id",sceneId},{"scene_name",snapshot.name},{"pixel_edge",128},
+        {"source_file_count",originals.size()},{"source_fingerprint",originalFingerprint},{"source_fingerprint_algorithm","fingerprintFiles/FNV-1a64"},
+        {"source_files_unchanged",originalsUnchanged},
+        {"source_environment_id",environmentId},{"environment_override","No scene edit; matching ibl resource uses a gated tiny neutral CPU bake"},
+        {"tracy_enabled",shared::profiling::enabled()},{"tracy_connected",shared::profiling::connected()},
+        {"gate_verified_pending",gateVerified},{"settled",settled.has_value()},{"published",bgfx::isValid(renderer.thumbnailTexture(sceneId))},
+        {"diagnostic",previews.diagnostic(sceneId)},{"status",previews.status()},{"all",summarize(allTimes)},{"planning",summarize(planningTimes)},{"gated",summarize(gatedTimes)},
+        {"after_release",summarize(releasedTimes)},{"after_settled",summarize(settledTimes)},
+        {"source_plan_builds",stats.sourcePlanBuilds},{"decal_preparations",stats.decalPreparations},{"decal_failures",stats.decalPreparationFailures},{"frames",samples}};
+    report["resources"]={{"records",resourceStats.records},{"live_interests",resourceStats.liveInterests},
+        {"loads",resourceStats.loads},{"failures",resourceStats.failures},{"queued",resourceStats.queued},{"running",resourceStats.running}};
+    const auto reportFile=fs::absolute(output);fs::create_directories(reportFile.parent_path());
+    writeFileAtomically(reportFile,report.dump(2));
+    runtime.stop();frame=renderer.drainPending(frame);tools.shutdown();
+    require(originalsUnchanged,"Saved-project thumbnail diagnostic changed an authored source.");
+    std::cout<<"Saved-project thumbnail diagnostic: "<<reportFile<<"; "<<report.at("all").dump()<<"; after release "<<report.at("after_release").dump()<<std::endl;
+    require(gateVerified&&settled.has_value(),"Saved-project thumbnail diagnostic did not complete its retained-plan gate and readiness/failure interval.");
+}
 // Exercise failure/backoff through the actual thumbnail owner. The material
 // dependency changes, while the scene asset and its authored decal stay intact.
 void decalThumbnailRetry(SDL_Window* window) {
@@ -205,6 +314,8 @@ void decalThumbnailRetry(SDL_Window* window) {
     auto decalAsset=createDecalAsset(project.root,"Retry decal");decalAsset.material.id=decalMaterial.id;saveDecalAsset(project.root,decalAsset);
     SceneDocument document(project.root);const auto box=document.createBox("Retry receiver");
     auto boxRecord=*document.scene().find(box);boxRecord.modelMaterials={AssetRef<MaterialAsset>{receiverMaterial.id}};
+    auto primitive=boxRecord.primitive.value_or(PrimitiveMeshSettings{});primitive.size={1.25f,1,1.5f};boxRecord.primitive=primitive;
+    const auto geometryId=builtinModelGeometryId(boxRecord.model->id,primitive);
     require(document.updateEntity(box,boxRecord),document.status());
     SceneDecal decal;decal.asset.id=decalAsset.id;decal.seed.receiver=box;decal.seed.modelId=boxRecord.model->id;decal.seed.localPoint={.1f,.5f,.1f};
     const auto placement=decals::surfacePlacementFrame(decal.seed.localPoint,{0,1,0})*math::scaling({.4f,.4f,1});
@@ -221,13 +332,29 @@ void decalThumbnailRetry(SDL_Window* window) {
     auto environment=std::make_shared<PreparedEnvironment>();environment->key=0x444543414c525452;
     environment->settings={2,8,8,16,16,16};environment->data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{.25f,.25f,.25f})},environment->settings);
     ResourceRequestOptions environmentOptions;environmentOptions.variant="ibl";
-    resources.seed<PreparedEnvironment>(AssetRef<PreparedEnvironment>{StudioEnvironmentId},{environment,sizeof(PreparedEnvironment),environment->key,{}},environmentOptions);
+    const auto releaseEnvironment=std::make_shared<std::atomic_bool>(false);
+    const auto environmentPending=resources.request<PreparedEnvironment>(AssetRef<PreparedEnvironment>{StudioEnvironmentId},[environment,releaseEnvironment](std::stop_token stop){
+        while(!releaseEnvironment->load()&&!stop.stop_requested())std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        if(stop.stop_requested())throw std::runtime_error("Thumbnail retention environment gate canceled.");
+        return ResourceLoadResult<PreparedEnvironment>{environment,sizeof(PreparedEnvironment),environment->key,{}};
+    },environmentOptions);
     const std::array visible{sceneId};std::uint32_t frame{};
     const auto tick=[&]{runtime.preFrame(nullptr,frame);prepared.beginFrame();renderer.advanceStreaming();frame=renderer.advance_frame();gpu.flush();
         previews.pump(frame,visible,32);prepared.endFrame();require(runtime.status().empty(),"Decal thumbnail coordinator: "+runtime.status());};
     const auto until=[&](const auto& condition,const char* reason,std::chrono::seconds timeout){const auto deadline=Clock::now()+timeout;
         do{tick();if(condition())return;std::this_thread::sleep_for(std::chrono::milliseconds{1});}while(Clock::now()<deadline);
         throw std::runtime_error(std::string(reason)+"\nThumbnail: "+previews.diagnostic(sceneId)+"\nAssets: "+assets.status());};
+    until([&]{return previews.stats().sourcePlanBuilds>0&&previews.diagnostic(sceneId)=="Preparing thumbnail environment";},
+        "Saved-scene metadata did not reach the gated thumbnail environment.",std::chrono::seconds{15});
+    const auto retainedPlan=previews.stats();
+    for(unsigned retry=0;retry<16;++retry){
+        tick();require(assets.primitiveModelAlive(geometryId),"A retained thumbnail scene plan released its weakly cached receiver metadata during asynchronous readiness.");
+        const auto stats=previews.stats();
+        require(stats.sourcePlanBuilds==retainedPlan.sourcePlanBuilds&&stats.decalPreparations==0&&stats.renderRequests==0,
+            "Metadata retention used scene replanning, decal geometry or GPU rendering to pin its receiver.");
+    }
+    require(environmentPending.state()!=ResourceState::Ready,"Thumbnail metadata retention bypassed its pending resource control.");
+    releaseEnvironment->store(true);
     until([&]{return previews.stats().decalPreparationFailures>0;},"Unlit receiver did not reach actual terminal thumbnail failure.",std::chrono::seconds{15});
     require(previews.diagnostic(sceneId).find("Unlit")!=std::string::npos,"Terminal thumbnail fixture failed for an unrelated reason.");
     const auto failed=previews.stats();const auto retryBegin=Clock::now();
@@ -411,11 +538,17 @@ void exercise(SDL_Window* window) {
 }
 int main(int argc,char** argv) {
     try {
+        const bool tracy=argc>1&&std::string_view(argv[argc-1])=="--tracy";
+        if(tracy){--argc;shared::profiling::set_enabled(true);shared::profiling::thread_name("Saved-project thumbnail diagnostic");}
         SdlOwner sdl;
         const std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(
             SDL_CreateWindow("Crimson deletion resource regression",64,64,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
         require(bool(window),SDL_GetError());
-        if(argc>=2&&std::string_view(argv[1])=="--decal-thumbnail-retry")decalThumbnailRetry(window.get());
+        if(argc>=2&&std::string_view(argv[1])=="--thumbnail-project") {
+            require(argc==5,"Usage: asset_deletion_runtime_tests --thumbnail-project PROJECT SCENE_ID OUTPUT_JSON [--tracy]");
+            thumbnailProject(window.get(),argv[2],argv[3],argv[4]);
+        }
+        else if(argc>=2&&std::string_view(argv[1])=="--decal-thumbnail-retry")decalThumbnailRetry(window.get());
         else if(argc>=2&&std::string_view(argv[1])=="--material-thumbnails")materialThumbnails(window.get(),argc>=3?fs::path(argv[2]):fs::path{});
         else exercise(window.get());
         return 0;

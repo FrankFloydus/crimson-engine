@@ -91,6 +91,7 @@ DecalPlacementResult DecalResources::resolvePlacement(const Scene&scene,uint64_t
     result.frame=decals::surfacePlacementFrame(math::transformPoint(found->world,hit.hit->localPoint),math::transformDirection(*normalMatrix,hit.hit->localNormal));result.ready=true;return result;
 }
 uint64_t DecalResources::spatialSceneSignature(const ExtractedScene& extracted){
+    CRIMSON_PROFILE_ZONE("Decal scene metadata signature");
     // Observe immutable inputs/revisions once per scene preparation. This does
     // not resolve material graphs, query receiver triangles or project seeds.
     Hash key;key.add(assets_.catalogRevision());key.add(assets_.references().revision());
@@ -134,7 +135,13 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
     auto&entry=patches_[d.id];entry.current=false;entry.used=std::chrono::steady_clock::now();
     // A pending frame submits no packet, while retaining a compatible CPU
     // publication so texture preparation cannot trigger a chart rebuild.
-    const auto pending=[&](std::string message,bool failed=false){entry.status=std::move(message);out.ready=false;out.refined=false;out.failed|=failed;if(out.status.empty())out.status=entry.status;};
+    const auto pending=[&](std::string message,bool failed=false){
+        entry.status=std::move(message);out.ready=false;out.refined=false;
+        // A mixed scene may have both loading and terminal decal results. Its
+        // retry state must explain the terminal result which caused backoff.
+        if(out.status.empty()||(failed&&!out.failed))out.status=entry.status;
+        out.failed|=failed;
+    };
     if(d.decal.projection==SceneDecalProjection::Box) {
         entry.resource={};entry.render.reset();entry.spatial.reset();entry.surfaceFrame.reset();
         if(!math::inverse(d.world)){pending("Invalid decal box transform.",true);return;}
@@ -248,6 +255,11 @@ DecalPreparedScene DecalResources::prepareTransient(const Scene&scene,const Extr
 std::string DecalResources::status(EntityId id)const{const auto it=patches_.find(id);return it==patches_.end()?std::string{}:it->second.status;}
 std::shared_ptr<const DecalPatchData> DecalResources::patch(EntityId id)const{const auto it=patches_.find(id);return it==patches_.end()||!it->second.current?nullptr:it->second.render;}
 std::optional<Mat4> DecalResources::surfaceFrame(EntityId id)const{const auto it=patches_.find(id);return it==patches_.end()?std::nullopt:it->second.surfaceFrame;}
-void DecalResources::collect(){meshPaint_.collect();const auto now=std::chrono::steady_clock::now();const auto grace=resources_.config().idleGrace;std::erase_if(sources_,[&](const auto&entry){return now-entry.second.used>grace;});std::erase_if(patches_,[&](const auto&entry){return now-entry.second.used>grace;});}
+void DecalResources::collect(){
+    {CRIMSON_PROFILE_ZONE("Decal paint resource cleanup");meshPaint_.collect();}
+    const auto now=std::chrono::steady_clock::now();const auto grace=resources_.config().idleGrace;
+    {CRIMSON_PROFILE_ZONE("Decal source resource cleanup");std::erase_if(sources_,[&](const auto&entry){return now-entry.second.used>grace;});}
+    {CRIMSON_PROFILE_ZONE("Decal patch resource cleanup");std::erase_if(patches_,[&](const auto&entry){return now-entry.second.used>grace;});}
+}
 void DecalResources::clear(){patches_.clear();sources_.clear();meshPaint_.clear();}
 }

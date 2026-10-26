@@ -88,6 +88,12 @@ AssetReferenceManager::AssetReferenceManager(std::filesystem::path root):root_(s
             else resolve(id);}
     }catch(const std::exception& e){deleted_.clear();replacements_.clear();writable_=false;status_="Asset reference state could not be loaded: "+std::string(e.what())+" The existing file was preserved; destructive asset operations are disabled.";}
 }
+AssetReferenceManager::AssetReferenceManager(const AssetReferenceManager& source,ResolutionSnapshotTag)
+    :root_(source.root_),deleted_(source.deleted_),replacements_(source.replacements_),status_(source.status_),
+     revision_(source.revision_),writable_(source.writable_) {}
+std::shared_ptr<const AssetReferenceManager> AssetReferenceManager::resolutionSnapshot() const {
+    return std::shared_ptr<const AssetReferenceManager>(new AssetReferenceManager(*this,ResolutionSnapshotTag{}));
+}
 std::string AssetReferenceManager::resolve(const std::string& id)const{
     std::unordered_set<std::string> visited;auto current=contentStorageReady(root_)&&!id.empty()?canonicalAssetId(id):id;
     while(!current.empty()){if(!visited.insert(current).second)throw std::runtime_error("Asset fallback references contain a cycle.");

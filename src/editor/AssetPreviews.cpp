@@ -132,6 +132,8 @@ struct AssetPreviews::Impl {
         std::vector<PreviewAnimationFingerprint> animations;
         std::vector<PreviewDecalFingerprint> decals;
         std::vector<PreviewSourceLocation> locations;
+        PreviewSceneModelDemand modelDemand;
+        std::vector<std::shared_ptr<const ModelAsset>> modelPins;
     };
     struct Entry {
         AssetKind kind{AssetKind::Model};
@@ -195,6 +197,18 @@ struct AssetPreviews::Impl {
         const auto revision=assets.animationRevision(animation.id);
         if(inserted||entry->second.revision!=revision)entry->second={revision,animationPreviewHash(animation)};
         return entry->second.fingerprint;
+    }
+    bool refreshSceneModels(ScenePlan& plan) {
+        CRIMSON_PROFILE_ZONE("Thumbnail model metadata demand");
+        plan.modelPins.resize(plan.models.size());
+        return plan.modelDemand.refresh(plan.models.size(),[&](std::size_t index) {
+            const auto& model=plan.models[index];
+            static shared::profiling::CpuLocation location{"Thumbnail model metadata request",__func__,__FILE__,__LINE__};
+            shared::profiling::CpuZone modelZone{location};modelZone.text(model.assetId);
+            // Refresh the library's interests as well as retaining immutable
+            // primitive variants. Cache misses still load on resource workers.
+            if(auto asset=assets.findModel(model.assetId,model.primitive))plan.modelPins[index]=std::move(asset);
+        },[&]{return std::chrono::steady_clock::now()<validationDeadline;});
     }
     void writePreview(const ThumbnailResult& result,Entry& entry) {
         const auto id=result.id; const auto signature=result.signature;
@@ -599,6 +613,10 @@ struct AssetPreviews::Impl {
             entry.materials=materialVersions;entry.animations=animationVersions;entry.decals=decalVersions;
         }
         }
+        if(sceneSnapshot&&entry.scenePlan) {
+            entry.pending="Preparing thumbnail model metadata";
+            if(!refreshSceneModels(*entry.scenePlan))return;
+        }
         if (entry.kind==AssetKind::Model && !bounds.valid) {
             entry.error="Model bounds are unavailable.";entry.retry.failed(PreviewRetryState::Clock::now());return;
         }
@@ -662,9 +680,11 @@ struct AssetPreviews::Impl {
             entry.pending="Preparing thumbnail surface decals";
             CRIMSON_PROFILE_ZONE("Thumbnail decal preparation");
             ++statistics.decalPreparations;
-            if(!entry.decalResources)entry.decalResources=std::make_unique<DecalResources>(assets,resources);
-            entry.decalResources->collect();
-            preparedDecals=entry.decalResources->prepare(*decalScene,decalExtraction,ResourcePriority::Preview);
+            {CRIMSON_PROFILE_ZONE("Thumbnail decal owner preparation");
+            if(!entry.decalResources)entry.decalResources=std::make_unique<DecalResources>(assets,resources);}
+            {CRIMSON_PROFILE_ZONE("Thumbnail decal resource collection");entry.decalResources->collect();}
+            {CRIMSON_PROFILE_ZONE("Thumbnail decal scene preparation");
+            preparedDecals=entry.decalResources->prepare(*decalScene,decalExtraction,ResourcePriority::Preview);}
             if(!preparedDecals.ready||!preparedDecals.refined){entry.error=preparedDecals.status;
                 // A completed unusable chart cannot improve on a per-frame
                 // readiness poll. Source invalidation resets the ordinary

@@ -4,6 +4,7 @@
 #include "AssetTransaction.h"
 #include "resources/AssetId.h"
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -55,6 +56,9 @@ public:
     std::string resolveParticleTexture(const std::string& id) const;
     bool deleted(const std::string& id) const { return deleted_.contains(id)||deleted_.contains(canonicalAssetId(id)); }
     uint64_t revision() const { return revision_; }
+    // Worker resolution needs deletion/replacement policy, never the authored
+    // usage graph. The returned policy stays immutable across later edits.
+    std::shared_ptr<const AssetReferenceManager> resolutionSnapshot() const;
     bool valid() const { return writable_; }
     // Persistent fallbacks are authored owners even when no scene currently
     // uses their deleted source. Return the surviving targets of every chain.
@@ -70,6 +74,8 @@ public:
     std::string serialize() const;
     void save() const;
 private:
+    struct ResolutionSnapshotTag {};
+    AssetReferenceManager(const AssetReferenceManager&,ResolutionSnapshotTag);
     std::filesystem::path root_;
     std::unordered_set<std::string> deleted_;
     std::unordered_map<std::string,std::string> replacements_;

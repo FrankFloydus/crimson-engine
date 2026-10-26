@@ -6,8 +6,9 @@
 namespace crimson::decals {
 // Remove paint-only tessellation from proven planar, convex source faces whose
 // actual refined render corners all carry one identical normal. Other faces
-// retain their exact refined triangles and shading aliases. The result is only
-// a decal receiver proxy; it never replaces rendered or saved paint geometry.
+// retain their exact refined triangles and shading aliases. The result supplies
+// decal receivers and an exact contact-shadow BVH; it never replaces rendered
+// or saved paint geometry.
 // No value means no source face could be simplified.
 std::optional<ModelPrimitive> simplifyDecalPaintPrimitive(const ModelPrimitive& source,
     const MeshPaintGeometry& refined,std::stop_token stop={},const SurfaceBoundaryLineage* fineBoundary=nullptr,

@@ -6,6 +6,7 @@
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "editor/EditorPreferences.h"
 #include "resources/ThumbnailDemand.h"
+#include <crimson/renderer/core/Profiler.hpp>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -19,6 +20,12 @@
 #include <utility>
 
 namespace crimson {
+#if defined(CC_ASSET_BROWSER_UI_TEST)
+// Private CPU regression hooks; the application has no alternate grid mode.
+bool assetBrowserClipRowsForTest();
+void assetBrowserSubmittedCardForTest(std::size_t index,ImRect bounds,ImGuiID id,bool visible);
+void assetBrowserKeyboardForTest(bool enabled,bool selectAllPressed);
+#endif
 namespace {
 constexpr const char* ModelPayload="CC_MODEL_ASSET";
 constexpr const char* ModelBatchPayload="CC_MODEL_ASSETS";
@@ -131,6 +138,7 @@ void AssetBrowserPanel::beginRename(const std::string& id,const std::string& nam
 }
 
 BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,int previewSize,Renderer* renderer) {
+    CRIMSON_PROFILE_ZONE("Asset Browser UI");
     BrowserActions actions;
     externalDrop_.clearTargets();
     actions.previewSize=BrowserPreviewSizes[static_cast<size_t>(EditorPreferences::previewSizeIndex(previewSize))];
@@ -268,13 +276,17 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
         const bool keys=ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
             !ImGui::IsAnyItemActive() && ImGui::GetDragDropPayload()==nullptr &&
             !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup);
+#if defined(CC_ASSET_BROWSER_UI_TEST)
+        assetBrowserKeyboardForTest(keys,ImGui::GetIO().KeyCtrl&&ImGui::IsKeyPressed(ImGuiKey_A,false));
+#endif
         if (keys && renameId_.empty()) {
             if (ImGui::IsKeyPressed(ImGuiKey_Backspace,false) && !folder_.empty()) navigate=catalog.parent(folder_);
             if (ImGui::IsKeyPressed(ImGuiKey_F2,false) && selection.ids().size()==1 && catalog.mutableItem(selection.primary())) beginRename(selection.primary(),catalog.name(selection.primary()));
             if (ImGui::IsKeyPressed(ImGuiKey_Delete,false) && deletableSelection()) actions.deleteAssetIds=selection.ids();
             if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A,false)) {
-                selection.clear();
-                for (const auto& item:items)if(item.id!=ParentCard && (!queryActive || !item.folder))selection.click(item.id,visible,true,false);
+                std::vector<std::string> selectable;selectable.reserve(items.size());
+                for (const auto& item:items)if(item.id!=ParentCard && (!queryActive || !item.folder))selectable.push_back(item.id);
+                selection.setAll(selectable);
             }
         }
         const float font=ImGui::GetFontSize(),padding=font*.4f,thumbnail=static_cast<float>(actions.previewSize);
@@ -291,7 +303,41 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
         }
         bool anyHovered=false;
         if (ImGui::BeginTable("Asset grid",columns,ImGuiTableFlags_SizingFixedFit)) {
-            for (const auto& item:items) {
+            const int rows=static_cast<int>((items.size()+columns-1)/columns);
+            // ItemSize truncates fractional cursor positions differently above
+            // and below zero. Give layout and direct seeks one pixel-aligned
+            // row height so scrolling cannot shift a row by one pixel.
+            const float rowHeight=std::ceil(cardSize.y+ImGui::GetStyle().CellPadding.y*2.f);
+            ImGuiListClipper clipper;
+#if defined(CC_ASSET_BROWSER_UI_TEST)
+            const bool clipRows=assetBrowserClipRowsForTest();
+#else
+            constexpr bool clipRows=true;
+#endif
+            clipper.Begin(rows,rowHeight);
+            if(!clipRows && rows)clipper.IncludeItemsByIndex(0,rows);
+            const auto include=[&](const std::string& id) {
+                if(id.empty())return;
+                const auto found=std::find_if(items.begin(),items.end(),[&](const auto& item){return item.id==id;});
+                if(found!=items.end())clipper.IncludeItemByIndex(static_cast<int>((found-items.begin())/columns));
+            };
+            // Clipping may not remove the widget which owns an unfinished
+            // interaction. In particular, dragging can scroll its source away.
+            include(renameId_);include(deferredClick_);include(dragPrimary_);
+            const auto& context=*ImGui::GetCurrentContext();
+            const auto* gridWindow=ImGui::GetCurrentWindow();
+            const bool ownsActive=context.ActiveId && context.ActiveIdWindow==gridWindow;
+            const bool ownsPopup=!context.OpenPopupStack.empty();
+            if(ownsActive||ownsPopup)for(std::size_t index=0;index<items.size();++index) {
+                const auto scope=ImHashStr(items[index].id.c_str(),0,gridWindow->IDStack.back());
+                const bool active=ownsActive && ImHashStr("card",0,scope)==context.ActiveId;
+                const bool popup=ownsPopup && std::any_of(context.OpenPopupStack.begin(),context.OpenPopupStack.end(),[&](const auto& open){return open.OpenParentId==scope;});
+                if(active||popup)clipper.IncludeItemByIndex(static_cast<int>(index/columns));
+            }
+            while(clipper.Step())for(auto index=static_cast<std::size_t>(clipper.DisplayStart)*columns,
+                last=std::min(items.size(),static_cast<std::size_t>(clipper.DisplayEnd)*columns);index<last;++index) {
+                if(index%columns==0)ImGui::TableNextRow(ImGuiTableRowFlags_None,rowHeight);
+                const auto& item=items[index];
                 const bool parentCard=item.id==ParentCard;
                 ImGui::TableNextColumn(); ImGui::PushID(item.id.c_str());
                 const auto origin=ImGui::GetCursorScreenPos();
@@ -300,6 +346,9 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                 if (editing) ImGui::Dummy(cardSize);
                 else ImGui::InvisibleButton("card",cardSize);
                 const bool cardVisible=ImGui::IsItemVisible();
+#if defined(CC_ASSET_BROWSER_UI_TEST)
+                assetBrowserSubmittedCardForTest(index,ImRect(origin,end),ImGui::GetID("card"),cardVisible);
+#endif
                 if(item.folder && cardVisible)addExternalTarget(ImRect(origin,end),parentCard?catalog.parent(folder_):item.id);
                 const auto after=ImGui::GetCursorScreenPos();
                 const bool hovered=!editing && ImGui::IsItemHovered();
@@ -527,7 +576,10 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                         try { catalog.rename(item.id,renameText_.data()); assets.noteAssetWrite("assets/browser.json"); renameId_.clear(); message_.clear(); }
                         catch (const std::exception& error) { message_=error.what(); focusRename_=true; }
                     } else if (cancel || (ImGui::IsItemDeactivated() && !ImGui::IsItemDeactivatedAfterEdit())) renameId_.clear();
-                    ImGui::SetCursorScreenPos(after);
+                    // Register the restored layout position without adding a
+                    // second item gap or growing a forced offscreen row.
+                    ImGui::SetCursorScreenPos({after.x,after.y-ImGui::GetStyle().ItemSpacing.y});
+                    ImGui::Dummy({0,0});
                 }
                 ImGui::PopID();
             }

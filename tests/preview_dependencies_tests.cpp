@@ -82,6 +82,30 @@ void fairRequestScheduling() {
     schedule.run({},[](const auto&){},[]{return true;});
     require(schedule.next==0,"An empty preview demand retained an invalid scheduling cursor.");
 }
+void boundedSceneModelDemand() {
+    using namespace crimson;
+    PreviewSceneModelDemand demand;
+    constexpr std::size_t Models=107;
+    std::vector<std::size_t> requested;
+    bool budget=true;
+    // Cold metadata for the first model consumes the frame's remaining
+    // allowance. Its scene must yield before requesting the other 106 models.
+    require(!demand.refresh(Models,[&](std::size_t index){requested.push_back(index);budget=false;},[&]{return budget;}),
+        "One cold scene model request did not yield when its thumbnail budget expired.");
+    require(requested==std::vector<std::size_t>{0},"A cold scene request hydrated extra receiver metadata after its budget expired.");
+    require(!demand.refresh(Models,[&](std::size_t index){requested.push_back(index);},[]{return false;})&&requested.size()==1,
+        "An exhausted frame advanced or restarted saved-scene metadata demand.");
+    require(demand.refresh(Models,[&](std::size_t index){requested.push_back(index);},[]{return true;}),
+        "A resumed scene metadata pass never reached its prepared receiver population.");
+    require(requested.size()==Models,"Resuming metadata demand duplicated or omitted a saved-scene model.");
+    for(std::size_t index=0;index<Models;++index)require(requested[index]==index,"Metadata demand changed saved-scene model order after yielding.");
+    requested.clear();
+    require(demand.refresh(Models,[&](std::size_t index){requested.push_back(index);},[]{return true;})&&requested.size()==Models,
+        "A pending image/chart retry stopped refreshing retained model interests.");
+    PreviewSceneModelDemand replacement;
+    require(replacement.refresh(0,[](std::size_t){throw std::runtime_error("An empty source plan requested model metadata.");},[]{return false;}),
+        "An empty replacement source plan remained pending on metadata demand.");
+}
 template<class Function> void rejects(Function&& action,const char* message) {
     bool failed=false;try{action();}catch(const std::exception&){failed=true;}require(failed,message);
 }
@@ -253,7 +277,7 @@ int main() {
         for(unsigned i=0;i<8;++i)retry.failed(now);
         require(!retry.ready(now+std::chrono::seconds{29}) && retry.ready(now+std::chrono::seconds{30}),"Thumbnail retry delay must remain bounded.");
         retry.reset();require(retry.ready(now),"A source edit or successful publication must reset retry backoff.");
-        fairRequestScheduling();persistentCache();deletedSourceObservers();
+        fairRequestScheduling();boundedSceneModelDemand();persistentCache();deletedSourceObservers();
         std::cout << "Preview source coherence passed.\n"; return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

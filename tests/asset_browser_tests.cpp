@@ -204,6 +204,26 @@ void selectionPolicy() {
     require(selection.primary()=="b","An unknown row changed selection.");
     selection.set("");
     require(selection.ids().empty() && selection.primary().empty(),"Clearing selection retained a primary ID.");
+
+    std::vector<std::string> many;many.reserve(10000);
+    for(unsigned i=0;i<10000;++i)many.push_back("asset-"+std::to_string(i));
+    selection.setAll(many);
+    require(selection.ids()==many&&selection.primary()==many.back(),"Select All changed stable ordering or its final primary.");
+    for(const auto& id:many)require(selection.contains(id),"Large selection lost an indexed member.");
+    selection.click(many[5000],many,true,false);
+    require(selection.ids().size()==9999&&!selection.contains(many[5000]),"Ctrl toggle desynchronized large ordered selection membership.");
+    selection.retain(std::span(many).subspan(2500,5000));
+    require(selection.ids().size()==4999&&selection.ids().front()==many[2500]&&selection.ids().back()==many[7499]&&
+        !selection.contains(many[0])&&!selection.contains(many[5000])&&selection.contains(selection.primary()),
+        "Filtered large selection changed ordering, retained hidden members or lost its primary.");
+    selection.setAll(selection.ids());
+    require(selection.ids().size()==4999,"Select All invalidated its own borrowed input.");
+    selection.set(selection.primary());
+    require(selection.ids()==std::vector<std::string>{many[7499]},"Selecting the existing primary invalidated its borrowed ID.");
+    selection.setAll(std::array<std::string,4>{"b","a","b",""});
+    require(selection.ids()==std::vector<std::string>({"b","a"})&&selection.primary()=="a", "Select All retained duplicates/empty IDs or reordered its input.");
+    selection.clear();
+    require(!selection.contains("a")&&!selection.contains("b"),"Clear retained indexed selection members.");
 }
 void folderDeletion() {
     auto assets=legacyAssets;

@@ -347,21 +347,29 @@ BrowserCatalog BrowserCatalog::prepareErase(std::span<const std::string> ids)con
     std::erase_if(prepared.presentation_,[&](const auto& item){return erased.contains(item.first)||erased.contains(item.second.folder);});
     for(const auto& id:ids){prepared.folders_.erase(id);prepared.assets_.erase(id);}prepared.rebuildViews();return prepared;
 }
-bool BrowserSelection::contains(const std::string& id) const { return std::find(ids_.begin(),ids_.end(),id)!=ids_.end(); }
-void BrowserSelection::clear() { ids_.clear(); primary_.clear(); anchor_.clear(); }
-void BrowserSelection::set(const std::string& id) { clear(); if (!id.empty()) { ids_.push_back(id); primary_=anchor_=id; } }
+bool BrowserSelection::contains(const std::string& id) const { return selected_.contains(id); }
+void BrowserSelection::clear() { ids_.clear(); selected_.clear(); primary_.clear(); anchor_.clear(); }
+void BrowserSelection::set(const std::string& id) { auto value=id;clear(); if (!value.empty()) { ids_.push_back(value); selected_.insert(value); primary_=anchor_=std::move(value); } }
+void BrowserSelection::setAll(std::span<const std::string> ids) {
+    // Copy before clear: callers may pass the current ordered selection itself.
+    std::vector<std::string> ordered;ordered.reserve(ids.size());
+    std::unordered_set<std::string> selected;selected.reserve(ids.size());
+    for(const auto& id:ids)if(!id.empty()&&selected.insert(id).second)ordered.push_back(id);
+    ids_=std::move(ordered);selected_=std::move(selected);
+    primary_=anchor_=ids_.empty()?std::string{}:ids_.back();
+}
 void BrowserSelection::click(const std::string& id,std::span<const std::string> visible,bool control,bool shift) {
     const auto target=std::find(visible.begin(),visible.end(),id);
     if (target==visible.end()) return;
     const auto anchor=std::find(visible.begin(),visible.end(),anchor_);
     if (shift && anchor!=visible.end()) {
-        if (!control) ids_.clear();
+        if (!control) { ids_.clear(); selected_.clear(); }
         const auto first=std::min(target,anchor),last=std::max(target,anchor);
-        for (auto it=first;it!=last+1;++it) if (!contains(*it)) ids_.push_back(*it);
+        for (auto it=first;it!=last+1;++it) if (selected_.insert(*it).second) ids_.push_back(*it);
         primary_=id;
     } else if (control) {
-        if (contains(id)) { std::erase(ids_,id); primary_=ids_.empty() ? std::string{} : ids_.back(); }
-        else { ids_.push_back(id); primary_=id; }
+        if (selected_.erase(id)) { std::erase(ids_,id); primary_=ids_.empty() ? std::string{} : ids_.back(); }
+        else { ids_.push_back(id); selected_.insert(id); primary_=id; }
         anchor_=id;
     } else set(id);
 }
@@ -370,8 +378,13 @@ void BrowserSelection::beginDrag(const std::string& id) {
     else primary_=id;
 }
 void BrowserSelection::retain(std::span<const std::string> visible) {
-    std::erase_if(ids_,[&](const auto& id){return std::find(visible.begin(),visible.end(),id)==visible.end();});
+    if(ids_.empty()&&anchor_.empty())return;
+    std::unordered_set<std::string_view> present;
+    if(ids_.size()>4){present.reserve(visible.size());for(const auto& id:visible)present.insert(id);}
+    const bool indexed=ids_.size()>4;
+    const auto isVisible=[&](const auto& id){return indexed?present.contains(id):std::find(visible.begin(),visible.end(),id)!=visible.end();};
+    std::erase_if(ids_,[&](const auto& id){if(isVisible(id))return false;selected_.erase(id);return true;});
     if (!contains(primary_)) primary_=ids_.empty() ? std::string{} : ids_.back();
-    if (std::find(visible.begin(),visible.end(),anchor_)==visible.end()) anchor_=primary_;
+    if (!isVisible(anchor_)) anchor_=primary_;
 }
 } // namespace crimson

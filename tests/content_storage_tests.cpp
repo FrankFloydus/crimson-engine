@@ -159,5 +159,26 @@ void registrationGroups() {
     const std::array emptyIdentity{StoredAssetPath{pending,f.root/"Content/Third.png"},StoredAssetPath{{},f.root/"Content/Fourth.png"}};
     rejects([&]{registerAssetPaths(f.root,emptyIdentity);},"A registration group accepted an empty identity.");unchanged();
 }
+void resolutionSnapshots() {
+    Fixture f;AssetReferenceManager policy(f.root);
+    const std::array first{AssetEntry{"assets/textures/first.png","First",AssetKind::Texture}};
+    const std::array second{AssetEntry{"assets/textures/second.png","Second",AssetKind::Texture}};
+    policy.replace(first,{{first[0].id,second[0].id}});
+    policy.setUsages({{first[0].id,"assets/scenes/world.crimson-scene","World","Texture"}});
+    const auto before=policy.resolutionSnapshot();
+    require(before->usages().empty()&&before->revision()==policy.revision()&&before->valid()==policy.valid()&&
+        before->status()==policy.status()&&before->serialize()==policy.serialize()&&before->resolveTexture(first[0].id)==second[0].id,
+        "A resolution snapshot copied usage metadata or lost replacement policy.");
+    const auto revision=policy.revision();policy.setUsages({});
+    require(policy.revision()==revision&&before->resolveTexture(first[0].id)==policy.resolveTexture(first[0].id),
+        "Changing the usage index changed asset resolution or its policy revision.");
+    policy.replace(second,{});const auto after=policy.resolutionSnapshot();
+    require(after->revision()>before->revision()&&after->resolveTexture(first[0].id)==canonicalAssetId("builtin:texture/gray")&&
+        after->resolveTexture(first[0].id,true)==canonicalAssetId("builtin:texture/normal")&&before->resolveTexture(first[0].id)==second[0].id&&
+        !before->deleted(second[0].id),"A policy edit mutated an older immutable resolution snapshot.");
+    f.write("assets/references.json","{broken JSON");AssetReferenceManager invalid(f.root);const auto blocked=invalid.resolutionSnapshot();
+    require(!blocked->valid()&&blocked->status()==invalid.status()&&blocked->revision()==invalid.revision(),
+        "A resolution snapshot lost invalid-policy state or its diagnostic.");
 }
-int main(){try{uuidIdentity();migrationAndMoves();modelPackageAndRecovery();collisionNamesAreDisplayText();watcherSnapshots();registrationGroups();std::cout<<"Content storage checks passed.\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+}
+int main(){try{uuidIdentity();migrationAndMoves();modelPackageAndRecovery();collisionNamesAreDisplayText();watcherSnapshots();registrationGroups();resolutionSnapshots();std::cout<<"Content storage checks passed.\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

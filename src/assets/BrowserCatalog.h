@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace crimson {
@@ -93,11 +94,13 @@ public:
     bool contains(const std::string& id) const;
     void clear();
     void set(const std::string& id);
+    void setAll(std::span<const std::string> ids);
     void click(const std::string& id, std::span<const std::string> visible, bool control, bool shift);
     void beginDrag(const std::string& id);
     void retain(std::span<const std::string> visible);
 private:
     std::vector<std::string> ids_;
+    std::unordered_set<std::string> selected_;
     std::string primary_, anchor_;
 };
 

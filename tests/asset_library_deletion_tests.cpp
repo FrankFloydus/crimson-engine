@@ -1246,6 +1246,88 @@ void immutableMaterialMetadata(){
     library.publishMaterial(std::make_shared<MaterialAsset>(material));
     require(!library.resolvedModelMaterials(model).empty(),"An unassigned texture inherited a stale UV requirement.");
 }
+void modelPolicySnapshots() {
+    Project project;initializeContentStorage(project.root);
+    auto first=createMaterialAsset(project.root,"First policy material"),second=createMaterialAsset(project.root,"Second policy material");
+    material_test::legacyFixture(first);material_test::legacyFixture(second);
+    first.surface.baseColor={.1f,.2f,.3f,1};second.surface.baseColor={.7f,.8f,.9f,1};
+    canonicalizeMaterialAsset(first);canonicalizeMaterialAsset(second);
+    saveMaterialAsset(project.root,first);saveMaterialAsset(project.root,second);
+    AssetLibrary library(project.root);
+    const auto color=[&](const ModelResolvers& resolvers) {
+        const auto material=resolvers.material(first.id);require(bool(material),"A model policy resolver lost its source material.");
+        return material->baseColor;
+    };
+    const auto before=library.modelResolvers();
+    require(color(before)==first.surface.baseColor,"The initial model resolver lost its material policy.");
+    const auto revision=library.references().revision();
+    library.references().setUsages({{first.id,"owner","Owner","Material slot"}});
+    const auto samePolicy=library.modelResolvers();
+    require(library.references().revision()==revision&&color(samePolicy)==first.surface.baseColor,
+        "A usage-index edit changed model resolution.");
+    const std::array removed{AssetEntry{first.id,first.name,AssetKind::Material}};
+    library.references().replace(removed,{{first.id,second.id}});
+    const auto after=library.modelResolvers();
+    require(color(after)==second.surface.baseColor&&color(before)==first.surface.baseColor&&color(samePolicy)==first.surface.baseColor,
+        "A policy publication changed an older model loader's immutable resolver or reused a stale policy.");
+}
+void profileModelPolicy(const fs::path& original,std::size_t usageCount=8192) {
+    // The source project is read only. All policy/index loading and resource
+    // publication below belong to this disposable fixture.
+    Project project;AssetLibrary library(project.root);
+    const auto policyBytes=read(original/".crimson/references.json"),indexBytes=read(original/".crimson/asset-locations.json");
+    const auto policyJson=nlohmann::json::parse(policyBytes);
+    writeFileAtomically(project.root/".crimson/asset-locations.json",indexBytes);refreshContentStorage(project.root);
+    writeFileAtomically(project.root/".crimson/references.json",policyBytes);
+    library.references()=AssetReferenceManager(project.root);require(library.references().valid(),library.references().status());
+    constexpr std::size_t requests=39,repetitions=5;
+    std::vector<AssetUsage> usages;usages.reserve(usageCount);
+    for(std::size_t index=0;index<usageCount;++index)usages.push_back({GrayTextureId,canonicalAssetId("profile-owner-"+std::to_string(index)),
+        "Representative saved scene owner "+std::to_string(index),"Mesh / Material slot / Texture",false,false});
+    library.references().setUsages(std::move(usages));
+    const auto legacyResolvers=[&] {
+        const auto policy=library.references();const auto root=project.root;
+        return ModelResolvers{[policy](const auto& id){return policy.resolveTexture(id);},[policy,root](const auto& id)->std::optional<ModelMaterial>{
+            const auto resolved=policy.resolveMaterial(id);if(resolved==DefaultMaterialId)return defaultMaterialAsset().surface;
+            if(resolved==DefaultParticleMaterialId){auto material=defaultParticleMaterialAsset();canonicalizeMaterialAsset(material);return material.surface;}
+            if(!resolved.empty()&&fs::exists(materialAssetPath(root,resolved))){const auto material=loadMaterialAsset(root,resolved);return modelMaterialCompatible(material)?material.surface:defaultMaterialAsset().surface;}return {};
+        }};
+    };
+    std::size_t observed{};
+    const auto measure=[&](const char* label,const auto& operation) {
+        std::array<double,repetitions> samples{};
+        for(auto& sample:samples){const auto start=std::chrono::steady_clock::now();
+            for(std::size_t request=0;request<requests;++request)operation();
+            sample=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();}
+        std::sort(samples.begin(),samples.end());
+        std::cout<<label<<": min_ms="<<samples.front()<<" median_ms="<<samples[repetitions/2]<<" max_ms="<<samples.back()<<'\n';
+    };
+    std::cout<<"Policy construction diagnostic: deleted="<<policyJson.at("deleted").size()<<" replacements="<<policyJson.at("replacements").size()
+        <<" synthetic_usage_rows="<<usageCount<<" requests_per_sample="<<requests<<" samples="<<repetitions<<'\n';
+    measure("full manager copy",[&]{const auto copy=library.references();observed+=copy.usages().size()+copy.revision();});
+    measure("selective cold policy snapshot",[&]{const auto copy=library.references().resolutionSnapshot();observed+=copy->usages().size()+copy->revision();});
+    (void)library.modelResolvers(); // Publish the one current shared snapshot outside the warm measurement.
+    measure("legacy resolver construction",[&]{const auto resolvers=legacyResolvers();observed+=resolvers.image(GrayTextureId).size();});
+    measure("shared resolver construction",[&]{const auto resolvers=library.modelResolvers();observed+=resolvers.image(GrayTextureId).size();});
+    ResourceManager resources;const auto id=canonicalAssetId("profile-ready-model");const auto data=std::make_shared<ModelAsset>();
+    auto keep=resources.request<ModelAsset>(AssetRef<ModelAsset>{id},[data](std::stop_token){return ResourceLoadResult<ModelAsset>{data,sizeof(ModelAsset),1,{}};});
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{5};
+    while(!keep.snapshot()&&std::chrono::steady_clock::now()<deadline){resources.pump();std::this_thread::sleep_for(std::chrono::milliseconds{1});}
+    require(bool(keep.snapshot()),"The policy diagnostic did not publish its ready metadata record.");
+    // A library cold handle can hit an already-ready resource record. Its
+    // loader construction/replacement still runs synchronously, with no job.
+    measure("legacy ready-record cold-owner request",[&]{const auto policy=library.references();const auto resolvers=legacyResolvers();
+        const auto handle=resources.request<ModelAsset>(AssetRef<ModelAsset>{id},[data,policy,resolvers](std::stop_token){
+            return ResourceLoadResult<ModelAsset>{data,sizeof(ModelAsset),policy.revision()+(resolvers.image?1:0),{}};});
+        observed+=handle.snapshot().revision();});
+    const auto policy=library.references().resolutionSnapshot();
+    measure("shared ready-record cold-owner request",[&]{const auto resolvers=library.modelResolvers();
+        const auto handle=resources.request<ModelAsset>(AssetRef<ModelAsset>{id},[data,policy,resolvers](std::stop_token){
+            return ResourceLoadResult<ModelAsset>{data,sizeof(ModelAsset),policy->revision()+(resolvers.image?1:0),{}};});
+        observed+=handle.snapshot().revision();});
+    std::cout<<"Observed="<<observed<<" resource_loads="<<resources.stats().loads<<" (one seeded load expected; no timing thresholds)\n";
+    require(resources.stats().loads==1,"The ready-record policy diagnostic unexpectedly scheduled model workers.");
+}
 void dormantGraphTextureDeletion(){
     Project p;const auto fixtures=model_test::writeModelFixtures(p.root/"source");const std::string image="assets/textures/dormant.png";
     fs::create_directories(fixturePath(p.root,"assets/textures"));fs::copy_file(fixtures.image,fixturePath(p.root,image));
@@ -2527,6 +2609,11 @@ void blendOccurrenceMaterials() {
 }
 
 int main(int argc,char** argv){try{
+    if(argc==2&&std::string(argv[1])=="--model-policy-snapshot") {
+        modelPolicySnapshots();std::cout<<"Immutable model loader policy and usage-index isolation passed.\n";return 0;
+    }
+    if(argc==3&&std::string(argv[1])=="--model-policy-profile") {profileModelPolicy(argv[2]);return 0;}
+    if(argc==4&&std::string(argv[1])=="--model-policy-profile") {profileModelPolicy(argv[2],std::stoull(argv[3]));return 0;}
     if(argc==2&&std::string(argv[1])=="--blend-occurrence") {
         blendOccurrenceMaterials();std::cout<<"Occurrence Blend material isolation, inherited controls, shader uniforms/mapping and guarded deletion passed.\n";return 0;
     }
@@ -2549,6 +2636,6 @@ int main(int argc,char** argv){try{
     if(argc==5&&std::string(argv[1])=="--material-preview-resources") {materialPreviewResources(argv[2],argv[3],argv[4]);return 0;}
     // Public deletion checks use disposable CPU data; the final fallback check
     // opens a scoped Noop device without a native application window.
-    warningQueries();bundledModelPublicationAndReferences();manualBundledModelDeletion(false);manualBundledModelDeletion(true);bundledBatchDeletionContinuesFrames(false);bundledBatchDeletionContinuesFrames(true);multiBundleBatchDeletionWithSurvivingFallbacks();externallyChangedDeletionPolicy(0);externallyChangedDeletionPolicy(1);externallyChangedDeletionPolicy(2);lastBundledMeshFolderCleanup(false);lastBundledMeshFolderCleanup(true);referencedBundledModelDeletion(false);referencedBundledModelDeletion(true);cancelAndStaleBundledDeletion();failedBundledDeletion();retiredQuaderModelCollection(false);retiredQuaderModelCollection(true);retiredQuaderPolicyRetention();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();changedUsagePreservesConsumerAssignments();boxMaterialDeletionAndPublication();importedMaterialSlotsAndDeletion();legacyUnusedModelMaterialAssignments();immutableMaterialMetadata();boxMaterialHistoryOnlyDeletion();dormantGraphTextureDeletion();pendingGraphKeepsCoverageExplicit();navigationProfileDeletion();gameplayEffectDeletion();unrelatedDeletionMaterializesLegacyEffects(false);unrelatedDeletionMaterializesLegacyEffects(true);unrelatedDeletionMaterializesLegacyProfiles(false);unrelatedDeletionMaterializesLegacyProfiles(true);
+    warningQueries();bundledModelPublicationAndReferences();manualBundledModelDeletion(false);manualBundledModelDeletion(true);bundledBatchDeletionContinuesFrames(false);bundledBatchDeletionContinuesFrames(true);multiBundleBatchDeletionWithSurvivingFallbacks();externallyChangedDeletionPolicy(0);externallyChangedDeletionPolicy(1);externallyChangedDeletionPolicy(2);lastBundledMeshFolderCleanup(false);lastBundledMeshFolderCleanup(true);referencedBundledModelDeletion(false);referencedBundledModelDeletion(true);cancelAndStaleBundledDeletion();failedBundledDeletion();retiredQuaderModelCollection(false);retiredQuaderModelCollection(true);retiredQuaderPolicyRetention();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();changedUsagePreservesConsumerAssignments();boxMaterialDeletionAndPublication();importedMaterialSlotsAndDeletion();legacyUnusedModelMaterialAssignments();immutableMaterialMetadata();modelPolicySnapshots();boxMaterialHistoryOnlyDeletion();dormantGraphTextureDeletion();pendingGraphKeepsCoverageExplicit();navigationProfileDeletion();gameplayEffectDeletion();unrelatedDeletionMaterializesLegacyEffects(false);unrelatedDeletionMaterializesLegacyEffects(true);unrelatedDeletionMaterializesLegacyProfiles(false);unrelatedDeletionMaterializesLegacyProfiles(true);
     std::cout<<"Public AssetLibrary deletion, warning, fallback and document integration checks passed.\n";return 0;
 }catch(const std::exception& error){std::cerr<<"AssetLibrary deletion test failed: "<<error.what()<<'\n';return 1;}}

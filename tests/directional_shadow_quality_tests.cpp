@@ -6,6 +6,10 @@
 #include "crimson-renderer/MaterialGraphShader.h"
 #include "crimson-renderer/MaterialGraphGpu.h"
 #include <crimson/renderer/forward/ModelAnimation.h>
+#include <crimson/renderer/forward/MeshPaint.h>
+#include <crimson/renderer/forward/ShadowRayGeometry.h>
+#include <crimson/renderer/forward/StreamingModel.h>
+#include "decals/DecalPaintSurface.h"
 #include "crimson-renderer/Picking.h"
 #include "assets/BuiltinGeometry.h"
 #include "resources/ResourceManager.h"
@@ -882,7 +886,109 @@ template<class Read> void contactPerformanceChecks(Renderer& renderer,const Shad
     require(renderer.reloadPrograms(current),renderer.shaderStatus());bgfx::setDebug(BGFX_DEBUG_NONE);
 }
 
-void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capture,bool closedRoomOnly,bool compiledModel,bool profileClosedRoom,bool contactOnly,bool contactPerformanceOnly){
+// This fixture exercises the production upload and contact owners using only
+// embedded programs. Its dense color geometry and paint bindings are identical;
+// only the separately prepared, proven shape-equivalent contact BLAS changes.
+template<class Read> void paintedContactChecks(Renderer& renderer,const Read& read,std::uint32_t& frame,const fs::path& capture){
+    struct Painted {std::shared_ptr<ModelAsset> dense,proxy;std::vector<RenderMeshPaintBinding> paint;};
+    const auto painted=[&](const ModelAsset& source,const char* name){
+        Painted result;result.dense=std::make_shared<ModelAsset>(source);result.dense->id=std::string("paint-contact-dense-")+name;result.dense->stream.reset();
+        for(std::uint32_t i=0;i<source.primitives.size();++i){
+            const auto geometry=buildMeshPaintGeometry(source.primitives[i],5);
+            result.dense->primitives[i]=meshPaintRenderPrimitive(source.primitives[i],*geometry);
+            auto weights=makeMeshPaintPayload(static_cast<std::uint32_t>(geometry->vertices.size()));
+            const std::array changes{MeshPaintChange{0,MeshPaintRgb{90,60,30}}};weights=updateMeshPaintPayload(weights,changes);
+            for(std::uint32_t draw=0;draw<source.draws.size();++draw)if(source.draws[draw].primitive==i)result.paint.push_back({draw,i,geometry,weights});
+        }
+        result.proxy=std::make_shared<ModelAsset>(*result.dense);result.proxy->id=std::string("paint-contact-proxy-")+name;
+        for(std::uint32_t i=0;i<source.primitives.size();++i){
+            const auto binding=std::find_if(result.paint.begin(),result.paint.end(),[&](const auto& item){return item.primitive==i;});
+            require(binding!=result.paint.end(),"Painted contact source lost its draw binding.");
+            const auto simplified=decals::simplifyDecalPaintPrimitive(source.primitives[i],*binding->geometry);
+            require(simplified.has_value(),"Painted contact fixture no longer has a proven exact proxy.");
+            result.proxy->primitives[i].preparedShadowRays=build_shadow_ray_mesh(*simplified);
+            require(result.proxy->primitives[i].preparedShadowRays&&result.proxy->primitives[i].preparedShadowRays->triangleCount==source.primitives[i].indices.size()/3,
+                "Painted contact proxy lost the original finite source triangles.");
+            require(result.proxy->primitives[i].indices==result.dense->primitives[i].indices&&
+                streaming::model_primitive_content_key(result.proxy->primitives[i])==streaming::model_primitive_content_key(result.dense->primitives[i]),
+                "Preparing exact contact geometry changed rendered paint geometry.");
+        }
+        require(renderer.prepareModel(*result.dense)&&renderer.prepareModel(*result.proxy),renderer.modelStatus());return result;
+    };
+    auto sourceFloor=std::make_shared<ModelAsset>(*floorGeometry());sourceFloor->primitives[0].sourceFaces.push_back({{0,1,2,3},{0,1},4});
+    auto floor=painted(*sourceFloor,"floor"),box=painted(*builtinBoxGeometry(),"box");
+    const std::uint64_t denseTriangles=floor.dense->primitives[0].indices.size()/3+box.dense->primitives[0].indices.size()/3;
+    require(denseTriangles==14336,"Painted contact fixture lost its level-five render density.");
+    const auto originalPaint=meshPaintBytes(*floor.paint[0].weights);const auto originalGeometry=floor.paint[0].geometry;
+    const auto originalContact=floor.proxy->primitives[0].preparedShadowRays;
+    std::vector<ModelMaterial> white(1);white[0].baseColor={1,1,1,1};white[0].roughness=1;white[0].metallic=white[0].specular=0;
+    std::vector<ModelMaterialTextures> textures(1);std::array<RenderModelInstance,2> instances;
+    for(unsigned i=0;i<instances.size();++i){instances[i].entityId=1200+i;instances[i].materials=&white;instances[i].textures=&textures;instances[i].forceFullDetail=true;}
+    instances[0].meshPaint=floor.paint;instances[1].meshPaint=box.paint;
+    instances[1].model.transform=math::translation({.25f,.53125f,0})*math::scaling({.75f,1,.625f});
+    SceneSettings settings;settings.environment.enabled=false;settings.environment.ambientLight.source=AmbientLightSource::Disabled;
+    settings.environment.background.overrideColor=true;settings.environment.background.color={};settings.environment.toneMapping=ToneMapping::Linear;
+    settings.environment.fog.enabled=settings.environment.glow.enabled=settings.environment.ssgi.enabled=false;
+    settings.environment.ssao.enabled=settings.environment.ssr.enabled=false;settings.antiAliasing=AntiAliasing::Off;settings.exposure=1;
+    settings.camera.fovAxis=CameraFovAxis::Vertical;settings.camera.nearPlane=.03125f;settings.camera.fov=55;
+    DirectionalLight sun;sun.entityId=1210;sun.direction=math::normalized(Vec3{-.35f,-.9f,-.25f});sun.color={1,1,1};sun.intensity=2;
+    sun.castShadows=true;sun.shadowDistance=100;sun.shadowDepthBias=.005f;sun.shadowNormalBias=1;
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=instances;scene.shadowInstances=instances;
+    scene.directionalLights=std::span(&sun,1);scene.shadowWorldId=1211;scene.shadowResolution=1024;
+    const auto floorPose=std::make_shared<ModelPose>(evaluateModelPose(*floor.dense)),boxPose=std::make_shared<ModelPose>(evaluateModelPose(*box.dense));
+    const auto compilerBefore=shaderCompilerMetrics().compilerInvocations;bgfx::setDebug(BGFX_DEBUG_PROFILER);
+    const auto render=[&](bool proxy,bool game,bool receiving,const std::string& label,bool csmOnly=false){
+        instances[0].model.asset=proxy?floor.proxy:floor.dense;instances[1].model.asset=proxy?box.proxy:box.dense;
+        instances[0].receiveShadows=instances[1].receiveShadows=receiving;
+        instances[0].pose=csmOnly?floorPose:nullptr;instances[1].pose=csmOnly?boxPose:nullptr;
+        const auto submit=[&]{if(game)renderer.renderGame(scene);else renderer.render(scene);
+            require(renderer.shadowStatus().empty(),renderer.shadowStatus());
+            // Readback advances streaming and resets these counters. Inspect
+            // the actual contact owner immediately after rendering instead.
+            const auto stats=renderer.shadowStats();require(stats.rayInstances==(csmOnly?0:2)&&stats.rayTriangles==(csmOnly?0:proxy?14:denseTriangles),
+                label+": actual contact upload did not select the expected dense/proxy BLAS.");
+            bgfx::touch(ToolsView);frame=renderer.advance_frame();};
+        for(unsigned i=0;i<4;++i)submit();
+        if(csmOnly)return read(game?renderer.gameViewportTexture():renderer.viewportTexture());
+        constexpr unsigned Samples=8;const auto first=frame+1,last=first+Samples-1;
+        const auto view=renderViewPassSlots(game?RenderViewPurpose::Game:RenderViewPurpose::Scene).lightingEffects;
+        std::set<std::uint32_t> frames;std::vector<double> timings;
+        const auto collect=[&]{const auto* stats=bgfx::getStats();if(stats->gpuTimerFreq<=0)return;
+            for(unsigned i=0;i<stats->numViews;++i){const auto& value=stats->viewStats[i];if(value.view==view&&value.gpuFrameNum>=first&&value.gpuFrameNum<=last&&
+                value.gpuTimeEnd>value.gpuTimeBegin&&frames.insert(value.gpuFrameNum).second)timings.push_back(double(value.gpuTimeEnd-value.gpuTimeBegin)*1000./stats->gpuTimerFreq);}};
+        for(unsigned i=0;i<Samples+8;++i){submit();collect();}
+        require(timings.size()>=Samples/2,label+": native contact GPU timestamps were unavailable.");std::sort(timings.begin(),timings.end());
+        std::cout<<"painted-contact "<<label<<" render_triangles="<<denseTriangles<<" contact_triangles="<<(proxy?14:denseTriangles)
+            <<" gpu_samples="<<timings.size()<<" median_ms="<<timings[timings.size()/2]<<" max_ms="<<timings.back()<<std::endl;
+        return read(game?renderer.gameViewportTexture():renderer.viewportTexture());
+    };
+    for(unsigned camera=0;camera<2;++camera)for(const float angle:{0.f,.53f}){
+        settings.camera.position=camera?Vec3{2.25f,2.125f,3}:Vec3{1.125f,.9375f,1.5f};settings.camera.target={.125f,.1875f,0};
+        sun.shadowAngularDiameter=angle;sun.shadowNormalBias=camera==0&&angle==0?4.f:1.f;const auto label=std::string(camera?"silhouette":"close")+(angle>0?"-soft":"-hard");
+        const auto clear=render(false,camera!=0,false,label+"-clear");
+        const auto dense=render(false,camera!=0,true,label+"-dense"),proxy=render(true,camera!=0,true,label+"-proxy");
+        require(dense.rgba==proxy.rgba,label+": exact contact proxy changed finite coverage or the visible painted surface.");
+        unsigned occluded{},lit{};for(unsigned i=0;i<dense.rgba.size();i+=4){occluded+=brightness(clear,i)>brightness(dense,i)+5;lit+=brightness(dense,i)>40;}
+        require(occluded>=30&&lit>=100,label+": painted contact parity became vacuous without visible light and finite shadows.");
+        if(camera==0&&angle==0){
+            // An identity pose changes only supplemental caster eligibility.
+            // Ordinary CSM, color geometry and receive-shadows stay identical.
+            const auto csm=render(false,false,true,label+"-csm-only",true);unsigned corrected{};
+            for(unsigned i=0;i<dense.rgba.size();i+=4)corrected+=brightness(csm,i)>brightness(dense,i)+5;
+            require(corrected>=5,"Painted contact parity did not exercise an observable supplemental geometry correction.");
+            std::cout<<"painted-contact contribution corrected_pixels="<<corrected<<std::endl;save(csm,capture,"painted-contact-"+label+"-csm-only");
+        }
+        save(dense,capture,"painted-contact-"+label+"-dense");save(proxy,capture,"painted-contact-"+label+"-proxy");
+    }
+    const std::array edit{MeshPaintChange{0,MeshPaintRgb{20,100,80}}};const auto changed=updateMeshPaintPayload(floor.paint[0].weights,edit);
+    require(meshPaintBytes(*floor.paint[0].weights)==originalPaint&&meshPaintBytes(*changed)!=originalPaint&&
+        floor.paint[0].geometry==originalGeometry&&floor.proxy->primitives[0].preparedShadowRays==originalContact,
+        "Paint COW updates changed the original payload, render geometry or exact contact owner.");
+    require(shaderCompilerMetrics().compilerInvocations==compilerBefore,"The embedded painted-contact fixture invoked a shader compiler.");
+    bgfx::setDebug(BGFX_DEBUG_NONE);
+}
+
+void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capture,bool closedRoomOnly,bool compiledModel,bool profileClosedRoom,bool contactOnly,bool contactPerformanceOnly,bool paintedContactOnly){
     // Readback storage survives exceptional renderer shutdown.
     std::vector<std::shared_ptr<DecodedImage>> destinations;
     ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));MaterialGraphPrograms programs(resources,config);
@@ -907,6 +1013,7 @@ void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capt
         for(unsigned i=0;i<120;++i){tick();if(picking::frameReady(frame,ready))return *image;}
         throw std::runtime_error("Directional quality readback timed out.");
     };
+    if(paintedContactOnly){paintedContactChecks(renderer,read,frame,capture);resources.stop();renderer.drainPending(frame);return;}
     if(contactPerformanceOnly){contactPerformanceChecks(renderer,config,read,frame,capture);resources.stop();renderer.drainPending(frame);return;}
     if(contactOnly){const auto floor=floorGeometry();const auto box=builtinBoxGeometry();
         require(renderer.prepareModel(*floor)&&renderer.prepareModel(*box),renderer.modelStatus());
@@ -1043,12 +1150,13 @@ void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capt
 }
 }
 int main(int argc,char** argv){try{
-    require(argc>=4,"Pass shaderc, source, include directories; optionally --closed-room-only, --contact-only, --contact-performance-only, --compiled-model, --profile-closed-room and --capture output-directory.");
-    bool closedRoomOnly{},compiledModel{},profileClosedRoom{},contactOnly{},contactPerformanceOnly{};fs::path capture;
+    require(argc>=4,"Pass shaderc, source, include directories; optionally --closed-room-only, --contact-only, --contact-performance-only, --painted-contact-only, --compiled-model, --profile-closed-room and --capture output-directory.");
+    bool closedRoomOnly{},compiledModel{},profileClosedRoom{},contactOnly{},contactPerformanceOnly{},paintedContactOnly{};fs::path capture;
     for(int index=4;index<argc;++index){const std::string argument=argv[index];
         if(argument=="--closed-room-only")closedRoomOnly=true;
         else if(argument=="--contact-only")contactOnly=true;
         else if(argument=="--contact-performance-only")contactPerformanceOnly=true;
+        else if(argument=="--painted-contact-only")paintedContactOnly=true;
         else if(argument=="--compiled-model")compiledModel=true;
         else if(argument=="--profile-closed-room")profileClosedRoom=true;
         else if(argument=="--capture"&&index+1<argc)capture=argv[++index];
@@ -1058,7 +1166,8 @@ int main(int argc,char** argv){try{
     std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson directional shadow quality checks",Size,Size,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
     require(!(contactOnly&&(closedRoomOnly||profileClosedRoom)),"--contact-only cannot be combined with closed-room diagnostics.");
     require(!(contactPerformanceOnly&&(contactOnly||closedRoomOnly||profileClosedRoom||compiledModel)),"--contact-performance-only is an isolated GPU comparison.");
-    require(bool(window),SDL_GetError());exercise(window.get(),config,capture,closedRoomOnly,compiledModel,profileClosedRoom,contactOnly,contactPerformanceOnly);
-    std::cout<<(contactPerformanceOnly?"Directional contact native GPU budget and exact 32-ray image parity passed.\n":contactOnly?"Directional physical contact edge, finite opening and visible-corner checks passed.\n":closedRoomOnly?"Directional closed inward-normal double-sided room checks passed.\n":
+    require(!(paintedContactOnly&&(contactOnly||contactPerformanceOnly||closedRoomOnly||profileClosedRoom||compiledModel)),"--painted-contact-only is an isolated embedded-program GPU comparison.");
+    require(bool(window),SDL_GetError());exercise(window.get(),config,capture,closedRoomOnly,compiledModel,profileClosedRoom,contactOnly,contactPerformanceOnly,paintedContactOnly);
+    std::cout<<(paintedContactOnly?"Painted contact exact geometry, native upload counts, hard/soft coverage and immutable paint checks passed.\n":contactPerformanceOnly?"Directional contact native GPU budget and exact 32-ray image parity passed.\n":contactOnly?"Directional physical contact edge, finite opening and visible-corner checks passed.\n":closedRoomOnly?"Directional closed inward-normal double-sided room checks passed.\n":
         "Directional closed-room leaks, Scene/Game oblique/grazing floor/wall acne, generated/fallback materials, contact edge filtering and near-contact checks passed.\n");return 0;
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

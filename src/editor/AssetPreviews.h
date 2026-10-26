@@ -90,6 +90,21 @@ struct PreviewRequestSchedule {
         }
     }
 };
+// A retained scene plan may outlive its model metadata interests while image
+// or shader work is pending. Resume cold metadata demand within the same card
+// instead of hydrating its entire receiver population in one UI frame.
+struct PreviewSceneModelDemand {
+    std::size_t next{};
+    template<class Request,class BudgetAvailable>
+    bool refresh(std::size_t count,Request&& request,BudgetAvailable&& budgetAvailable) {
+        if(next>=count)next=0;
+        while(next<count) {
+            if(!budgetAvailable())return false;
+            request(next);++next;
+        }
+        next=0;return true;
+    }
+};
 // Derived thumbnail requests use isolated renderer targets/environment. Pump
 // before ImGui::NewFrame, using the previous frame's visible browser identities.
 class AssetPreviews final {

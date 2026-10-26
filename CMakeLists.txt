@@ -1146,11 +1146,15 @@ if(BUILD_TESTING)
     target_include_directories(directional_shadow_quality_tests PRIVATE src "${CC_GENERATED_DIR}")
     target_compile_definitions(directional_shadow_quality_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(directional_shadow_quality_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(directional_shadow_quality_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
+    target_link_libraries(directional_shadow_quality_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera crimson-decals SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
     add_test(NAME directional_shadow_quality_core COMMAND directional_shadow_quality_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
     set_tests_properties(directional_shadow_quality_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 900)
     add_test(NAME directional_shadow_contact_performance_core COMMAND directional_shadow_quality_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}" --contact-performance-only)
     set_tests_properties(directional_shadow_contact_performance_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 240)
+    add_test(NAME painted_shadow_contact_render_core COMMAND directional_shadow_quality_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}" --painted-contact-only --capture "${CMAKE_BINARY_DIR}/diagnostics/painted-shadow-contact")
+    add_test(NAME painted_shadow_contact_render_dx11_core COMMAND directional_shadow_quality_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}" --painted-contact-only --capture "${CMAKE_BINARY_DIR}/diagnostics/painted-shadow-contact-dx11")
+    set_tests_properties(painted_shadow_contact_render_core painted_shadow_contact_render_dx11_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 120)
+    set_tests_properties(painted_shadow_contact_render_dx11_core PROPERTIES ENVIRONMENT "CRIMSON_TEST_RENDERER=dx11")
     add_executable(material_mapping_render_tests tests/material_mapping_render_tests.cpp
         src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/AssetReferenceManager.cpp
         src/crimson-renderer/RendererHost.cpp
@@ -1211,6 +1215,18 @@ if(BUILD_TESTING)
     target_compile_definitions(decal_host_acceptance_tests PRIVATE ${CC_DECAL_ACCEPTANCE_DEFINITIONS})
     target_compile_options(decal_host_acceptance_tests PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(decal_host_acceptance_tests PRIVATE ${CC_DECAL_ACCEPTANCE_LINKS} crimson-decal-resources)
+
+    # Actual whole-panel CPU UI regression; it initializes no SDL window or GPU.
+    set(CC_BROWSER_UI_SOURCES ${CC_DECAL_ACCEPTANCE_SOURCES})
+    list(REMOVE_ITEM CC_BROWSER_UI_SOURCES src/editor/ResourceRuntime.cpp)
+    add_executable(asset_browser_ui_tests tests/asset_browser_ui_tests.cpp ${CC_BROWSER_UI_SOURCES}
+        src/tools/AssetBrowser.cpp src/tools/AssetBrowserFileDrop.cpp src/tools/AssetBrowserPaths.cpp src/editor/EditorPreferences.cpp)
+    target_include_directories(asset_browser_ui_tests PRIVATE ${CC_DECAL_ACCEPTANCE_INCLUDES})
+    target_compile_definitions(asset_browser_ui_tests PRIVATE ${CC_DECAL_ACCEPTANCE_DEFINITIONS} CC_ASSET_BROWSER_UI_TEST=1)
+    target_compile_options(asset_browser_ui_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(asset_browser_ui_tests PRIVATE ${CC_DECAL_ACCEPTANCE_LINKS} crimson-decal-resources shell32)
+    add_test(NAME asset_browser_ui_core COMMAND asset_browser_ui_tests "${CMAKE_CURRENT_BINARY_DIR}/verification/asset-browser-ui.json")
+    set_tests_properties(asset_browser_ui_core PROPERTIES TIMEOUT 120)
 
     add_executable(asset_library_deletion_tests tests/asset_library_deletion_tests.cpp
         src/assets/AssetLibrary.cpp src/assets/AssetLibraryDecals.cpp src/assets/AsyncImports.cpp src/resources/TextureStreamer.cpp
@@ -1506,7 +1522,7 @@ if(BUILD_TESTING)
     target_link_libraries(ssgi_scene_motion_capture PRIVATE crimson-quader crimson-material-gpu crimson-resources crimson-scene crimson-particles crimson-runtime crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode bgfx::bimg imgui::imgui lodepng mikktspace::mikktspace assimp::assimp meshoptimizer::meshoptimizer nlohmann_json::nlohmann_json d3d11)
 endif()
 
-foreach(CC_TARGET crimson-renderer ragdoll_library_tests gpu_streaming_tests float_texture_streaming_tests environment_tests clustered_lighting_gpu_tests material_graph_publication_tests asset_library_deletion_tests native_resource_tests asset_deletion_runtime_tests decal_host_acceptance_tests point_shadow_render_tests material_height_render_tests blend_material_render_tests material_refraction_render_tests decal_generated_render_tests ssr_render_tests directional_shadow_quality_tests material_mapping_render_tests forward_plus_render_tests ssgi_render_tests glow_render_tests ssao_render_tests fog_background_render_tests smaa_render_tests mesh_instancing_render_tests player_parenting_render_tests forward_plus_room_benchmark renderer_backend_benchmark ssgi_scene_motion_capture)
+foreach(CC_TARGET crimson-renderer ragdoll_library_tests gpu_streaming_tests float_texture_streaming_tests environment_tests clustered_lighting_gpu_tests material_graph_publication_tests asset_library_deletion_tests native_resource_tests asset_deletion_runtime_tests asset_browser_ui_tests decal_host_acceptance_tests point_shadow_render_tests material_height_render_tests blend_material_render_tests material_refraction_render_tests decal_generated_render_tests ssr_render_tests directional_shadow_quality_tests material_mapping_render_tests forward_plus_render_tests ssgi_render_tests glow_render_tests ssao_render_tests fog_background_render_tests smaa_render_tests mesh_instancing_render_tests player_parenting_render_tests forward_plus_room_benchmark renderer_backend_benchmark ssgi_scene_motion_capture)
     if(TARGET ${CC_TARGET})
         target_link_libraries(${CC_TARGET} PRIVATE Crimson::Renderer Crimson::HostShaders d3d12 dxgi)
         target_include_directories(${CC_TARGET} BEFORE PRIVATE "${CRIMSON_FORWARD_GENERATED_DIR}")

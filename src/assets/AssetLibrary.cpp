@@ -375,7 +375,7 @@ AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources
                 if(!quaderBundleSource(projectRoot_,id)) {
                     const auto packageRoot=projectRoot_;std::unordered_set<std::string> known;
                     for(const auto& entry:storedAssetPaths(projectRoot_))if(entry.file.extension()==".crimson-animation")known.insert(entry.id);
-                    const auto policy=references_;const auto resolvers=modelResolvers();
+                    const auto policy=modelResolutionPolicy();const auto resolvers=modelResolvers();
                     ResourceRequestOptions animationOptions;animationOptions.variant="animation-catalog";animationOptions.priority=ResourcePriority::Background;
                     animationOptions.dependencies={file,file.parent_path()/"model.gltf"};
                     animationCatalogResources_[id]=resources_->request<ModelAsset>(AssetRef<ModelAsset>{id},[file,packageRoot,known,policy,resolvers,id](std::stop_token token) {
@@ -385,7 +385,7 @@ AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources
                         const auto clips=document.find("animations");bool missing=false;
                         if(clips!=document.end()&&clips->is_array())for(std::size_t clip=0;clip<clips->size();++clip) {
                             const auto clipId=importedAnimationId(id,static_cast<std::uint32_t>(clip));
-                            if(!policy.deleted(clipId)&&!known.contains(clipId)){missing=true;break;}
+                            if(!policy->deleted(clipId)&&!known.contains(clipId)){missing=true;break;}
                         }
                         if(!missing)return ResourceLoadResult<ModelAsset>{empty,sizeof(ModelAsset),0,{}};
                         auto data=streaming::loadModelMetadataCache(file,packageRoot);
@@ -753,7 +753,7 @@ std::shared_ptr<const ModelAsset> AssetLibrary::findModel(const std::string& id,
             std::filesystem::path file;try{file=resolveAssetPath(projectRoot_,resolved);}catch(const std::exception&){return {};}
             const auto root=projectRoot_; const auto resolvers=modelResolvers();
             const auto forceCold=modelCacheRebuilds_.erase(resolved)!=0;
-            const auto policy=references_;
+            const auto policy=modelResolutionPolicy();
             ResourceRequestOptions options; options.dependencies={file,file.parent_path()/"model.gltf",resolveAssetPath(root,"assets/references.json")};
             if(const auto bundle=quaderBundleSource(root,resolved))options.dependencies.push_back(*bundle);
             // Missing optional policy files are not source dependencies.
@@ -787,7 +787,7 @@ std::shared_ptr<const ModelAsset> AssetLibrary::findModel(const std::string& id,
                 const auto bytes=modelCpuBytes(*data);
                 auto dependencies=packageDependencies;
                 for(const auto& materialId:data->materialIds) {
-                    const auto target=policy.resolve(materialId);
+                    const auto target=policy->resolve(materialId);
                     if(!target.empty()&&!isEngineAssetId(target)) {
                         // Imported sidecars may still be awaiting their catalog
                         // promotion. Embedded material data is already usable.
@@ -870,11 +870,16 @@ std::shared_ptr<const MaterialAsset> AssetLibrary::copyMaterial(const std::strin
         auto material=std::make_shared<MaterialAsset>(copyMaterialAsset(projectRoot_,*source,name));publishMaterial(material);noteAssetWrite(material->id);select(material->id);status_="Copied "+material->name;return material;}
     catch(const std::exception& error){status_=error.what();return {};}
 }
+std::shared_ptr<const AssetReferenceManager> AssetLibrary::modelResolutionPolicy() const {
+    if(!modelResolutionPolicy_||modelResolutionPolicy_->revision()!=references_.revision())
+        modelResolutionPolicy_=references_.resolutionSnapshot();
+    return modelResolutionPolicy_;
+}
 ModelResolvers AssetLibrary::modelResolvers()const {
     // Capture an immutable policy snapshot; loaders may execute on a worker.
-    const auto policy=references_;const auto root=projectRoot_;
-    return {[policy](const auto& id){return policy.resolveTexture(id);},[policy,root](const auto& id)->std::optional<ModelMaterial>{
-        const auto resolved=policy.resolveMaterial(id);if(resolved==DefaultMaterialId)return defaultMaterialAsset().surface;
+    const auto policy=modelResolutionPolicy();const auto root=projectRoot_;
+    return {[policy](const auto& id){return policy->resolveTexture(id);},[policy,root](const auto& id)->std::optional<ModelMaterial>{
+        const auto resolved=policy->resolveMaterial(id);if(resolved==DefaultMaterialId)return defaultMaterialAsset().surface;
         if(resolved==DefaultParticleMaterialId){auto material=defaultParticleMaterialAsset();canonicalizeMaterialAsset(material);return material.surface;}
         if(!resolved.empty()&&std::filesystem::exists(materialAssetPath(root,resolved))){const auto material=loadMaterialAsset(root,resolved);return modelMaterialCompatible(material)?material.surface:defaultMaterialAsset().surface;}return {};
     }};

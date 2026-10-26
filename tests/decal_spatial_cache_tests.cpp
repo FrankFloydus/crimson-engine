@@ -6,6 +6,7 @@
 #include "editor/AssetPreviews.h"
 #include "editor/MeshPaintResources.h"
 #include "scene/SceneDocument.h"
+#include <crimson/renderer/forward/ShadowRayGeometry.h>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -47,6 +48,14 @@ void boxBypassesSurfacePreparation(){
     auto extraction=extractScene(document.scene());for(auto& decal:extraction.decals)if(decal.id==box)decal.world=math::scaling({0,1,1});
     const auto invalid=decals.prepare(document.scene(),extraction);
     check(invalid.failed&&!invalid.ready&&!invalid.refined,"A static singular decal box transform remained an asynchronous preparation.");
+    auto mixed=extractScene(document.scene());auto broken=mixed.decals.front();
+    broken.id^=UINT64_C(0x4000000000000000);broken.world=math::scaling({0,1,1});mixed.decals.push_back(broken);
+    for(unsigned order=0;order<2;++order){
+        const auto result=decals.prepare(document.scene(),mixed);
+        check(result.failed&&result.status=="Invalid decal box transform.",
+            "A pending decal concealed the terminal result responsible for thumbnail retry backoff.");
+        std::reverse(mixed.decals.begin(),mixed.decals.end());
+    }
     resources.stop();
 }
 void missingReceiverIsTerminal(){
@@ -101,7 +110,7 @@ void mixedPaintBoundaryPublication(){
     // real shallow warp and normal field, and must retain its fine triangle IDs.
     auto planar=quad(0,0,false);for(auto& vertex:planar.vertices){vertex.position[0]=vertex.position[0]<1?0.f:2.f;vertex.position[1]=vertex.position[1]<1?0.f:2.f;}
     planar.bounds={};for(const auto& vertex:planar.vertices)math::include(planar.bounds,vertex.position);
-    model->primitives={planar,quad(3,3.29e-6f,true)};model->draws.push_back({0});model->draws.push_back({1});
+    model->primitives={planar,quad(3,3.29e-6f,true)};model->draws.push_back({0});model->draws.push_back({1});model->draws.push_back({0,math::translation({8,0,0})});
     for(const auto& primitive:model->primitives)for(const auto& vertex:primitive.vertices)math::include(model->bounds,vertex.position);
     const auto coarse=buildMeshPaintGeometry(model->primitives[0],3),fine=buildMeshPaintGeometry(model->primitives[1],3);
     check(decals::simplifyDecalPaintPrimitive(model->primitives[0],*coarse).has_value()&&!decals::simplifyDecalPaintPrimitive(model->primitives[1],*fine),
@@ -112,12 +121,22 @@ void mixedPaintBoundaryPublication(){
     PreparedMeshPaintModel prepared;const auto tick=[&]{resources.pump();assets.updateResources(0);prepared=paint.prepare(record,ResourcePriority::Preview);};
     const auto until=[&](const auto& condition,const char* reason){const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};do{tick();if(condition())return;std::this_thread::sleep_for(std::chrono::milliseconds{1});}while(std::chrono::steady_clock::now()<deadline);throw std::runtime_error(std::string(reason)+": "+prepared.diagnostic);};
     until([&]{return prepared.ready;},"Mixed paint receiver did not publish its immutable worker geometry");
-    check(prepared.asset&&prepared.decalAsset&&prepared.draws.size()==2&&prepared.decalAsset->draws.size()==2,"Mixed receiver publication lost a draw or model owner.");
+    check(prepared.asset&&prepared.decalAsset&&prepared.draws.size()==3&&prepared.decalAsset->draws.size()==3,"Mixed receiver publication lost a draw or model owner.");
     check(prepared.decalAsset!=prepared.asset,"The mixed host fixture stopped exercising the exact proxy publication path.");
+    const auto contact=prepared.asset->primitives[0].preparedShadowRays;
+    check(contact&&contact->triangleCount==2&&prepared.asset->primitives[0].indices.size()==coarse->indices.size(),
+        "An exact planar contact proxy was absent or replaced refined render geometry.");
+    check(prepared.asset->primitives[2].preparedShadowRays==contact&&prepared.draws[0].geometry==prepared.draws[2].geometry,
+        "Repeated source draws rebuilt rather than shared their immutable exact contact geometry.");
+    check(!prepared.asset->primitives[1].preparedShadowRays,
+        "A warped/varying-normal draw acquired an unproven coarse contact proxy.");
+    const auto& renderBounds=prepared.asset->primitives[0].bounds;
+    check(contact->bounds.valid&&contact->bounds.minimum==renderBounds.minimum&&contact->bounds.maximum==renderBounds.maximum,
+        "The planar contact proxy changed finite surface bounds.");
     for(const auto& draw:prepared.draws){check(draw.draw<prepared.decalAsset->draws.size(),"Boundary publication used the source primitive as a draw index.");
         const auto primitiveId=prepared.decalAsset->draws[draw.draw].primitive;check(primitiveId==draw.primitive&&primitiveId<prepared.decalAsset->primitives.size(),"Boundary publication no longer addresses the chosen occurrence primitive.");
         const auto& actual=prepared.decalAsset->primitives[primitiveId];
-        if(draw.draw==0){check(actual.indices.size()==6&&!draw.decalBoundary,"An entirely collapsed exact proxy acquired fine triangle lineage.");continue;}
+        if(draw.sourcePrimitive==0){check(actual.indices.size()==6&&!draw.decalBoundary,"An entirely collapsed exact proxy acquired fine triangle lineage.");continue;}
         check(actual.indices.size()==draw.geometry->indices.size()&&draw.decalBoundary&&!draw.decalBoundary->triangles.empty(),"A retained fine draw lost its matching perimeter lineage when another draw used a proxy.");
         uint32_t previous=0;bool first=true;size_t rounded=0;
         for(const auto& boundary:draw.decalBoundary->triangles){check(boundary.triangle<actual.indices.size()/3&&(first||boundary.triangle>previous)&&boundary.corners&&!(boundary.corners&~7u),"Published boundary records used stale/proxy triangle IDs.");first=false;previous=boundary.triangle;
@@ -130,15 +149,17 @@ void mixedPaintBoundaryPublication(){
     }
     ExtractedModel occurrence;occurrence.id=record.id;occurrence.assetId=id;occurrence.meshPaint=record.meshPaint;
     DecalSourceResult source;until([&]{source=decals.modelSurface(occurrence,ResourcePriority::Preview);return source.current;},"Mixed actual decal source did not publish its boundary metadata");
-    check(source.model==prepared.decalAsset&&source.surface&&source.surface->draws.size()==2,"Decal resource publication selected a different mixed model/proxy owner.");
+    check(source.model==prepared.decalAsset&&source.surface&&source.surface->draws.size()==3,"Decal resource publication selected a different mixed model/proxy owner.");
     for(const auto& draw:source.surface->draws){check(draw.surface.id.draw<prepared.draws.size()&&draw.surface.boundary==prepared.draws[draw.surface.id.draw].decalBoundary,"Decal source worker lost or cross-assigned a fine draw's boundary metadata.");
         const auto primitiveId=prepared.decalAsset->draws[draw.surface.id.draw].primitive;check(draw.surface.id.primitive==primitiveId,"Decal source receiver identity no longer matches the chosen occurrence primitive.");}
     const auto asset=prepared.asset;const auto signature=prepared.decalSignature;const auto boundary=prepared.draws[1].decalBoundary;
     const auto& selected=prepared.draws[1];SceneMeshPaintDraw stored;stored.draw=selected.draw;stored.primitive=selected.sourcePrimitive;stored.level=3;stored.sourceSignature=selected.geometry->sourceSignature;
     const std::array changes{MeshPaintChange{0,MeshPaintRgb{100,80,20}}};stored.weights=updateMeshPaintPayload(selected.weights,changes);record.meshPaint->draws.push_back(stored);tick();
     check(prepared.ready&&prepared.asset==asset&&prepared.decalSignature==signature&&prepared.draws[1].decalBoundary==boundary,"Paint appearance edits invalidated original-boundary geometry or its source signature.");
+    check(prepared.asset->primitives[0].preparedShadowRays==contact&&prepared.asset->primitives[2].preparedShadowRays==contact,
+        "COW paint appearance edits invalidated the shared shape-equivalent contact geometry.");
     check(model->primitives[0].indices.size()==6&&model->primitives[1].indices.size()==6,"Boundary publication mutated the original immutable model.");
-    std::cout<<"Mixed paint boundary publication: exact proxy plus warped/varying-normal fine draw retained matching occurrence IDs, lineage and paint-independent geometry identity.\n";
+    std::cout<<"Mixed paint boundary publication: exact contact BLAS shared across repeated draws; warped/varying-normal fine draw retained matching occurrence IDs, lineage and paint-independent geometry identity.\n";
     resources.stop();
 }
 void exercise(){

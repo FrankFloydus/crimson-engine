@@ -342,6 +342,8 @@ private:
     std::unordered_map<std::string,std::filesystem::path> storageLocations_;
     std::unordered_map<std::string,std::uint64_t> registeredModelRevisions_;
     AssetReferenceManager references_;
+    mutable std::shared_ptr<const AssetReferenceManager> modelResolutionPolicy_;
+    std::shared_ptr<const AssetReferenceManager> modelResolutionPolicy() const;
     BrowserCatalog browserCatalog_;
     BrowserSelection browserSelection_;
     uint64_t catalogRevision_{1}, browserRevision_{};

@@ -61,6 +61,10 @@ struct ResourceRuntime::Impl {
         shaders(manager,graphics,tools,shaderCompile,EmbeddedShaderSourceBaseline),materialPrograms(manager,shaderCompile) {
         CRIMSON_PROFILE_ZONE("Resource runtime catalog registration");
         assets.setMaterialGraphPrograms(&materialPrograms);
+        // Every cold preview descriptor needs this shared shader-family list.
+        // Discover it once during resource initialization, before browser/UI
+        // frames, rather than making the first visible card scan the family.
+        {CRIMSON_PROFILE_ZONE("Material preview dependency preparation");(void)materialPrograms.sourceDependencies();}
         (void)catalog.update(root,assets.catalog());
         catalogRevision=assets.catalogRevision();
         storageRevision=contentStorageRevision(root);
