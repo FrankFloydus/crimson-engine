@@ -181,6 +181,7 @@ public:
     std::vector<EntityId> createModels(const std::vector<ModelPlacement>& models,EntityId parent=NoEntity);
     EntityId createDirectionalLight(const std::string& name = "Directional Light");
     EntityId createPointLight(const std::string& name = "Point Light");
+    EntityId createSpotLight(const std::string& name = "Spot Light");
     EntityId createEnvironment(const std::string& name = "Environment");
     EntityId createPlayer(const std::string& name = "Player");
     EntityId createEnemy(const std::string& name = "Enemy");

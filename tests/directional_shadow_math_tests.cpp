@@ -29,6 +29,23 @@ void atlasChecks() {
     }
     check(!atlasLayout(1024,17,1,2).width&&!atlasLayout(1024,16,5,2).width&&!atlasLayout(1024,0,0,2).width,"Invalid atlas budgets were accepted.");
     check(atlasLayout(1024,16,4,2).width==12336&&atlasLayout(1024,16,4,2).height==12336,"Maximum atlas packing unexpectedly grew.");
+    for(unsigned points=0;points<16;++points)for(unsigned spots=1;spots+points<=16;++spots) {
+        const auto atlas=atlasLayout(1024,points,4,2,spots);
+        check(atlas.width&&atlas.height&&atlas.width<=16384&&atlas.height<=16384,"Mixed Spot atlas exceeded supported extents.");
+        std::set<std::pair<unsigned,unsigned>> occupied;
+        const auto include=[&](const auto& rect) {
+            check(rect.width==1028&&rect.height==1028&&rect.x+rect.width<=atlas.width&&rect.y+rect.height<=atlas.height,
+                "Mixed shadow tile escaped guarded allocation.");
+            check(occupied.emplace(rect.x,rect.y).second,"Spot projection overlapped a Point or directional tile.");
+        };
+        for(unsigned p=0;p<atlas.points.capacity;++p)for(unsigned face=0;face<6;++face)include(point_shadow::tileRect(atlas.points,p,face));
+        for(unsigned s=0;s<spots;++s)include(spotTileRect(atlas,s));
+        for(unsigned c=0;c<2;++c)for(unsigned d=0;d<4;++d)for(unsigned cascade=0;cascade<4;++cascade)include(tileRect(atlas,d,c,cascade));
+    }
+    const auto singleSpot=atlasLayout(1024,0,0,1,1);
+    check(singleSpot.bytes()==std::size_t(1028)*1028*4&&singleSpot.points.capacity==0,
+        "One Spot allocated six cube faces instead of one projective tile.");
+    check(!atlasLayout(1024,16,0,1,1).width&&!spotTileRect(singleSpot,1).width,"Mixed local shadow admission exceeded sixteen.");
     for(unsigned index=0;index<4;++index) {
         const auto transform=casterTile(index);check(transform[0]==.5f&&transform[1]==.5f,"Grouped caster scale is not one quadrant.");
         check(transform[2]==(index%2?.5f:-.5f)&&transform[3]==(index/2?-.5f:.5f),"Top-left cascade quadrant orientation changed.");

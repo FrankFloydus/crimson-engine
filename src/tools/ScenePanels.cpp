@@ -18,6 +18,7 @@
 #include "QuaderInspector.h"
 #include "LightingControls.h"
 #include "LightInspectorControls.h"
+#include "SpotLightInspectorControls.h"
 #include "scene/SceneDocument.h"
 #include "scene/SceneComponents.h"
 #include "scene/SceneOutlinerRows.h"
@@ -51,8 +52,11 @@ enum class Edit { None, Name, InlineName, Visible,
     DirectionEnabled, DirectionIntensity,DirectionIndirectEnergy,DirectionShadows,DirectionDistance,DirectionDepthBias,DirectionNormalBias,DirectionAngularDiameter,
     PointEnabled, PointIntensity, PointRadius, PointNearFalloff, PointSpecular, PointShadows, PointDepthBias, PointNormalBias,
     PointFalloffExponent,PointEdgeSoftness,PointSourceRadius,PointIndirectEnergy,PointAttenuation,
+    SpotEnabled, SpotIntensity, SpotRadius, SpotNearFalloff, SpotSpecular, SpotShadows, SpotDepthBias, SpotNormalBias,
+    SpotFalloffExponent,SpotEdgeSoftness,SpotSourceRadius,SpotIndirectEnergy,SpotAttenuation,
+    SpotInnerAngle,SpotOuterAngle,SpotConeFalloff,
     DirectionReceivers,DirectionCasters,
-    PointReceivers,PointCasters,
+    PointReceivers,PointCasters,SpotReceivers,SpotCasters,
     ModelCastShadows, ModelReceiveShadows,VisualReceiveDecals,ModelShading,
     PrimitiveSizeX,PrimitiveSizeY,PrimitiveSizeZ,PrimitiveRadius,PrimitiveHeight,PrimitiveSides,PrimitiveRings,
     ModelDirectReceivers,ModelCasterScope,
@@ -91,7 +95,7 @@ enum class Edit { None, Name, InlineName, Visible,
     ColliderShape,ColliderSizeX,ColliderSizeY,ColliderSizeZ,ColliderRadius,ColliderHeight,ColliderSource,ColliderVisible,ColliderColor,
     CameraOffset,CameraRotation,CameraFov,CameraNear,CameraFar,
     DecalTint,DecalOpacity,DecalFeather,DecalPriority,
-    LightExtendedFirst,LightExtendedLast=static_cast<int>(LightExtendedFirst)+static_cast<int>(LightInspectorControl::Count)-1 };
+    LightExtendedFirst,LightExtendedLast=static_cast<int>(LightExtendedFirst)+3*static_cast<int>(LightInspectorControl::Count)-1 };
 enum class Panel { None, Outliner, Inspector };
 Panel owner(Edit edit) {
     if (edit==Edit::None) return Panel::None;
@@ -100,8 +104,17 @@ Panel owner(Edit edit) {
 }
 bool transformEdit(Edit edit) { return edit>=Edit::PositionX && edit<=Edit::ScaleZ; }
 bool environmentEdit(Edit edit) { return edit>=Edit::Exposure && edit<=Edit::EnvironmentSsrBias; }
-bool lightRoleEdit(Edit edit) { return edit>=Edit::DirectionReceivers && edit<=Edit::PointCasters; }
 bool lightExtendedEdit(Edit edit) {return edit>=Edit::LightExtendedFirst && edit<=Edit::LightExtendedLast;}
+bool lightExtendedEdit(Edit edit,unsigned kind) {
+    const auto first=static_cast<int>(Edit::LightExtendedFirst)+static_cast<int>(kind)*static_cast<int>(LightInspectorControl::Count);
+    return static_cast<int>(edit)>=first && static_cast<int>(edit)<first+static_cast<int>(LightInspectorControl::Count);
+}
+ScenePointLight& localLight(EntityRecord& entity,bool spot) {
+    return spot?static_cast<ScenePointLight&>(*entity.spot):*entity.point;
+}
+const ScenePointLight& localLight(const EntityRecord& entity,bool spot) {
+    return spot?static_cast<const ScenePointLight&>(*entity.spot):*entity.point;
+}
 struct PanelsState {
     SceneDocument* document{};
     uint64_t documentGeneration{};
@@ -198,6 +211,7 @@ const char* kind(const EntityRecord& record) {
     if (record.particle) return "Particle effect";
     if (record.directional) return "Directional light";
     if (record.point) return "Point light";
+    if (record.spot) return "Spot light";
     if (record.environment) return "Environment";
     return isSceneGroup(record)?"Group":"Empty";
 }
@@ -238,6 +252,7 @@ void addMenu(SceneDocument& document,EntityId parent=NoEntity) {
     if (ImGui::MenuItem("Empty / group")) document.createEmpty("Group");
     if (ImGui::MenuItem("Directional light")) document.createDirectionalLight();
     if (ImGui::MenuItem("Point light")) document.createPointLight();
+    if (ImGui::MenuItem("Spot light")) document.createSpotLight();
     if (ImGui::MenuItem("Environment")) document.createEnvironment();
 }
 struct DraggedEntities { const SceneDocument* document{}; uint64_t generation{}; EntityId source{}; };
@@ -354,27 +369,35 @@ void drawName(SceneDocument& document, PanelsState& state, const EntityRecord& r
         finishEdit(document,state,Edit::Name);
     }
 }
-void lightControls(SceneDocument& document, PanelsState& state, EntityId id, bool directional,const LightPreviewContext& preview) {
+void lightControls(SceneDocument& document, PanelsState& state, EntityId id, bool directional,const LightPreviewContext& preview,bool spot=false) {
     const auto record=document.scene().find(id);
     if (!record) return;
-    ImGui::PushID(directional ? "directional" : "point");
-    const auto enabled=directional ? record->directional->enabled : record->point->enabled;
-    auto intensity=directional ? record->directional->intensity : record->point->intensity;
+    ImGui::PushID(directional ? "directional" : spot ? "spot" : "point");
+    const auto* local=directional?nullptr:&localLight(*record,spot);
+    const unsigned lightKind=directional?0:spot?2:1;
+    const auto localEdit=[spot](Edit property) {
+        if(!spot)return property;
+        if(property>=Edit::PointEnabled && property<=Edit::PointAttenuation)
+            return static_cast<Edit>(static_cast<int>(property)-static_cast<int>(Edit::PointEnabled)+static_cast<int>(Edit::SpotEnabled));
+        return static_cast<Edit>(static_cast<int>(property)-static_cast<int>(Edit::PointReceivers)+static_cast<int>(Edit::SpotReceivers));
+    };
+    const auto enabled=directional ? record->directional->enabled : local->enabled;
+    auto intensity=directional ? record->directional->intensity : local->intensity;
     bool value=enabled;
     const bool enabledChanged=resettableProperty(value,directional?SceneDirectionalLight{}.enabled:ScenePointLight{}.enabled,[&]{return ImGui::Checkbox("Enabled",&value);});
-    propertyEdit(document,state,directional ? Edit::DirectionEnabled : Edit::PointEnabled,"Enable light",enabledChanged,
-        changeEntity(id,[directional,value](auto& entity){if (directional) entity.directional->enabled=value; else entity.point->enabled=value;}));
+    propertyEdit(document,state,directional ? Edit::DirectionEnabled : localEdit(Edit::PointEnabled),"Enable light",enabledChanged,
+        changeEntity(id,[spot,directional,value](auto& entity){if (directional) entity.directional->enabled=value; else localLight(entity,spot).enabled=value;}));
     LightInspectorValue appearance;
     appearance.directional=directional;
-    appearance.colorMode=directional?record->directional->colorMode:record->point->colorMode;
-    appearance.color=directional?record->directional->color:record->point->color;
-    appearance.temperatureKelvin=directional?record->directional->temperatureKelvin:record->point->temperatureKelvin;
-    appearance.intensity=intensity;appearance.radius=directional?0:record->point->radius;
-    appearance.flicker=directional?record->directional->flicker:record->point->flicker;
+    appearance.colorMode=directional?record->directional->colorMode:local->colorMode;
+    appearance.color=directional?record->directional->color:local->color;
+    appearance.temperatureKelvin=directional?record->directional->temperatureKelvin:local->temperatureKelvin;
+    appearance.intensity=intensity;appearance.radius=directional?0:local->radius;
+    appearance.flicker=directional?record->directional->flicker:local->flicker;
     bool activeExtendedDrawn=false;
     const auto extendedEdit=[&](LightInspectorControl control,const char* label,bool changed) {
-        const auto property=static_cast<Edit>(static_cast<unsigned>(Edit::LightExtendedFirst)+static_cast<unsigned>(control));
-        propertyEdit(document,state,property,label,changed,changeEntity(id,[directional,appearance,control](auto& entity) {
+        const auto property=static_cast<Edit>(static_cast<unsigned>(Edit::LightExtendedFirst)+lightKind*static_cast<unsigned>(LightInspectorControl::Count)+static_cast<unsigned>(control));
+        propertyEdit(document,state,property,label,changed,changeEntity(id,[spot,directional,appearance,control](auto& entity) {
             const auto apply=[&](auto& light) {
                 switch(control) {
                     case LightInspectorControl::FixturePreset:
@@ -387,7 +410,7 @@ void lightControls(SceneDocument& document, PanelsState& state, EntityId id, boo
                     default:light.flicker=appearance.flicker;break;
                 }
             };
-            if(directional)apply(*entity.directional);else {apply(*entity.point);if(control==LightInspectorControl::FixturePreset)entity.point->radius=appearance.radius;}
+            if(directional)apply(*entity.directional);else {apply(localLight(entity,spot));if(control==LightInspectorControl::FixturePreset)localLight(entity,spot).radius=appearance.radius;}
         }));
         if(state.active==property && ImGui::GetCurrentContext()->ActiveId)state.lightActiveInput=ImGui::GetCurrentContext()->ActiveId;
         activeExtendedDrawn|=state.active==property;
@@ -395,12 +418,12 @@ void lightControls(SceneDocument& document, PanelsState& state, EntityId id, boo
     drawLightAppearanceControls(appearance,state.lights[id],extendedEdit);
     intensity=appearance.intensity;
     const bool intensityChanged=resettableProperty(intensity,directional?SceneDirectionalLight{}.intensity:ScenePointLight{}.intensity,[&]{return ImGui::DragFloat("Intensity",&intensity,directional ? .02f : .1f,0,10000,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
-    propertyEdit(document,state,directional ? Edit::DirectionIntensity : Edit::PointIntensity,"Change light intensity",intensityChanged,
-        changeEntity(id,[directional,intensity](auto& entity){if (directional) entity.directional->intensity=intensity; else entity.point->intensity=intensity;}));
-    auto indirectEnergy=directional ? record->directional->indirectEnergy : record->point->indirectEnergy;
+    propertyEdit(document,state,directional ? Edit::DirectionIntensity : localEdit(Edit::PointIntensity),"Change light intensity",intensityChanged,
+        changeEntity(id,[spot,directional,intensity](auto& entity){if (directional) entity.directional->intensity=intensity; else localLight(entity,spot).intensity=intensity;}));
+    auto indirectEnergy=directional ? record->directional->indirectEnergy : local->indirectEnergy;
     const bool indirectChanged=drawIndirectEnergyControl(indirectEnergy);
-    propertyEdit(document,state,directional ? Edit::DirectionIndirectEnergy : Edit::PointIndirectEnergy,"Change light GI energy",indirectChanged,
-        changeEntity(id,[directional,indirectEnergy](auto& entity){if(directional)entity.directional->indirectEnergy=indirectEnergy;else entity.point->indirectEnergy=indirectEnergy;}));
+    propertyEdit(document,state,directional ? Edit::DirectionIndirectEnergy : localEdit(Edit::PointIndirectEnergy),"Change light GI energy",indirectChanged,
+        changeEntity(id,[spot,directional,indirectEnergy](auto& entity){if(directional)entity.directional->indirectEnergy=indirectEnergy;else localLight(entity,spot).indirectEnergy=indirectEnergy;}));
     if(directional) {
         auto light=*record->directional;
         const bool shadows=resettableProperty(light.castShadows,SceneDirectionalLight{}.castShadows,[&]{return ImGui::Checkbox("Cast Shadows",&light.castShadows);});
@@ -422,72 +445,83 @@ void lightControls(SceneDocument& document, PanelsState& state, EntityId id, boo
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Apparent light size. Larger values soften shadows with distance from the caster; zero gives hard shadows.");
         ImGui::EndDisabled();
     } else {
-        auto radius=record->point->radius;
-        const bool changed=resettableProperty(radius,ScenePointLight{}.radius,[&]{return ImGui::DragFloat("Radius (m)",&radius,.1f,.01f,100000.f,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
-        propertyEdit(document,state,Edit::PointRadius,"Change point light radius",changed,
-            changeEntity(id,[radius](auto& entity){entity.point->radius=radius;}));
-        auto attenuation=record->point->attenuation;
+        auto radius=local->radius;
+        const bool changed=resettableProperty(radius,ScenePointLight{}.radius,[&]{return ImGui::DragFloat(spot?"Range (m)":"Radius (m)",&radius,.1f,.01f,100000.f,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
+        propertyEdit(document,state,localEdit(Edit::PointRadius),"Change local light radius",changed,
+            changeEntity(id,[spot,radius](auto& entity){localLight(entity,spot).radius=radius;}));
+        if(spot) {
+            auto cone=*record->spot;
+            drawSpotConeControls(cone,[&](SpotConeControl control,const char* label,bool changed) {
+                const auto property=control==SpotConeControl::InnerAngle?Edit::SpotInnerAngle:
+                    control==SpotConeControl::OuterAngle?Edit::SpotOuterAngle:Edit::SpotConeFalloff;
+                propertyEdit(document,state,property,label,changed,changeEntity(id,[cone](auto& entity) {
+                    entity.spot->innerAngle=cone.innerAngle;entity.spot->outerAngle=cone.outerAngle;entity.spot->coneFalloff=cone.coneFalloff;
+                }));
+            });
+        }
+        auto attenuation=local->attenuation;
         const bool attenuationChanged=resettableProperty(attenuation,ScenePointLight{}.attenuation,[&]{return ImGui::SliderFloat("Attenuation",&attenuation,-10,10,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
-        propertyEdit(document,state,Edit::PointAttenuation,"Change point light attenuation",attenuationChanged,
-            changeEntity(id,[attenuation](auto& entity){entity.point->attenuation=attenuation;}));
+        propertyEdit(document,state,localEdit(Edit::PointAttenuation),"Change local light attenuation",attenuationChanged,
+            changeEntity(id,[spot,attenuation](auto& entity){localLight(entity,spot).attenuation=attenuation;}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Distance decay: 0 has no distance decay, 1 is inverse distance, and 2 is inverse square. Range Falloff still fades the range boundary.");
-        auto nearFalloff=record->point->nearFalloffRadius;
+        auto nearFalloff=local->nearFalloffRadius;
         const bool nearChanged=resettableProperty(nearFalloff,ScenePointLight{}.nearFalloffRadius,[&]{return ImGui::DragFloat("Near Falloff Radius (m)",&nearFalloff,.05f,0,100000.f,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
-        propertyEdit(document,state,Edit::PointNearFalloff,"Change point light near falloff",nearChanged,
-            changeEntity(id,[nearFalloff](auto& entity){entity.point->nearFalloffRadius=nearFalloff;}));
+        propertyEdit(document,state,localEdit(Edit::PointNearFalloff),"Change local light near falloff",nearChanged,
+            changeEntity(id,[spot,nearFalloff](auto& entity){localLight(entity,spot).nearFalloffRadius=nearFalloff;}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Smooth brightness near the light. Zero retains inverse-square falloff.");
-        auto specular=record->point->specularStrength;
+        auto specular=local->specularStrength;
         const bool specularChanged=resettableProperty(specular,ScenePointLight{}.specularStrength,[&]{return ImGui::SliderFloat("Specular Scale",&specular,0,1,"%.2f");});
-        propertyEdit(document,state,Edit::PointSpecular,"Change point light specular scale",specularChanged,
-            changeEntity(id,[specular](auto& entity){entity.point->specularStrength=specular;}));
+        propertyEdit(document,state,localEdit(Edit::PointSpecular),"Change local light specular scale",specularChanged,
+            changeEntity(id,[spot,specular](auto& entity){localLight(entity,spot).specularStrength=specular;}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Scale this light's shiny highlights without changing diffuse illumination.");
-        auto exponent=record->point->rangeFalloffExponent;
+        auto exponent=local->rangeFalloffExponent;
         const bool exponentChanged=resettableProperty(exponent,ScenePointLight{}.rangeFalloffExponent,[&]{return ImGui::SliderFloat("Range Falloff",&exponent,.25f,8,"%.2f");});
-        propertyEdit(document,state,Edit::PointFalloffExponent,"Change point light range falloff",exponentChanged,
-            changeEntity(id,[exponent](auto& entity){entity.point->rangeFalloffExponent=exponent;}));
-        auto softness=record->point->edgeSoftness;
+        propertyEdit(document,state,localEdit(Edit::PointFalloffExponent),"Change local light range falloff",exponentChanged,
+            changeEntity(id,[spot,exponent](auto& entity){localLight(entity,spot).rangeFalloffExponent=exponent;}));
+        auto softness=local->edgeSoftness;
         const bool softnessChanged=resettableProperty(softness,ScenePointLight{}.edgeSoftness,[&]{return ImGui::SliderFloat("Edge Softness",&softness,.05f,1,"%.2f");});
-        propertyEdit(document,state,Edit::PointEdgeSoftness,"Change point light edge softness",softnessChanged,
-            changeEntity(id,[softness](auto& entity){entity.point->edgeSoftness=softness;}));
-        auto sourceRadius=record->point->sourceRadius;
+        propertyEdit(document,state,localEdit(Edit::PointEdgeSoftness),"Change local light edge softness",softnessChanged,
+            changeEntity(id,[spot,softness](auto& entity){localLight(entity,spot).edgeSoftness=softness;}));
+        auto sourceRadius=local->sourceRadius;
         const bool sourceRadiusChanged=resettableProperty(sourceRadius,ScenePointLight{}.sourceRadius,[&]{return ImGui::DragFloat("Source Radius (m)",&sourceRadius,.05f,0,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
-        propertyEdit(document,state,Edit::PointSourceRadius,"Change point light source radius",sourceRadiusChanged,
-            changeEntity(id,[sourceRadius](auto& entity){entity.point->sourceRadius=sourceRadius;}));
+        propertyEdit(document,state,localEdit(Edit::PointSourceRadius),"Change local light source radius",sourceRadiusChanged,
+            changeEntity(id,[spot,sourceRadius](auto& entity){localLight(entity,spot).sourceRadius=sourceRadius;}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Larger source sizes soften shadows and broaden specular highlights. Zero retains a punctual source.");
-        auto shadows=record->point->castShadows;
+        auto shadows=local->castShadows;
         const bool shadowChanged=resettableProperty(shadows,ScenePointLight{}.castShadows,[&]{return ImGui::Checkbox("Cast Shadows",&shadows);});
-        propertyEdit(document,state,Edit::PointShadows,"Toggle point shadows",shadowChanged,
-            changeEntity(id,[shadows](auto& entity){entity.point->castShadows=shadows;}));
+        propertyEdit(document,state,localEdit(Edit::PointShadows),"Toggle local shadows",shadowChanged,
+            changeEntity(id,[spot,shadows](auto& entity){localLight(entity,spot).castShadows=shadows;}));
         ImGui::BeginDisabled(!shadows);
-        auto depthBias=record->point->shadowDepthBias;
+        auto depthBias=local->shadowDepthBias;
         const bool depthChanged=resettableProperty(depthBias,ScenePointLight{}.shadowDepthBias,[&]{return ImGui::DragFloat("Depth Bias (m)",&depthBias,.001f,0,std::numeric_limits<float>::max(),"%.4f",ImGuiSliderFlags_AlwaysClamp);});
-        propertyEdit(document,state,Edit::PointDepthBias,"Change point shadow depth bias",depthChanged,
-            changeEntity(id,[depthBias](auto& entity){entity.point->shadowDepthBias=depthBias;}));
-        auto normalBias=record->point->shadowNormalBias;
+        propertyEdit(document,state,localEdit(Edit::PointDepthBias),"Change local shadow depth bias",depthChanged,
+            changeEntity(id,[spot,depthBias](auto& entity){localLight(entity,spot).shadowDepthBias=depthBias;}));
+        auto normalBias=local->shadowNormalBias;
         const bool normalChanged=resettableProperty(normalBias,ScenePointLight{}.shadowNormalBias,[&]{return ImGui::DragFloat("Normal Bias (texels)",&normalBias,.05f,0,std::numeric_limits<float>::max(),"%.2f",ImGuiSliderFlags_AlwaysClamp);});
-        propertyEdit(document,state,Edit::PointNormalBias,"Change point shadow normal bias",normalChanged,
-            changeEntity(id,[normalBias](auto& entity){entity.point->shadowNormalBias=normalBias;}));
+        propertyEdit(document,state,localEdit(Edit::PointNormalBias),"Change local shadow normal bias",normalChanged,
+            changeEntity(id,[spot,normalBias](auto& entity){localLight(entity,spot).shadowNormalBias=normalBias;}));
         ImGui::EndDisabled();
     }
-    auto roles=directional?record->directional->roles:record->point->roles;
+    auto roles=directional?record->directional->roles:local->roles;
     bool activeRoleDrawn=false;
     const auto roleEdit=[&](Edit property,const char* label,bool changed) {
-        propertyEdit(document,state,property,label,changed,changeEntity(id,[directional,roles](auto& entity){
-            if(directional)entity.directional->roles=roles;else entity.point->roles=roles;
+        propertyEdit(document,state,property,label,changed,changeEntity(id,[spot,directional,roles](auto& entity){
+            if(directional)entity.directional->roles=roles;else localLight(entity,spot).roles=roles;
         }));
         activeRoleDrawn|=state.active==property;
     };
     if(ImGui::TreeNode("Advanced Lighting")) {
-        roleEdit(directional?Edit::DirectionReceivers:Edit::PointReceivers,"Change direct-light receivers",
+        roleEdit(directional?Edit::DirectionReceivers:localEdit(Edit::PointReceivers),"Change direct-light receivers",
             drawLightingMaskControl("Affect",roles.receiverMask));
-        roleEdit(directional?Edit::DirectionCasters:Edit::PointCasters,"Change light shadow casters",
+        roleEdit(directional?Edit::DirectionCasters:localEdit(Edit::PointCasters),"Change light shadow casters",
             drawLightingMaskControl("Shadow Casters",roles.shadowCasterMask));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Meshes allowed to block THIS light, independently of lit receivers. Enable Character for player shadows from this light.");
         ImGui::TreePop();
     }
-    if(lightRoleEdit(state.active) && (!activeRoleDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
+    if(state.active>=(directional?Edit::DirectionReceivers:localEdit(Edit::PointReceivers)) &&
+       state.active<=(directional?Edit::DirectionCasters:localEdit(Edit::PointCasters)) && (!activeRoleDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
     drawLightFlickerControls(appearance,state.lights[id],extendedEdit,preview);
-    if(lightExtendedEdit(state.active) && (!activeExtendedDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
+    if(lightExtendedEdit(state.active,lightKind) && (!activeExtendedDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
     ImGui::PopID();
 }
 void materialSlotControl(SceneDocument& document,PanelsState& state,const EntityRecord& record,const ModelAsset& model,
@@ -1655,12 +1689,17 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
             if(section==SceneComponentKind::Directional && record.directional) {
                 if(componentHeader(state,record,SceneComponentKind::Directional))lightControls(document,state,record.id,true,lights);
                 else if((state.active>=Edit::DirectionEnabled && state.active<=Edit::DirectionAngularDiameter) ||
-                        (state.active>=Edit::DirectionReceivers && state.active<=Edit::DirectionCasters) || lightExtendedEdit(state.active))finishEdit(document,state,state.active);
+                        (state.active>=Edit::DirectionReceivers && state.active<=Edit::DirectionCasters) || lightExtendedEdit(state.active,0))finishEdit(document,state,state.active);
             }
             if(section==SceneComponentKind::Point && record.point) {
                 if(componentHeader(state,record,SceneComponentKind::Point))lightControls(document,state,record.id,false,lights);
                 else if((state.active>=Edit::PointEnabled && state.active<=Edit::PointAttenuation) ||
-                        (state.active>=Edit::PointReceivers && state.active<=Edit::PointCasters) || lightExtendedEdit(state.active))finishEdit(document,state,state.active);
+                        (state.active>=Edit::PointReceivers && state.active<=Edit::PointCasters) || lightExtendedEdit(state.active,1))finishEdit(document,state,state.active);
+            }
+            if(section==SceneComponentKind::Spot && record.spot) {
+                if(componentHeader(state,record,SceneComponentKind::Spot))lightControls(document,state,record.id,false,lights,true);
+                else if((state.active>=Edit::SpotEnabled && state.active<=Edit::SpotConeFalloff) ||
+                        (state.active>=Edit::SpotReceivers && state.active<=Edit::SpotCasters) || lightExtendedEdit(state.active,2))finishEdit(document,state,state.active);
             }
             if(section==SceneComponentKind::Subdivision&&record.meshPaint&&componentHeader(state,record,SceneComponentKind::Subdivision)) {
                 if(state.pendingSubdivision&&(state.pendingSubdivision->first!=record.id||state.pendingSubdivisionRevision!=document.scene().revision()))state.pendingSubdivision.reset();

@@ -13,7 +13,7 @@ inline EntityId viewportSelectionEntity(const Scene& scene,EntityId hit) {
 }
 
 inline bool viewportEntityHasCenterMarker(const EntityRecord& entity) {
-    return entity.directional || entity.point || entity.particle || entity.decal ||
+    return entity.directional || entity.point || entity.spot || entity.particle || entity.decal ||
         entity.camera;
 }
 inline bool viewportEntityHasMarker(const EntityRecord& entity) {

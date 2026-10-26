@@ -49,6 +49,7 @@ struct LightFlickerSettings {
     bool operator==(const LightFlickerSettings&) const = default;
 };
 struct ScenePointLight;
+struct SceneSpotLight;
 struct SceneDirectionalLight;
 struct LightFixturePreset {
     std::string_view id,category,name;
@@ -70,6 +71,7 @@ bool validLightFlicker(const LightFlickerSettings&);
 std::span<const LightFixturePreset> lightFixturePresets();
 std::span<const LightFlickerPreset> lightFlickerPresets();
 bool applyLightFixturePreset(ScenePointLight&,std::string_view id);
+bool applyLightFixturePreset(SceneSpotLight&,std::string_view id);
 bool applyLightFixturePreset(SceneDirectionalLight&,std::string_view id);
 // Applies behavior tuning, retaining the independent enabled switch, seed and offset.
 bool applyLightFlickerPreset(LightFlickerSettings&,std::string_view id);

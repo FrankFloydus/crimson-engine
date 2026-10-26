@@ -82,8 +82,10 @@ void fixtureCatalog() {
         point.flicker.enabled=true;point.flicker.seed=77;point.flicker.timeOffset=-3;
         SceneDirectionalLight directional;directional.color={.4f,.3f,.2f};directional.temperatureKelvin=4444;directional.enabled=false;directional.castShadows=false;
         directional.shadowDistance=321;directional.shadowAngularDiameter=1.4f;directional.indirectEnergy=3;directional.flicker=point.flicker;
+        SceneSpotLight spot;static_cast<ScenePointLight&>(spot)=point;spot.innerAngle=12;spot.outerAngle=67;spot.coneFalloff=2.5f;
         if(preset.directional) {
             ++directions;const auto before=point;require(!applyLightFixturePreset(point,preset.id)&&point==before,"Directional fixture changed a point light.");
+            const auto beforeSpot=spot;require(!applyLightFixturePreset(spot,preset.id)&&spot==beforeSpot,"Directional fixture changed a spot light.");
             auto expected=directional;expected.colorMode=preset.colorMode;expected.intensity=preset.intensity;
             if(preset.colorMode==LightColorMode::Color)expected.color=preset.color;else expected.temperatureKelvin=preset.temperatureKelvin;
             require(applyLightFixturePreset(directional,preset.id)&&directional==expected,"Directional fixture changed unrelated or inactive properties.");
@@ -93,6 +95,8 @@ void fixtureCatalog() {
             auto expected=point;expected.colorMode=preset.colorMode;expected.intensity=preset.intensity;expected.radius=preset.radius;
             if(preset.colorMode==LightColorMode::Color)expected.color=preset.color;else expected.temperatureKelvin=preset.temperatureKelvin;
             require(applyLightFixturePreset(point,preset.id)&&point==expected,"Point fixture changed unrelated or inactive properties.");
+            auto expectedSpot=spot;static_cast<ScenePointLight&>(expectedSpot)=expected;
+            require(applyLightFixturePreset(spot,preset.id)&&spot==expectedSpot,"Spot fixture did not share point calibration or changed cone/shadow/flicker settings.");
         }
     }
     require(points==55&&directions==10,"Fixture type coverage changed.");

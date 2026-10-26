@@ -4,7 +4,9 @@
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "crimson-renderer/Picking.h"
 #include "crimson-renderer/PointShadowMath.h"
+#include "crimson-renderer/MaterialGraphGpu.h"
 #include "crimson-renderer/DirectionalShadowMath.h"
+#include <crimson/renderer/forward/SpotLightMath.h>
 #include "resources/ShaderCompiler.h"
 #include "resources/ShaderReloadSession.h"
 #include "ShaderSourceBaseline.h"
@@ -26,6 +28,7 @@
 #include <numeric>
 #include <limits>
 #include <set>
+#include <string_view>
 #include "point_light.sh"
 
 namespace {
@@ -448,7 +451,219 @@ template<class Read> void directionalSplitContinuity(Renderer& renderer,const st
     renderer.resizeViewport(ImageSize,ImageSize);renderer.resizeGameViewport(ImageSize,ImageSize);
 }
 
-void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
+template<class Read,class Prepare>void spotLightChecks(Renderer& renderer,const std::shared_ptr<ModelAsset>& mesh,const Read& read,const Prepare& prepare) {
+    renderer.setGridVisible(false);
+    SceneSettings settings;settings.environment.enabled=false;settings.environment.ambientLight.source=AmbientLightSource::Disabled;
+    settings.environment.glow.enabled=false;settings.environment.toneMapping=ToneMapping::Linear;settings.exposure=1;
+    settings.camera.position={0,0,10};settings.camera.target={0,0,0};settings.camera.fov=60;
+    std::vector<ModelMaterial> materials=mesh->materials;materials[0].doubleSided=true;
+    RenderModelInstance receiver;receiver.entityId=8101;receiver.model.asset=mesh;
+    receiver.model.transform=math::scaling({6,6,1});receiver.materials=&materials;receiver.forceFullDetail=true;
+    receiver.lightingScopes={lighting_scope::World,lighting_scope::World};
+    auto caster=receiver;caster.entityId=8102;caster.model.transform=math::translation({0,0,2})*math::scaling({.35f,.35f,1});
+    std::vector<ModelMaterial> casterMaterials=materials;caster.materials=&casterMaterials;
+    std::vector<ModelMaterialTextures> casterTextures(1);caster.textures=&casterTextures;
+    std::array<RenderModelInstance,2> casters;
+    std::array<PointLight,2> lights;
+    auto& spot=lights[0];spot.entityId=8103;spot.type=LocalLightType::Spot;spot.position={0,0,4};spot.direction={0,0,-1};
+    spot.innerConeAngle=20;spot.outerConeAngle=35;spot.intensity=12;spot.color={1,1,1};spot.radius=12;spot.specularStrength=0;
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&receiver,1);
+    scene.pointLights=std::span(lights.data(),1);scene.shadowWorldId=8100;scene.shadowResolution=512;
+    PointShadowStats stats;
+    const auto capture=[&] {
+        casters={receiver,caster};scene.shadowInstances=casters;
+        renderer.renderGame(scene);check(renderer.shadowStatus().empty(),renderer.shadowStatus());stats=renderer.shadowStats();
+        return read(renderer.gameViewportTexture());
+    };
+    const auto clear=capture();const auto center=brightness(clear,settings.camera,{});
+    const auto transition=brightness(clear,settings.camera,{2,0,0});const auto outside=brightness(clear,settings.camera,{3.2f,0,0});
+    check(center>80&&transition>3&&transition<center*.8&&outside<2,
+        "Spot inner plateau, finite outer cone or transition is absent from fixed material lighting.");
+    MaterialAsset authored;authored.id="spot-generated-lit";addMaterialNode(authored.graph,MaterialNodeKind::Output);
+    auto& output=materialOutputNode(authored.graph).output;
+    output.baseColor={.65f,.65f,.65f};output.roughness=1;output.metallic=0;output.specular=0;
+    std::vector<ModelMaterialTextures> generatedTextures(1);generatedTextures[0].graph=prepare(authored);
+    receiver.textures=&generatedTextures;const auto generated=capture();
+    check(brightness(generated,settings.camera,{})>50&&brightness(generated,settings.camera,{3.2f,0,0})<2,
+        "Generated Lit material did not publish the Spot cone/binding contract.");
+    receiver.textures=nullptr;
+    RenderParticle particle;particle.position={};particle.size=12;
+    RenderParticleMaterial sprite;sprite.shading=MaterialShading::StandardPbr;sprite.blend=MaterialBlend::Alpha;
+    sprite.baseColor={.65f,.65f,.65f,1};sprite.specular=0;sprite.roughness=1;
+    scene.instances={};scene.particles=std::span(&particle,1);scene.particleMaterials=std::span(&sprite,1);
+    const auto fixedSprite=capture();
+    check(brightness(fixedSprite,settings.camera,{})>50&&brightness(fixedSprite,settings.camera,{3.2f,0,0})<2,
+        "Lit particle fallback omitted Spot cone attenuation.");
+    output.blend=MaterialBlend::Alpha;sprite.graph=prepare(authored);const auto generatedSprite=capture();
+    check(brightness(generatedSprite,settings.camera,{})>50&&brightness(generatedSprite,settings.camera,{3.2f,0,0})<2,
+        "Generated Lit particle omitted Spot cone attenuation or shader bindings.");
+    scene.instances=std::span(&receiver,1);scene.particles={};scene.particleMaterials={};
+    spot.castShadows=true;const auto shadow=capture();
+    check(stats.renderedFaces==1&&stats.renderedLights==1&&stats.activeLights==1,
+        "A Spot did not render exactly one projective shadow tile.");
+    check(brightness(shadow,settings.camera,{})<center*.2,
+        "Spot projective depth did not shadow its opaque caster.");
+    check(brightness(shadow,settings.camera,{1.5f,0,0})>brightness(clear,settings.camera,{1.5f,0,0})*.95,
+        "Spot shadow escaped finite caster coverage.");
+    capture();check(stats.renderedFaces==0&&stats.cacheHits==1,"An unchanged Spot redrew its shadow map.");
+    {
+        const auto savedLights=lights;const auto savedCaster=caster;
+        // Actual resolved strobe samples alternate exact zero/high intensity.
+        // The off phase must retain completed resident data without admitting
+        // dark lights, allocating an atlas or submitting depth draws.
+        const auto residentBytes=renderer.shadowResidentBytes();
+        for(unsigned pulse=0;pulse<3;++pulse) {
+            spot.intensity=0;const auto off=capture();
+            check(stats.activeLights==0&&stats.renderedFaces==0&&stats.drawCalls==0&&
+                renderer.shadowResidentBytes()==residentBytes&&brightness(off,settings.camera,{})<2,
+                "A zero-intensity Spot strobe sample allocated/rendered work or discarded its resident atlas.");
+            spot.intensity=savedLights[0].intensity;const auto on=capture();
+            check(stats.renderedFaces==0&&stats.cacheHits==1&&brightness(on,settings.camera,{})<center*.2,
+                "A resumed Spot strobe rebuilt its unchanged map or sampled stale content.");
+        }
+        auto point=savedLights[0];point.entityId=8104;point.type=LocalLightType::Point;
+        point.roles.receiverMask=0;point.roles.shadowCasterMask=0;
+        lights={savedLights[0],point};scene.pointLights=lights;capture();
+        const auto mixedBytes=renderer.shadowResidentBytes();
+        for(unsigned pulse=0;pulse<3;++pulse) {
+            lights[0].intensity=lights[1].intensity=0;capture();
+            check(stats.activeLights==0&&stats.renderedFaces==0&&stats.drawCalls==0&&renderer.shadowResidentBytes()==mixedBytes,
+                "An all-off mixed Point/Spot strobe discarded its atlas or submitted shadow work.");
+            lights[1].intensity=point.intensity;capture();
+            check(stats.activeLights==1&&stats.renderedFaces==0&&stats.cacheHits==1&&renderer.shadowResidentBytes()==mixedBytes,
+                "A dark Spot compacted or reallocated an unchanged active Point shadow.");
+            lights[0].intensity=savedLights[0].intensity;capture();
+            check(stats.renderedFaces==0&&stats.cacheHits==2&&renderer.shadowResidentBytes()==mixedBytes,
+                "Mixed local strobe resume lost cached shadow identities.");
+        }
+        lights[0].intensity=lights[1].intensity=0;
+        caster.model.transform=math::translation({.35f,0,2})*math::scaling({.35f,.35f,1});capture();
+        check(stats.renderedFaces==0,"A caster edit during the off interval rendered a dark light.");
+        lights[0].intensity=savedLights[0].intensity;lights[1].intensity=point.intensity;capture();
+        check(stats.renderedFaces==1&&stats.renderedLights==1,
+            "A resumed Spot reused stale caster contents edited during its off interval.");
+        lights[0].enabled=lights[1].enabled=false;capture();
+        check(renderer.shadowResidentBytes()==0,"Disabling the last retained local lights did not release atlas ownership.");
+        lights={savedLights[0],point};capture();lights[0].intensity=lights[1].intensity=0;capture();
+        scene.pointLights={};capture();
+        check(renderer.shadowResidentBytes()==0,"Deleting the last dark local sources retained an unowned atlas.");
+        caster=savedCaster;
+        std::array<PointLight,17> bounded;
+        for(unsigned i=0;i<16;++i) {
+            bounded[i]=savedLights[0];bounded[i].entityId=8200+i;
+            bounded[i].roles.receiverMask=bounded[i].roles.shadowCasterMask=0;
+        }
+        scene.pointLights=std::span(bounded.data(),16);
+        for(unsigned warm=0;warm<6;++warm){capture();if(!stats.pointDeferred)break;}
+        check(stats.activeLights==16&&!stats.pointDeferred,"Dark-resident capacity fixture did not warm sixteen Spots.");
+        for(unsigned i=0;i<16;++i)bounded[i].intensity=0;
+        capture();const auto boundedBytes=renderer.shadowResidentBytes();
+        bounded[16]=savedLights[0];bounded[16].entityId=8300;scene.pointLights=bounded;
+        const auto admitted=capture();
+        check(stats.activeLights==1&&stats.capacity==16&&stats.renderedFaces==1&&
+            renderer.shadowResidentBytes()==boundedBytes&&brightness(admitted,settings.camera,{})<center*.2,
+            "Sixteen retained dark residents blocked positive admission or exceeded bounded atlas residency.");
+        lights=savedLights;caster=savedCaster;scene.pointLights=std::span(lights.data(),1);capture();
+    }
+    spot.innerConeAngle=10;spot.coneFalloff=2;capture();
+    check(stats.renderedFaces==0&&stats.cacheHits==1,"Appearance-only cone edits invalidated the shadow projection.");
+    spot.outerConeAngle=40;capture();check(stats.renderedFaces==1,"Outer cone edit retained an incompatible shadow projection.");
+    spot.direction={1,0,0};const auto turned=capture();
+    check(stats.renderedFaces==1&&brightness(turned,settings.camera,{})<2,"Spot rotation failed to update light and projection.");
+    spot.direction={0,0,-1};spot.innerConeAngle=20;spot.outerConeAngle=35;spot.coneFalloff=1;
+    receiver.receiveShadows=false;const auto noReceive=capture();receiver.receiveShadows=true;
+    check(brightness(noReceive,settings.camera,{})>center*.95,"Spot ignored Receive Shadows.");
+    caster.castShadows=false;const auto noCast=capture();caster.castShadows=true;
+    check(brightness(noCast,settings.camera,{})>center*.95,"Spot retained a caster with Cast Shadows disabled.");
+    spot.roles.shadowCasterMask=lighting_scope::Character;const auto maskedScope=capture();spot.roles.shadowCasterMask=lighting_scope::All;
+    check(brightness(maskedScope,settings.camera,{})>center*.95,"Spot ignored its caster mask.");
+    spot.roles.receiverMask=0;const auto noDirect=capture();spot.roles.receiverMask=lighting_scope::All;
+    check(brightness(noDirect,settings.camera,{})<2,"Spot ignored its receiver mask.");
+    // The same alpha-coverage program serves point cubes and spot projections.
+    constexpr std::array<std::uint8_t,8> maskPixels{255,255,255,0,255,255,255,255};
+    TextureOwner mask{bgfx::createTexture2D(2,1,false,1,bgfx::TextureFormat::RGBA8,0,bgfx::copy(maskPixels.data(),8))};
+    check(bgfx::isValid(mask.handle),"Spot mask texture allocation failed.");
+    casterTextures[0].handles[0]=mask.handle;casterTextures[0].flags[0]=BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT;
+    casterMaterials[0].alphaMask=true;const auto alpha=capture();
+    check(std::abs(brightness(alpha,settings.camera,{-.4f,0,0})-brightness(alpha,settings.camera,{.4f,0,0}))>40,
+        "Spot shadow omitted its masked caster's alpha silhouette.");
+    casterMaterials[0].alphaMask=false;casterTextures[0].handles[0]=BGFX_INVALID_HANDLE;
+    spot.sourceRadius=.6f;const auto soft=capture();
+    check(brightness(soft,settings.camera,{})<center*.25&&brightness(soft,settings.camera,{1.8f,0,0})>brightness(clear,settings.camera,{1.8f,0,0})*.9,
+        "Spot PCSS lost its bounded umbra or illuminated finite edge.");
+    unsigned softPixels=0;
+    for(unsigned i=0;i<20;++i) {
+        const Vec3 point{.4f+.05f*i,0,0};const auto lit=brightness(clear,settings.camera,point);
+        const auto ratio=brightness(soft,settings.camera,point)/std::max(1.,lit);
+        if(ratio>.12&&ratio<.88)++softPixels;
+    }
+    check(softPixels>=2,"Nonzero Source Radius did not produce a contact-hardening Spot penumbra.");
+    spot.sourceRadius=0;const auto savedSpot=spot;
+    PointLight point=savedSpot;point.type=LocalLightType::Point;point.entityId=8104;point.roles.receiverMask=0;point.roles.shadowCasterMask=0;
+    lights={point,savedSpot};scene.pointLights=lights;const auto mixed=capture();
+    check(stats.renderedFaces==7&&stats.activeLights==2&&brightness(mixed,settings.camera,{})<center*.2,
+        "Mixed Point/Spot atlas lost independent cube and projective shadow storage.");
+    std::swap(lights[0],lights[1]);const auto reordered=capture();
+    check(stats.renderedFaces==0&&stats.cacheHits==2&&maximumDifference(mixed,reordered)<=1,
+        "Local-light extraction order changed Spot shadow identity or selected-slot uniforms.");
+    // Replacing the type on the same persistent entity must invalidate both
+    // its allocation and projection, then cache the new representation.
+    lights[0].type=LocalLightType::Point;const auto convertedPoint=capture();
+    check(stats.renderedFaces>=6&&brightness(convertedPoint,settings.camera,{})<center*.2,
+        "Same-identity Spot-to-Point replacement sampled its old projective tile.");
+    lights[0].type=LocalLightType::Spot;const auto convertedSpot=capture();
+    check(stats.renderedFaces>=1&&brightness(convertedSpot,settings.camera,{})<center*.2,
+        "Same-identity Point-to-Spot replacement sampled its old cube tile.");
+    capture();check(stats.renderedFaces==0&&stats.cacheHits==2,"Converted Spot did not retain its completed map.");
+    scene.pointLights=std::span(lights.data(),1);const auto compacted=capture();
+    check(brightness(compacted,settings.camera,{})<center*.2,"Removing a neighboring local light corrupted Spot allocation.");
+    auto decoy=savedSpot;decoy.roles.receiverMask=0;decoy.roles.shadowCasterMask=0;
+    auto secondSpot=savedSpot;secondSpot.entityId=8104;
+    lights={decoy,secondSpot};scene.pointLights=lights;capture();
+    scene.pointLights=std::span(lights.data()+1,1);const auto groupCompacted=capture();
+    check(stats.renderedFaces==1&&brightness(groupCompacted,settings.camera,{})<center*.2,
+        "Removing an earlier Spot allocation sampled a cleared neighbor instead of its moved tile.");
+    scene.pointLights=std::span(lights.data(),1);
+    // A steep self-shadowing receiver has no distinct blockers. Positive Source
+    // Radius must not classify its texel-center plane depths as an occluder.
+    spot= savedSpot;spot.shadowDepthBias=0;spot.shadowNormalBias=0;spot.sourceRadius=.4f;
+    caster.castShadows=false;
+    receiver.model.transform=math::rotation(math::axisAngle({0,1,0},1.0471975512f))*math::scaling({6,6,1});
+    spot.castShadows=false;const auto slopeClear=capture();spot.castShadows=true;const auto slopeShadow=capture();
+    check(maximumDifference(slopeClear,slopeShadow)<=2,
+        "Positive-radius Spot blocker search falsely shadowed its steep planar receiver at zero bias.");
+    receiver.model.transform=math::scaling({6,6,1});caster.castShadows=true;
+    // At the smallest accepted angle, reframe a physically small receiver so
+    // the inner/guard projection relationship is visible in native pixels.
+    spot=savedSpot;spot.innerConeAngle=.05f;spot.outerConeAngle=.1f;
+    settings.camera.position={0,0,.1f};settings.camera.target={};settings.camera.nearPlane=.0001f;
+    receiver.model.transform=math::scaling({.04f,.04f,1});caster.model.transform=math::translation({0,0,2})*math::scaling({.001f,.001f,1});
+    spot.castShadows=false;const auto narrowClear=capture();spot.castShadows=true;const auto narrowShadow=capture();
+    check(brightness(narrowClear,settings.camera,{})>50&&brightness(narrowShadow,settings.camera,{})<brightness(narrowClear,settings.camera,{})*.3,
+        "Minimum-angle Spot depth projection did not match its cone footprint.");
+    // Non-axis orientation must stay coherent under a large world translation.
+    spot=savedSpot;spot.position={-.548f,1.028f,4};spot.direction=math::normalized(Vec3{.137f,-.257f,-1});
+    settings.camera.position={0,0,10};settings.camera.target={};settings.camera.nearPlane=.01f;
+    receiver.model.transform=math::scaling({6,6,1});caster.model.transform=math::translation({-.274f,.514f,2})*math::scaling({.35f,.35f,1});
+    const auto originImage=capture();const Vec3 offset{10000,10000,10000};
+    spot.position=spot.position+offset;settings.camera.position=settings.camera.position+offset;settings.camera.target=offset;
+    receiver.model.transform=math::translation(offset)*receiver.model.transform;caster.model.transform=math::translation(offset)*caster.model.transform;
+    const auto translatedImage=capture();double meanDifference=0;
+    for(std::size_t i=0;i<originImage.rgba.size();++i)meanDifference+=std::abs(int(originImage.rgba[i])-int(translatedImage.rgba[i]));
+    meanDifference/=originImage.rgba.size();
+    check(meanDifference<=1.5&&brightness(translatedImage,settings.camera,offset)<center*.3,
+        "World translation changed the non-axis Spot cone or shadow orientation.");
+    spot=savedSpot;settings.camera.position={0,0,10};settings.camera.target={};
+    receiver.model.transform=math::scaling({6,6,1});caster.model.transform=math::translation({0,0,2})*math::scaling({.35f,.35f,1});
+    // Scene/Game reuse one world-frame update budget and the same immutable atlas.
+    caster.model.transform=math::translation({.15f,0,2})*math::scaling({.35f,.35f,1});casters={receiver,caster};scene.shadowInstances=casters;
+    renderer.render(scene);renderer.renderGame(scene);const auto both=renderer.shadowStats();
+    check(both.renderedLights<=2&&both.renderedFaces<=7,"Scene and Game duplicated local shadow update work.");
+    read(renderer.gameViewportTexture());
+    renderer.setGridVisible(true);
+    std::cout<<"Spot cone pixels, one-tile cached projective shadows, masks, Source Radius PCSS, mixed Point/Spot atlas and extraction-order checks passed.\n";
+}
+void exercise(SDL_Window* window,const ShaderCompileConfig& config,bool spotOnly=false) {
     // Destinations outlive Renderer even if a readback times out.
     std::vector<std::shared_ptr<DecodedImage>> destinations;
     ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));ImGuiOwner context;ImGuiBgfx tools(renderer);
@@ -470,6 +685,24 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
         throw std::runtime_error("Shadow fixture readback timed out.");
     };
     const auto mesh=quad();check(renderer.prepareModel(*mesh),renderer.modelStatus());
+    if(spotOnly){
+        MaterialGraphPrograms programs(resources,config);
+        const auto prepare=[&](const MaterialAsset& material) {
+            const auto shader=generateMaterialGraphShader(material);MaterialGraphProgramResult result;
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{120};
+            do {
+                tick();result=programs.request(shader,ResourcePriority::Preview,MaterialGraphUsage::Surface);
+                if(!result.current&&!result.diagnostic.empty()&&result.diagnostic!="Compiling material graph...")throw std::runtime_error(result.diagnostic);
+                if(!result.current)std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }while(!result.current&&std::chrono::steady_clock::now()<deadline);
+            check(result.current&&bool(result.programs),"Spot generated material publication timed out.");
+            auto packet=std::make_shared<PreparedGraphMaterial>();packet->programs=result.programs;packet->uniforms=shader.uniforms;packet->sources=shader.textures;
+            packet->runtimeGraph=shader.runtimeGraph;packet->runtimeParameters=shader.runtimeParameters;packet->dynamicCoverage=shader.dynamicCoverage;
+            packet->shading=materialOutputNode(material.graph).output.shading;packet->blend=materialOutputNode(material.graph).output.blend;
+            packet->signature=result.programs->signature;return packet;
+        };
+        spotLightChecks(renderer,mesh,read,prepare);resources.stop();frame=renderer.drainPending(frame);return;
+    }
     touchingCorner(renderer,config,mesh,read);
     // The exposure-independent editor grid is not a shadow receiver. Isolate
     // the room's material pixels before comparing them with triangle rays.
@@ -587,14 +820,21 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     caster.model.transform=math::translation(right*.1)*caster.model.transform;capture();
     check(submittedStats.renderedFaces==6,"Caster movement did not invalidate all six faces.");
     check(renderer.streamingSignature()==streamingSignature,"Shadow-only caster pose changed the Scene picking resource signature.");orient(5);capture();
-    check(renderer.requestPick({1,1,1,ImageSize/2,ImageSize/2,renderer.pickResourceSignature(PickMode::Selection)}),renderer.pickingStatus());
+    // capture() above updates only Game. Publish this fixture in Scene before
+    // requesting its displayed-frame identity; the preceding room fixture left
+    // a different Scene signature, which must correctly reject a stale pick.
     shadowInstances={receiver,caster};scene.shadowInstances=shadowInstances;renderer.render(scene);tick();
     const auto queuedSignature=renderer.pickResourceSignature(PickMode::Selection);
+    check(renderer.requestPick({1,1,1,ImageSize/2,ImageSize/2,queuedSignature}),renderer.pickingStatus());
+    renderer.render(scene);tick();
     lights[0].position=right*.1;caster.model.transform=math::translation(right*.1)*caster.model.transform;capture();
     std::optional<PickResult> picked;
     for(unsigned i=0;i<120 && !picked;++i){picked=renderer.pollPick(frame);if(!picked)tick();}
     check(picked && picked->entityId==receiver.entityId && picked->resourceSignature==queuedSignature && renderer.pickResourceSignature(PickMode::Selection)==queuedSignature,
-        "Shadow-only light/caster updates invalidated or corrupted a queued Scene pick.");
+        "Shadow-only light/caster updates invalidated or corrupted a queued Scene pick. expected entity="+
+        std::to_string(receiver.entityId)+", returned="+(picked?std::to_string(picked->entityId):"none")+
+        ", queued signature="+std::to_string(queuedSignature)+", returned="+(picked?std::to_string(picked->resourceSignature):"none")+
+        ", current="+std::to_string(renderer.pickResourceSignature(PickMode::Selection))+", status="+renderer.pickingStatus());
     lights[0].position={};orient(5);capture();
     caster.castShadows=false;const auto noCast=capture();check(brightness(noCast,settings.camera,center)>dark+60,"Cast Shadows disabled retained a stale tile.");
     caster.castShadows=true;receiver.receiveShadows=false;const auto noReceive=capture();
@@ -1038,12 +1278,12 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
 }
 int main(int argc,char** argv) {
     try {
-        check(argc==4,"Pass shaderc, engine shader directory and shader include directory.");Temp temp;
+        check(argc==4||(argc==5&&std::string_view(argv[4])=="--spot-only"),"Pass shaderc, engine shader directory and shader include directory, optionally --spot-only.");Temp temp;
         ShaderCompileConfig config{std::filesystem::path(argv[1]),temp.path/"shaders",temp.path/"includes",temp.path/"cache"};
         std::filesystem::copy(std::filesystem::path(argv[2]),config.sourceDirectory,std::filesystem::copy_options::recursive);
         std::filesystem::copy(std::filesystem::path(argv[3]),config.includeDirectory,std::filesystem::copy_options::recursive);
         SdlOwner sdl;std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson point-shadow checks",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
-        check(bool(window),SDL_GetError());exercise(window.get(),config);
+        check(bool(window),SDL_GetError());exercise(window.get(),config,argc==5);
         std::cout<<"Hidden D3D11 point-shadow faces, masks, flags, budgeted admission/fairness, stale-projection rejection, four-cascade Scene/Game continuity/stability, shared views and reload checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

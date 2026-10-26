@@ -504,9 +504,8 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
     }
     require(dependency(modelFragment,"point_light_record.sh"),"Point record layout changes do not invalidate fragment shader reload.");
     {
-        // V6 gives the former reserved record component GI-energy semantics.
-        // Reject V5 programs in either publication direction even though the
-        // six-texel stride itself is unchanged.
+        // V8 adds spot direction and cone data to each local-light record.
+        // Reject the former six-texel V6 binding in either publication direction.
         const auto clusteredSource=read(shadowSource/"clustered_lighting.sh");
         const auto assignmentSource=read(shadowSource/"cs_cluster_lights.sc");
         const auto shadowGeometrySource=read(shadowSource/"shadow_ray_geometry.sh");
@@ -514,14 +513,14 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
         require(dependency(assignment,"point_light_record.sh"),"Point record layout changes do not invalidate compute shader reload.");
         require(preflightComputeShader(assignment.bytes,assignment.bytes,diagnostic),"Current clustered record layout failed its compute contract.");
         const auto requireLayoutOwner=[](const std::string& text) {
-            const std::string declaration="uniform vec4 u_clusterRecordLayoutV6;";
+            const std::string declaration="uniform vec4 u_clusterRecordLayoutV8;";
             require(text.find(declaration)!=std::string::npos,"Clustered ABI fixture has no reflected layout guard.");
-            const std::string stride="int(u_clusterRecordLayoutV6.x)";
+            const std::string stride="int(u_clusterRecordLayoutV8.x)";
             require(text.find(stride)!=std::string::npos,"Clustered layout guard is declared but does not affect record indexing.");
         };
         requireLayoutOwner(clusteredSource);requireLayoutOwner(assignmentSource);
         const auto priorLayoutReferences=[](std::string text) {
-            const std::string current="u_clusterRecordLayoutV6",previous="u_clusterRecordLayoutV5";
+            const std::string current="u_clusterRecordLayoutV8",previous="u_clusterRecordLayoutV6";
             require(text.find(current)!=std::string::npos,"Clustered ABI fixture has no layout reference to rename.");
             for(std::size_t offset=0;(offset=text.find(current,offset))!=std::string::npos;offset+=previous.size()) {
                 text.replace(offset,current.size(),previous);

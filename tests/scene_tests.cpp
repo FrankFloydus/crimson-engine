@@ -624,6 +624,13 @@ void limitsAndHistoryBound() {
     full.select({boundary.back().id});const auto fullHistory=full.history().size();
     require(!full.duplicateSelection() && full.history().size()==fullHistory,"Duplicating beyond point-light capacity was not atomic.");
     sameRecords(full.scene().records(),boundary);
+    // Point and spot sources share the renderer's bounded local-light records.
+    for(std::size_t index=0;index<boundary.size();index+=2) {
+        boundary[index].point.reset();boundary[index].spot.emplace();
+    }
+    Scene::validate(boundary,{});
+    boundary.front().point.emplace();
+    rejects([&]{Scene::validate(boundary,{});});
     document.newScene(); const auto id=document.createEmpty();
     for (unsigned i=0;i<300;++i) {
         auto record=*document.scene().find(id); record.name="Edit " + std::to_string(i);

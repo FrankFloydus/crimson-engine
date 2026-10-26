@@ -41,7 +41,7 @@ struct ExtractedParticle {
 struct ExtractedScene {
     std::vector<ExtractedModel> models;
     std::vector<DirectionalLight> directional;
-    std::vector<PointLight> points;
+    std::vector<PointLight> points; // Shared local-light transport; includes Point and Spot sources.
     SceneEnvironment environment;
     ProceduralSun proceduralSun;
     std::vector<ExtractedParticle> particles;

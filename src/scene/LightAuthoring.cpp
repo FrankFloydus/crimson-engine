@@ -342,6 +342,9 @@ bool applyLightFixturePreset(SceneDirectionalLight& light,std::string_view id) {
     if(found->colorMode==LightColorMode::Color)light.color=found->color;else light.temperatureKelvin=found->temperatureKelvin;
     light.intensity=found->intensity;return true;
 }
+bool applyLightFixturePreset(SceneSpotLight& light,std::string_view id) {
+    return applyLightFixturePreset(static_cast<ScenePointLight&>(light),id);
+}
 bool applyLightFlickerPreset(LightFlickerSettings& settings,std::string_view id) {
     const auto found=std::find_if(flickers.begin(),flickers.end(),[&](const auto& preset){return preset.id==id;});
     if(found==flickers.end())return false;

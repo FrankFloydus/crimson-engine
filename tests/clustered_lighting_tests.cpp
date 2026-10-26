@@ -73,9 +73,8 @@ void emptyDenseAndReuse() {
     check(clusters::build(grid,camera,97,61,lights,config)&&indices==grid.indices,"Near falloff/specular response changed the light's spatial coverage.");
     for(std::size_t i=0;i<headers.size();++i)
         check(headers[i].offset==grid.headers[i].offset&&headers[i].count==grid.headers[i].count,"Near falloff/specular response changed cluster headers.");
-    // Five-texel records end halfway through an 8192-wide row. The reservation
-    // must include that padding before masks, also when the atlas grows wider.
-    check(point_lighting::pointLightRecordRows(4096,8192)==3&&point_lighting::pointLightRecordRows(4096,16384)==2,
+    // The complete eight-texel local-light records precede all cluster masks.
+    check(point_lighting::pointLightRecordRows(4096,8192)==4&&point_lighting::pointLightRecordRows(4096,16384)==2,
         "Light-record reservation failed to include wide-atlas row padding.");
     for(std::uint32_t width:{4,64,4096,8192,16384}) {
         const auto reserved=point_lighting::pointLightRecordRows(4096,width)*width;

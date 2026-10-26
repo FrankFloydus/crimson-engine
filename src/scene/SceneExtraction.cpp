@@ -127,6 +127,16 @@ ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery
                 light->castShadows,light->shadowDepthBias,light->shadowNormalBias,light->roles,
                 light->nearFalloffRadius,light->specularStrength,light->rangeFalloffExponent,light->edgeSoftness,light->sourceRadius,light->attenuation,light->indirectEnergy});
         }
+        if(const auto* light=registry.try_get<SceneSpotLight>(entity)) {
+            const auto presentation=evaluateLightPresentation(light->colorMode,light->color,light->temperatureKelvin,
+                light->intensity,light->radius,light->flicker,lightSeconds.value_or(0),lightSeconds.has_value());
+            PointLight extracted{math::transformPoint(*world,{0,0,0}),presentation.color,presentation.intensity,light->enabled,presentation.radius,id,
+                light->castShadows,light->shadowDepthBias,light->shadowNormalBias,light->roles,
+                light->nearFalloffRadius,light->specularStrength,light->rangeFalloffExponent,light->edgeSoftness,light->sourceRadius,light->attenuation,light->indirectEnergy};
+            extracted.type=LocalLightType::Spot;extracted.direction=directionalLightDirection(*world);
+            extracted.innerConeAngle=light->innerAngle;extracted.outerConeAngle=light->outerAngle;extracted.coneFalloff=light->coneFalloff;
+            result.points.push_back(extracted);
+        }
     }
     return result;
 }
@@ -171,7 +181,7 @@ Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
                 if(!bounds||!bounds->valid||!math::finite(bounds->minimum)||!math::finite(bounds->maximum))bounds=math::transformBounds(Aabb{{-.5f,-.5f,record->decal->projection==SceneDecalProjection::Box?-.5f:0.f},{.5f,.5f,record->decal->projection==SceneDecalProjection::Box?.5f:0.f},true},*world);
                 math::include(result,*bounds);hasBounds=true;
             }
-            if (!hasBounds || record->directional || record->point) {
+            if (!hasBounds || record->directional || record->point || record->spot) {
                 const auto position = math::transformPoint(*world,{0,0,0});
                 if (!math::finite(position)) continue;
                 math::include(result,position-Vec3{.5f,.5f,.5f});

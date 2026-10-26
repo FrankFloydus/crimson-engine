@@ -4,6 +4,7 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -114,6 +115,75 @@ void sourceLightOwnership(){
     require(nextS->colorMode==LightColorMode::Color&&nextS->color==sun.directional->color&&nextS->temperatureKelvin==8000&&nextS->flicker==s.directional->flicker,"Source sync lost directional flicker or temperature memory.");
     const auto after=snapshot(document);require(document.undo()&&snapshot(document)==before&&document.redo()&&snapshot(document)==after,"Source light refresh did not preserve atomic history.");
 }
+void spotLifecycleAndValidation(){
+    Project project;SceneDocument document(project.root);
+    const auto id=document.createSpotLight();require(id&&document.save("Spot lights"),document.status());
+    const auto initial=*document.scene().find(id);require(initial.spot&&!initial.point&&hasSceneComponent(initial,SceneComponentKind::Spot),"Spot creation did not retain its independent component identity.");
+    require(initial.spot->innerAngle==30&&initial.spot->outerAngle==45&&initial.spot->coneFalloff==1,"Spot half-cone defaults changed.");
+    const auto commands=document.history().size();auto tuned=initial;
+    tuned.spot->innerAngle=12;tuned.spot->outerAngle=67;tuned.spot->coneFalloff=2.5f;tuned.spot->radius=14;
+    tuned.spot->color={.2f,.5f,.7f};tuned.spot->colorMode=LightColorMode::Temperature;tuned.spot->temperatureKelvin=3200;
+    tuned.spot->flicker=authoredFlicker();tuned.spot->castShadows=true;tuned.spot->shadowDepthBias=.012f;tuned.spot->shadowNormalBias=2;
+    tuned.spot->roles={lighting_scope::Character,lighting_scope::World};tuned.spot->indirectEnergy=2.75f;
+    require(document.begin("Tune spot cone")&&document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==id)record=tuned;})&&document.commit(),document.status());
+    require(document.history().size()==commands+1&&document.undo()&&sameEntity(initial,*document.scene().find(id))&&document.redo()&&sameEntity(tuned,*document.scene().find(id)),"Spot gesture undo/redo did not retain exact light settings.");
+    require(document.begin("Cancel spot")&&document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==id){record.spot->innerAngle=0;record.spot->outerAngle=89;record.spot->flicker.enabled=false;}}),document.status());
+    document.cancel();require(sameEntity(tuned,*document.scene().find(id)),"Canceled spot edits escaped their transaction.");
+    require(document.save(),document.status());const auto file=project.root/document.assetId();const auto bytes=read(file);const auto valid=Json::parse(bytes);
+    SceneDocument loaded(project.root);require(loaded.load(document.assetId())&&!loaded.dirty()&&read(file)==bytes&&sameEntity(tuned,*loaded.scene().find(id)),"Spot loading wrote defaults or lost cone/point authoring.");
+    loaded.select({id},id);require(loaded.duplicateSelection(),loaded.status());const auto duplicate=loaded.scene().find(loaded.selection().primary);
+    require(duplicate&&duplicate->id!=id&&duplicate->spot==tuned.spot,"Spot duplication lost its authored channels.");
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(loaded),runtime.status());auto changed=*runtime.scene().find(id);changed.spot->outerAngle=80;changed.spot->flicker.seed=42;
+    require(runtime.updateEntity(id,changed)&&sameEntity(tuned,*loaded.scene().find(id))&&!runtime.save(),"Spot Play edits changed the authored scene.");
+    const auto unchanged=snapshot(loaded);const auto rejected=[&](const auto& mutate){auto candidate=*loaded.scene().find(id);mutate(*candidate.spot);return !loaded.updateEntity(id,candidate)&&snapshot(loaded)==unchanged;};
+    for(float bad:{-.1f,90.f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()})
+        require(rejected([&](auto& light){light.outerAngle=bad;}),"Spot accepted an invalid outer half-cone.");
+    require(rejected([](auto& light){light.innerAngle=-1;})&&rejected([](auto& light){light.innerAngle=68;}),"Spot accepted an inverted or negative inner cone.");
+    require(rejected([](auto& light){light.coneFalloff=0;})&&rejected([](auto& light){light.coneFalloff=17;}),"Spot accepted unbounded cone falloff.");
+    require(rejected([](auto& light){light.radius=0;})&&rejected([](auto& light){light.shadowDepthBias=-1;})&&rejected([](auto& light){light.roles.receiverMask=128;}),"Spot skipped shared point/shadow/scope validation.");
+    auto ambiguous=*loaded.scene().find(id);ambiguous.point.emplace();
+    require(!loaded.updateEntity(id,ambiguous)&&snapshot(loaded)==unchanged,"An entity accepted two local-light kinds sharing a shadow identity.");
+    const auto malformed=[&](const auto& change){auto data=valid;for(auto& entity:data["entities"])if(entity.contains("spot"))change(entity["spot"]);
+        writeFileAtomically(file,data.dump());SceneDocument candidate(project.root);return !candidate.load(document.assetId());};
+    for(const auto* field:{"innerAngle","outerAngle","coneFalloff"})for(const auto& bad:Json::array({true,"45",nullptr}))
+        require(malformed([&](auto& light){light[field]=bad;}),"Spot accepted a nonnumeric cone property.");
+    require(malformed([](auto& light){light["innerAngle"]=70;light["outerAngle"]=40;}),"Spot file accepted an inverted cone.");
+    require(malformed([](auto& light){light["flicker"]["enabled"]=1;}),"Spot file skipped strict flicker validation.");
+    auto ambiguousFile=valid;for(auto& entity:ambiguousFile["entities"])if(entity.contains("spot"))entity["point"]=entity["spot"];
+    writeFileAtomically(file,ambiguousFile.dump());SceneDocument ambiguousDocument(project.root);
+    require(!ambiguousDocument.load(document.assetId()),"Scene file accepted point and spot components with the same local-light identity.");
+    auto missing=valid;for(auto& entity:missing["entities"])entity.erase("spot");writeFileAtomically(file,missing.dump());const auto missingBytes=read(file);
+    SceneDocument ordinary(project.root);require(ordinary.load(document.assetId())&&!ordinary.dirty()&&!ordinary.scene().find(id)->spot&&read(file)==missingBytes,"An older scene acquired a spot component or was rewritten on load.");
 }
-int main(){try{persistenceHistoryAndIsolation();missingFieldsAndStrictValidation();sourceLightOwnership();std::cout<<"Light scene persistence, validation, history, duplication, Play isolation and source sync passed.\n";return 0;}
+void spotExtractionAndSourceOwnership(){
+    EntityRecord parent;parent.id=1;parent.name="Affine parent";parent.local=math::translation({3,2,1})*math::eulerRotationXYZ({.1f,.7f,-.2f});
+    EntityRecord spot;spot.id=2;spot.parent=1;spot.name="Spot";spot.local=math::translation({0,4,-2})*math::scaling({-2,3,.5f});spot.local[8]+=.2f;spot.spot.emplace();
+    spot.spot->innerAngle=15;spot.spot->outerAngle=70;spot.spot->coneFalloff=3;spot.spot->radius=14;spot.spot->castShadows=true;
+    spot.spot->nearFalloffRadius=1;spot.spot->sourceRadius=.2f;spot.spot->roles={lighting_scope::Character,lighting_scope::World};spot.spot->indirectEnergy=3;
+    spot.spot->colorMode=LightColorMode::Temperature;spot.spot->temperatureKelvin=3200;spot.spot->flicker=authoredFlicker();
+    const auto authored=spot;Scene scene;scene.apply({spot,parent},{});const auto world=parent.local*spot.local;
+    const auto extracted=extractScene(scene,{},1.25);require(extracted.points.size()==1&&extracted.directional.empty(),"Spot transport duplicated or lost an independent local light.");
+    const auto& light=extracted.points.front();const auto expected=evaluateLightPresentation(spot.spot->colorMode,spot.spot->color,spot.spot->temperatureKelvin,spot.spot->intensity,spot.spot->radius,spot.spot->flicker,1.25,true);
+    const Vec3 negativeWorldZ{-world[8],-world[9],-world[10]};
+    const auto expectedDirection=negativeWorldZ/static_cast<float>(std::sqrt(math::dot(negativeWorldZ,negativeWorldZ)));
+    require(light.type==LocalLightType::Spot&&light.entityId==2&&math::length(light.position-math::transformPoint(world,{}))<1.e-5f&&
+        math::length(light.direction-expectedDirection)<1.e-5f,"Spot position/direction ignored affine parenting or local -Z.");
+    require(light.color==expected.color&&light.intensity==expected.intensity&&light.radius==expected.radius&&light.innerConeAngle==15&&light.outerConeAngle==70&&light.coneFalloff==3,
+        "Spot extraction did not share point flicker or preserve its world-space range and half-cone angles.");
+    require(light.castShadows&&light.roles==spot.spot->roles&&light.indirectEnergy==3&&light.nearFalloffRadius==1&&light.sourceRadius==.2f&&sameEntity(authored,*scene.find(2)),
+        "Spot extraction altered authored channels or lost shadow/scope response.");
+    const auto base=extractScene(scene);require(base.points.front().radius==14&&base.points.front().intensity==35&&base.points.front().color==temperatureColorSrgb(3200),"Static spot extraction retained flicker or transformed range by entity scale.");
+    parent.visible=false;scene.apply({spot,parent},{});require(extractScene(scene).points.empty(),"A hidden spot ancestor continued illuminating the scene.");
+
+    Project project;SceneDocument document(project.root);const auto owner=document.createQuader();QuaderLink link{"C:/authoring/project.quader","project-id","scene-id",1,true,false};
+    EntityRecord source;source.id=1;source.name="Generated model";source.quaderGenerated=QuaderGenerated{owner,"source/model"};
+    require(document.replaceQuaderImport(owner,link,{source}),document.status());EntityId generated{};
+    for(const auto& record:document.scene().records())if(record.quaderGenerated&&record.quaderGenerated->sourceKey=="source/model")generated=record.id;
+    auto record=*document.scene().find(generated);record.spot=spot.spot;require(document.updateEntity(generated,record),document.status());
+    const auto before=snapshot(document);source.local=math::translation({2,0,0});require(document.replaceQuaderImport(owner,link,{source}),document.status());
+    require(document.scene().find(generated)->spot==spot.spot,"A Quader refresh discarded a Crimson-authored spot or changed its inactive color state.");
+    const auto after=snapshot(document);require(document.undo()&&snapshot(document)==before&&document.redo()&&snapshot(document)==after,"Spot source preservation escaped atomic import history.");
+}
+}
+int main(){try{persistenceHistoryAndIsolation();missingFieldsAndStrictValidation();sourceLightOwnership();spotLifecycleAndValidation();spotExtractionAndSourceOwnership();std::cout<<"Light scene persistence, validation, history, duplication, Play isolation and source sync passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

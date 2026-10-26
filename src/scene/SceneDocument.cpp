@@ -44,6 +44,7 @@ void preserveAuthoredActorComponents(EntityRecord& target,const EntityRecord& pr
     target.tags=previous.tags;target.effects=previous.effects;target.decal=previous.decal;target.receiveDecals=previous.receiveDecals;
     target.cameraFollow=previous.cameraFollow;
     if(previous.camera)target.camera=previous.camera;
+    if(!target.spot&&!target.point&&previous.spot)target.spot=previous.spot; // Retain Crimson-only sources without conflicting local-light kinds.
 }
 std::uint32_t readCollisionBits(const Json& value) {
     if(!value.is_number_integer()||(value.is_number_unsigned()?value.get<std::uint64_t>()>UINT32_MAX:value.get<std::int64_t>()<0||value.get<std::int64_t>()>UINT32_MAX))
@@ -356,6 +357,9 @@ template<class Light> Json lightJson(const Light& light) {
     }
     if constexpr(requires { light.shadowDistance; })result["shadowDistance"]=light.shadowDistance;
     if constexpr(requires { light.shadowAngularDiameter; })result["shadowAngularDiameter"]=light.shadowAngularDiameter;
+    if constexpr(requires { light.innerAngle; }) {
+        result["innerAngle"]=light.innerAngle;result["outerAngle"]=light.outerAngle;result["coneFalloff"]=light.coneFalloff;
+    }
     result["roles"]=rolesJson(light.roles);
     if constexpr(requires { light.castShadows; }) {
         result["castShadows"]=light.castShadows;
@@ -387,6 +391,9 @@ template<class Light> Light readLight(const Json& json) {
     }
     if constexpr(requires { result.shadowDistance; })result.shadowDistance=json.value("shadowDistance",100.f);
     if constexpr(requires { result.shadowAngularDiameter; })result.shadowAngularDiameter=readShadowAngularDiameter(json);
+    if constexpr(requires { result.innerAngle; }) {
+        readLightField(json,"innerAngle",result.innerAngle);readLightField(json,"outerAngle",result.outerAngle);readLightField(json,"coneFalloff",result.coneFalloff);
+    }
     if(json.contains("roles"))result.roles=readRoles(json.at("roles"),result.roles);
     if constexpr(requires { result.castShadows; }) {
         result.castShadows=json.value("castShadows",false);
@@ -553,6 +560,7 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
         }
         if (entity.contains("directional")) record.directional = readLight<SceneDirectionalLight>(entity.at("directional"));
         if (entity.contains("point")) record.point = readLight<ScenePointLight>(entity.at("point"));
+        if (entity.contains("spot")) record.spot = readLight<SceneSpotLight>(entity.at("spot"));
         if (version>=2 && entity.contains("environment")) record.environment=readEnvironment(entity.at("environment"),version>=6);
         if (version>=3 && entity.contains("particle")) record.particle=entity.at("particle").get<AssetRef<ParticleEffectAsset>>();
         if(version>=24&&entity.contains("decal"))record.decal=readDecal(entity.at("decal"));
@@ -957,6 +965,7 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if(record.decal)entity["decal"]=decalJson(*record.decal);
         if (record.directional) entity["directional"] = lightJson(*record.directional);
         if (record.point) entity["point"] = lightJson(*record.point);
+        if (record.spot) entity["spot"] = lightJson(*record.spot);
         if (record.environment) entity["environment"]=environmentJson(*record.environment);
         if(record.actor)entity["actor"]=Json::object();
         if(record.movement) {const auto& c=*record.movement;entity["movement"]={{"enabled",c.enabled},
@@ -1015,8 +1024,8 @@ enum EntityField : uint64_t {
     OutlinerStyleField=1ull<<28,NavigationVolumeField=1ull<<29,EnemyField=1ull<<30,
     // Bit31 was authored Attributes; it is permanently reserved.
     TagsField=1ull<<32,EffectsField=1ull<<33,MeshShadingField=1ull<<34,PrimitiveMeshField=1ull<<35,DecalField=1ull<<36,ReceiveDecalsField=1ull<<37,
-    ModelRagdollField=1ull<<38,MeshPaintField=1ull<<39,BlendSettingsField=1ull<<40,
-    AllEntityFields=((1ull<<41)-1)&~(1ull<<31)
+    ModelRagdollField=1ull<<38,MeshPaintField=1ull<<39,BlendSettingsField=1ull<<40,SpotField=1ull<<41,
+    AllEntityFields=((1ull<<42)-1)&~(1ull<<31)
 };
 enum PropertyField : uint32_t { ActiveEnvironment=1u<<0,ActiveCamera=1u<<1,PlayerCharacter=1u<<2 };
 template<class T> bool equalLight(const std::optional<T>& a,const std::optional<T>& b) {
@@ -1027,6 +1036,7 @@ uint64_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.name!=b.name)fields|=Name;if(a.parent!=b.parent)fields|=Parent;if(a.order!=b.order)fields|=Order;
     if(a.local!=b.local)fields|=Local;if(a.model!=b.model)fields|=Model;if(a.particle!=b.particle)fields|=Particle;
     if(!equalLight(a.directional,b.directional))fields|=Directional;if(!equalLight(a.point,b.point))fields|=Point;
+    if(!equalLight(a.spot,b.spot))fields|=SpotField;
     if(a.environment.has_value()!=b.environment.has_value() || (a.environment && !sameEnvironment(*a.environment,*b.environment)))fields|=Environment;
     if(a.actor!=b.actor)fields|=ActorField;if(a.collider!=b.collider)fields|=Collider;if(a.camera!=b.camera)fields|=CameraField;
     if(a.modelMaterials!=b.modelMaterials)fields|=ModelMaterialField;
@@ -1058,6 +1068,7 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint64_t fields)
     if(fields&Name)target.name=source.name;if(fields&Parent)target.parent=source.parent;if(fields&Order)target.order=source.order;
     if(fields&Local)target.local=source.local;if(fields&Model)target.model=source.model;if(fields&Particle)target.particle=source.particle;
     if(fields&Directional)target.directional=source.directional;if(fields&Point)target.point=source.point;
+    if(fields&SpotField)target.spot=source.spot;
     if(fields&Environment)target.environment=source.environment;if(fields&ActorField)target.actor=source.actor;
     if(fields&Collider)target.collider=source.collider;if(fields&CameraField)target.camera=source.camera;
     if(fields&ModelMaterialField)target.modelMaterials=source.modelMaterials;
@@ -1775,6 +1786,13 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
                     record.point->flicker=previous->point->flicker;
                     record.point->colorMode=LightColorMode::Color; // Synchronized source RGB owns the active color.
                 }
+                if(input.spot && record.spot && previous->spot) {
+                    record.spot->roles=previous->spot->roles;
+                    record.spot->indirectEnergy=previous->spot->indirectEnergy;
+                    record.spot->temperatureKelvin=previous->spot->temperatureKelvin;
+                    record.spot->flicker=previous->spot->flicker;
+                    record.spot->colorMode=LightColorMode::Color;
+                }
                 if(record.directional && previous->directional) {
                     record.directional->roles=previous->directional->roles;
                     record.directional->indirectEnergy=previous->directional->indirectEnergy;
@@ -1849,6 +1867,10 @@ EntityId SceneDocument::createDirectionalLight(const std::string& name) {
 EntityId SceneDocument::createPointLight(const std::string& name) {
     EntityRecord record; record.name = name; record.point.emplace();
     return create(std::move(record),"Create point light");
+}
+EntityId SceneDocument::createSpotLight(const std::string& name) {
+    EntityRecord record;record.name=name;record.spot.emplace();
+    return create(std::move(record),"Create spot light");
 }
 EntityId SceneDocument::createEnvironment(const std::string& name) {
     if (!begin("Create environment")) return NoEntity;
@@ -2113,7 +2135,7 @@ bool SceneDocument::ungroupSelection() {
     std::vector<EntityId> groups;
     for (const auto id : scene_.topmost(selection_.ids)) {
         const auto record=scene_.find(id);
-        if (record && !record->model && !record->particle && !record->decal && !record->directional && !record->point && !record->environment &&
+        if (record && !record->model && !record->particle && !record->decal && !record->directional && !record->point && !record->spot && !record->environment &&
             !record->actor && !record->movement && !record->controller && !record->navigation && !record->tags && !record->effects && !record->playerInput && !record->collider && !record->quader && !record->quaderGenerated && !record->camera && !scene_.children(id).empty()) groups.push_back(id);
     }
     if (groups.empty()) { status_="Select a group to ungroup."; return false; }

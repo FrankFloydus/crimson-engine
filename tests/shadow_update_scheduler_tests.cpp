@@ -68,6 +68,19 @@ void priorityAndPersistentOrdering() {
     candidates[0].framesDeferred=std::numeric_limits<std::uint32_t>::max();
     check(updates::select(candidates,{1,6,4}).selected(0),"Saturated age overflowed fairness priority.");
 }
+void mixedProjectionBudgets() {
+    auto candidates=full(true);
+    for(unsigned i=0;i<candidates.size();++i)candidates[i].faceCount=i%2?1:6;
+    const auto selection=updates::select(candidates,{16,10,4});
+    check(selection&&selection.faceCount==10&&selection.count==5,
+        "Mixed local shadows did not charge one Spot projection and six Point faces.");
+    check(selection.selected(0)&&selection.selected(1)&&selection.selected(3)&&selection.selected(5)&&selection.selected(7),
+        "A six-face Point prevented lower-cost complete Spot updates from using the remaining budget.");
+    candidates[0].faceCount=0;
+    check(updates::select(candidates).error==updates::Error::InvalidFaceCount,"Zero-projection update passed validation.");
+    candidates[0].faceCount=7;
+    check(updates::select(candidates).error==updates::Error::InvalidFaceCount,"Unbounded projection update passed validation.");
+}
 
 void fairnessUnderContinuousChanges() {
     // All sixteen lights keep moving. After every update that light is dirty
@@ -124,7 +137,7 @@ void invalidInputsFailClosed() {
 int main() {
     try {
         static_assert(std::is_trivially_copyable_v<updates::Selection>);
-        hardBudgetsAndAtomicFaces();priorityAndPersistentOrdering();fairnessUnderContinuousChanges();invalidInputsFailClosed();
+        hardBudgetsAndAtomicFaces();priorityAndPersistentOrdering();mixedProjectionBudgets();fairnessUnderContinuousChanges();invalidInputsFailClosed();
         std::cout<<"Point-shadow update budget, atomic faces, priority, fairness, reordering and validation checks passed.\n";return 0;
     } catch(const std::exception& exception) {std::cerr<<exception.what()<<'\n';return 1;}
 }

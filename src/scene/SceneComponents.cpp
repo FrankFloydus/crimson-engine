@@ -37,6 +37,7 @@ const char* sceneComponentName(SceneComponentKind kind) {
     case SceneComponentKind::Collider:return "Collision";
     case SceneComponentKind::Directional:return "Directional light";
     case SceneComponentKind::Point:return "Point light";
+    case SceneComponentKind::Spot:return "Spot light";
     case SceneComponentKind::Environment:return "Environment";
     case SceneComponentKind::Particle:return "Particle effect";
     case SceneComponentKind::Quader:return "Quader";

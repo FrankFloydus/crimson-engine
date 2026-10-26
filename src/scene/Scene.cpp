@@ -95,6 +95,7 @@ bool hasSceneComponent(const EntityRecord& record,SceneComponentKind kind) {
     case SceneComponentKind::Collider:return record.collider.has_value();
     case SceneComponentKind::Directional:return record.directional.has_value();
     case SceneComponentKind::Point:return record.point.has_value();
+    case SceneComponentKind::Spot:return record.spot.has_value();
     case SceneComponentKind::Environment:return record.environment.has_value();
     case SceneComponentKind::Particle:return record.particle.has_value();
     case SceneComponentKind::Quader:return record.quader.has_value();
@@ -116,7 +117,7 @@ void normalizeSceneOutlinerStyle(EntityRecord& record) {
 
 bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
     return a.id == b.id && a.name == b.name && a.parent == b.parent && a.order == b.order &&
-        a.local == b.local && a.model == b.model && a.particle == b.particle && a.decal==b.decal && sameLight(a.directional,b.directional) && sameLight(a.point,b.point) &&
+        a.local == b.local && a.model == b.model && a.particle == b.particle && a.decal==b.decal && sameLight(a.directional,b.directional) && sameLight(a.point,b.point) && sameLight(a.spot,b.spot) &&
         a.environment.has_value()==b.environment.has_value() && (!a.environment || sameEnvironment(*a.environment,*b.environment)) &&
         a.actor==b.actor && a.movement==b.movement && a.controller==b.controller && a.navigation==b.navigation && a.enemy==b.enemy && a.navigationVolume==b.navigationVolume &&
         a.tags==b.tags && a.effects==b.effects &&
@@ -166,6 +167,7 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     if (const auto* decal = registry_.try_get<SceneDecal>(entity)) record.decal = *decal;
     if (const auto* light = registry_.try_get<SceneDirectionalLight>(entity)) record.directional = *light;
     if (const auto* light = registry_.try_get<ScenePointLight>(entity)) record.point = *light;
+    if (const auto* light = registry_.try_get<SceneSpotLight>(entity)) record.spot = *light;
     if (const auto* environment = registry_.try_get<SceneEnvironment>(entity)) record.environment = *environment;
     if (registry_.all_of<SceneActor>(entity)) record.actor.emplace();
     if (const auto* value = registry_.try_get<MovementComponent>(entity)) record.movement = *value;
@@ -355,10 +357,12 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             if(!validColor(record.outlinerStyle->color))
                 throw std::runtime_error("Outliner colors require finite RGBA values from zero to one.");
         }
-        validateLight(record.directional); validateLight(record.point);
+        if(record.point&&record.spot)throw std::runtime_error("An entity can have either a point light or a spot light.");
+        validateLight(record.directional); validateLight(record.point); validateLight(record.spot);
         if (!validSurfaceLightingScopes(record.lightingScopes) ||
             (record.directional && !validLightRoles(record.directional->roles)) ||
-            (record.point && !validLightRoles(record.point->roles)))
+            (record.point && !validLightRoles(record.point->roles)) ||
+            (record.spot && !validLightRoles(record.spot->roles)))
             throw std::runtime_error("Lighting scopes require World/Character masks and finite nonnegative reveal strength.");
         if(!record.model && record.lightingScopes!=SurfaceLightingScopes{})
             throw std::runtime_error("Surface lighting scopes require a model entity.");
@@ -375,6 +379,17 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         if (record.point && (!std::isfinite(record.point->shadowDepthBias) || record.point->shadowDepthBias<0 ||
             !std::isfinite(record.point->shadowNormalBias) || record.point->shadowNormalBias<0))
             throw std::runtime_error("Point shadow biases must be finite and nonnegative.");
+        if(record.spot) {
+            const auto& light=*record.spot;
+            if(!std::isfinite(light.radius)||light.radius<.01f||light.radius>100000.f ||
+                !validPointLightResponse(light.nearFalloffRadius,light.specularStrength,light.rangeFalloffExponent,light.edgeSoftness,light.sourceRadius,light.attenuation))
+                throw std::runtime_error("Spot light range, attenuation or specular response is invalid.");
+            if(!std::isfinite(light.shadowDepthBias)||light.shadowDepthBias<0||!std::isfinite(light.shadowNormalBias)||light.shadowNormalBias<0)
+                throw std::runtime_error("Spot shadow biases must be finite and nonnegative.");
+            if(!std::isfinite(light.innerAngle)||!std::isfinite(light.outerAngle)||!std::isfinite(light.coneFalloff)||
+                light.innerAngle<0||light.outerAngle<.1f||light.outerAngle>89.f||light.innerAngle>light.outerAngle||light.coneFalloff<.01f||light.coneFalloff>16.f)
+                throw std::runtime_error("Spot half-cone angles require 0 <= inner <= outer, outer from 0.1 to 89 degrees, and cone falloff from 0.01 to 16.");
+        }
         if(record.tags)for(const auto& tag:record.tags->tags())if(!tag.valid())throw std::runtime_error("Tags require valid qualified names.");
         if(record.effects) {
             if(record.effects->starting.size()>4096)throw std::runtime_error("Starting Effects exceeds the 4096 application limit.");
@@ -476,10 +491,10 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
                 throw std::runtime_error("Environment exposure must be finite and positive.");
             validateEnvironmentSettings(environment.environment);
         }
-        directionalCount += record.directional.has_value(); pointCount += record.point.has_value();
+        directionalCount += record.directional.has_value(); pointCount += record.point.has_value()+record.spot.has_value();
     }
     if (directionalCount > MaximumDirectionalLights || pointCount > MaximumPointLights)
-        throw std::runtime_error("Scenes support at most 4 directional lights and 4096 point lights, including enabled Player light rig sources.");
+        throw std::runtime_error("Scenes support at most 4 directional lights and 4096 combined point and spot lights.");
     if (properties.activeEnvironment && std::none_of(records.begin(),records.end(),[&](const auto& record) {
         return record.id==properties.activeEnvironment && record.environment.has_value();
     })) throw std::runtime_error("The active environment must identify an Environment entity.");
@@ -581,6 +596,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         if (record.decal) candidate.emplace<SceneDecal>(entity,*record.decal);
         if (record.directional) candidate.emplace<SceneDirectionalLight>(entity,*record.directional);
         if (record.point) candidate.emplace<ScenePointLight>(entity,*record.point);
+        if (record.spot) candidate.emplace<SceneSpotLight>(entity,*record.spot);
         if (record.environment) candidate.emplace<SceneEnvironment>(entity,*record.environment);
         if (record.actor) candidate.emplace<SceneActor>(entity);
         if (record.movement) candidate.emplace<MovementComponent>(entity,*record.movement);

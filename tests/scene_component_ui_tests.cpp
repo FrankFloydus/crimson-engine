@@ -7,6 +7,7 @@
 #include "tools/CameraAuthoringControls.h"
 #include "tools/SceneOutlinerColor.h"
 #include "editor/SceneShortcuts.h"
+#include "editor/ViewportSelection.h"
 #include "scene/CameraAuthoring.h"
 #include "scene/BuiltinModels.h"
 
@@ -169,6 +170,34 @@ void directEntitySelectionAndSections(const fs::path& root){
         "Undo did not restore the Player and its complete Inspector.");
     ui.click(ui.point,true);require(ui.document.selection().ids.size()==2,"Ctrl-click did not retain entity multi-selection.");
     ui.focusInspector();ui.remove();require(ui.document.scene().records().empty(),"Entity multi-selection Delete left capability or visual records behind.");
+}
+
+void spotEntitySelectionAndSections(const fs::path& root) {
+    EntityUi ui(root);const auto spot=ui.document.createSpotLight("Spot fixture");
+    require(spot!=NoEntity,"Cannot create a Spot Light for its actual Outliner row.");ui.tick();ui.tick();
+    require(ui.rows.size()==4&&ui.rects.contains(spot)&&
+        std::count_if(ui.rows.begin(),ui.rows.end(),[spot](const auto& row){return row.entity==spot;})==1,
+        "The Spot Light was missing from the Outliner or acquired a synthetic settings row.");
+    ui.click(ui.point);ui.click(spot);
+    require(ui.document.selection().primary==spot&&ui.sections==
+        std::vector<std::pair<EntityId,SceneComponentKind>>{{spot,SceneComponentKind::Transform},{spot,SceneComponentKind::Spot}},
+        "Selecting a Spot Light did not expose only its Transform and Spot properties.");
+    require(std::string(sceneComponentName(SceneComponentKind::Spot))=="Spot light",
+        "Spot Inspector title does not identify its own light type.");
+    const auto record=*ui.document.scene().find(spot);
+    require(record.spot&&!record.point&&!record.directional&&viewportEntityHasCenterMarker(record)&&viewportEntityHasMarker(record),
+        "A Spot Light lost its independent component or viewport center marker.");
+    ui.document.select({spot},spot);require(ui.document.reparentSelection(ui.player),"Cannot parent the Spot Light fixture.");ui.tick();ui.tick();
+    ui.click(ui.point);ui.click(spot);
+    require(ui.document.selection().primary==spot&&ui.has(spot,SceneComponentKind::Spot)&&
+        viewportSelectionEntity(ui.document.scene(),spot)==spot,
+        "A parented Spot marker or Outliner row redirected selection to its owner.");
+    const auto history=ui.document.history().size();ui.focusInspector();ui.remove();
+    require(!ui.document.scene().contains(spot)&&ui.document.scene().contains(ui.player)&&ui.document.history().size()==history+1,
+        "Deleting a Spot from its Inspector removed its parent or failed to make one command.");
+    require(ui.document.undo(),"Spot entity deletion did not undo.");ui.tick();
+    require(ui.document.scene().find(spot)->parent==ui.player&&viewportEntityHasCenterMarker(*ui.document.scene().find(spot)),
+        "Undo did not restore the Spot's parent and selectable viewport marker.");
 }
 
 void preserveRealHierarchy(const fs::path& root){
@@ -752,9 +781,9 @@ void firstPersonInspector(const fs::path& root) {
 
 int main(){
     try{
-        Project project;directEntitySelectionAndSections(project.root);directEnvironmentProperties(project.root);
+        Project project;directEntitySelectionAndSections(project.root);spotEntitySelectionAndSections(project.root);directEnvironmentProperties(project.root);
         preserveRealHierarchy(project.root);reparentedPlayerChildrenStaySelectable(project.root);inlineVisualTransform(project.root);
         inlineOwnedCamera(project.root,true);inlineOwnedCamera(project.root,false);entityColorPopup(project.root);enemyInspector(project.root);firstPersonInspector(project.root);traceTestInspector(project.root);
-        std::cout<<"Direct entity selection, retained hierarchy, complete Inspector sections, owned visual/Camera gestures and entity colors passed.\n";return 0;
+        std::cout<<"Direct entity selection, Spot markers/sections, retained hierarchy, complete Inspector sections, owned visual/Camera gestures and entity colors passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

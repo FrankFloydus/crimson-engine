@@ -10,6 +10,7 @@
 #include "scene/SceneExtraction.h"
 #include "crimson-renderer/PointShadowMath.h"
 #include "crimson-renderer/DirectionalShadowMath.h"
+#include <crimson/renderer/forward/SpotLightMath.h>
 #include <crimson/renderer/core/Profiler.hpp>
 #include <algorithm>
 #include <array>
@@ -399,8 +400,13 @@ std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(con
     CRIMSON_PROFILE_ZONE("Shadow caster preparation");
     auto result=std::make_shared<PreparedEditorShadows>();
     const auto shadowSelection=selectPointShadowLights(scene.points,priorityOrigin);
+    std::array<std::optional<Mat4>,PointShadowLightBudget> localProjections;
+    for(std::size_t slot=0;slot<shadowSelection.count;++slot) {
+        const auto& light=scene.points[shadowSelection.sourceIndices[slot]];
+        if(light.type==LocalLightType::Spot)localProjections[slot]=spot_lighting::shadow_relative_view_projection(light,resolution);
+    }
     const bool directional=std::any_of(scene.directional.begin(),scene.directional.end(),[](const auto& light){return light.enabled&&light.castShadows;});
-    if(!directional && std::none_of(scene.points.begin(),scene.points.end(),[](const auto& light){return light.enabled && light.castShadows;}))return result;
+    if(!directional && !shadowSelection.count)return result;
     const std::array<ShadowCamera,1> fallback{{{Camera{},1.f}}};if(cameras.empty())cameras=fallback;
     std::vector<Aabb> allBounds;
     if(directional)allBounds.reserve(scene.models.size());
@@ -431,14 +437,15 @@ std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(con
         for(const auto& fit:fits)if(fit.valid)for(unsigned projection=0;projection<fit.projectionCount;++projection) {
             if(directional_shadow::intersects(bounds,fit.values[projection]))texel=std::min(texel,fit.values[projection].texelWorld);
         }
-        for(const auto source:shadowSelection.selectedSources()) {
-            const auto& light=scene.points[source];
-            if(!point_shadow::intersectsLight(bounds,light.position,light.radius))continue;
+        for(std::size_t slot=0;slot<shadowSelection.count;++slot) {
+            const auto& light=scene.points[shadowSelection.sourceIndices[slot]];
+            if(!point_shadow::intersectsLight(bounds,light.position,light.radius)||
+                (localProjections[slot]&&!point_shadow::intersectsFrustum(bounds,*localProjections[slot],light.position)))continue;
             // A parent's circumsphere need not contain its children's
             // circumspheres. Preserve each draw's original perspective error
             // bound as well as the model-wide texture-density bound.
             for(const auto& footprint:footprintBounds)
-                texel=std::min(texel,point_shadow::casterTexelWorld(footprint,light.position,resolution));
+                texel=std::min(texel,spot_lighting::caster_texel_world(footprint,light,resolution));
         }
         if(texel<std::numeric_limits<float>::max()) {
             // Combine light demand before material/texture preparation. A room

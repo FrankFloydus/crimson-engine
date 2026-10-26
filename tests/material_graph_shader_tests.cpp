@@ -1108,7 +1108,52 @@ void ssrCompileChecks(const std::filesystem::path& compiler,const std::filesyste
     check(reflectionFragments==10&&domainStages==1,"Focused SSR compile matrix changed its intended coverage.");
     std::cout<<"Focused SSR compiled "<<reflectionFragments<<" receiver fragments, two capture fragments, two glass transmission fragments and "<<domainStages<<" native domain stage.\n";
 }
-void compileChecks(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include) {
+void spotAbiPreflightChecks(const MaterialGraphShaderVariant& variant,const ShaderBinary& vertex,const ShaderBinary& fragment) {
+    const auto binding=[&](const char* name,ShaderUniformKind kind,unsigned count) {
+        const auto found=std::find_if(variant.manifest.begin(),variant.manifest.end(),[&](const auto& item){return item.name==name;});
+        check(found!=variant.manifest.end()&&found->kind==kind&&found->count==count,"Spot lighting uniform manifest changed shape.");
+    };
+    binding("u_clusterRecordLayoutV8",ShaderUniformKind::Vec4,1);
+    binding("u_spotShadowMatrix",ShaderUniformKind::Mat4,16);
+    for(const char* name:{"u_spotShadowRect","u_spotShadowParameters"})binding(name,ShaderUniformKind::Vec4,16);
+    std::string diagnostic;
+    if(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,variant.manifest,diagnostic))
+        throw std::runtime_error("Current Spot lighting ABI failed preflight: "+diagnostic);
+    auto previous=variant.manifest;
+    std::find_if(previous.begin(),previous.end(),[](const auto& item){return item.name=="u_clusterRecordLayoutV8";})->name="u_clusterRecordLayoutV6";
+    check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,previous,diagnostic)&&diagnostic.find("u_clusterRecordLayoutV8")!=std::string::npos,
+        "A previous V6 material manifest accepted the V8 local-light record binding.");
+    for(const char* name:{"u_spotShadowMatrix","u_spotShadowRect","u_spotShadowParameters"}) {
+        auto missing=variant.manifest;
+        std::erase_if(missing,[&](const auto& item){return item.name==name;});
+        check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,missing,diagnostic)&&diagnostic.find(name)!=std::string::npos,
+            "A material manifest accepted a missing spot shadow binding.");
+        auto truncated=variant.manifest;
+        std::find_if(truncated.begin(),truncated.end(),[&](const auto& item){return item.name==name;})->count=15;
+        check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,truncated,diagnostic),
+            "A material manifest accepted an undersized spot shadow array.");
+        auto wrongKind=variant.manifest;
+        auto& kind=std::find_if(wrongKind.begin(),wrongKind.end(),[&](const auto& item){return item.name==name;})->kind;
+        kind=kind==ShaderUniformKind::Mat4?ShaderUniformKind::Vec4:ShaderUniformKind::Mat4;
+        check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,wrongKind,diagnostic),
+            "A material manifest accepted a spot shadow array with the wrong uniform kind.");
+    }
+}
+void spotAbiCompileChecks(const ShaderCompileConfig& config) {
+    MaterialAsset material;material.id="spot-light-abi-fixture";
+    addMaterialNode(material.graph,MaterialNodeKind::Output);materialOutputNode(material.graph).output.shading=MaterialShading::StandardPbr;
+    const auto generated=generateMaterialGraphShader(material);unsigned compiled{};
+    for(const auto& variant:generated.variants) {
+        if(variant.pass!=MaterialGraphPass::Model&&variant.pass!=MaterialGraphPass::Particle)continue;
+        std::cout<<"Spot ABI: compiling "<<(variant.pass==MaterialGraphPass::Model?"Model":"Particle")<<" lighting.\n"<<std::flush;
+        const auto fragment=compileShader(config,materialGraphShaderRecipe(config,generated,variant));
+        const auto vertex=compileShader(config,variant.vertexName);
+        spotAbiPreflightChecks(variant,vertex,fragment);++compiled;
+    }
+    check(compiled==2,"Focused Spot ABI fixture lost its Model or Particle surface.");
+    std::cout<<"Spot ABI compiled Lit Model/Particle fragments and their vertices, admitted V8/Spot bindings and rejected missing, undersized, wrong-kind and previous-V6 manifests.\n";
+}
+void compileChecks(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include,bool spotAbiOnly=false) {
     {
         std::ifstream input(source/"material_graph_depth.sh");check(bool(input),"Tessellated coverage template is unavailable.");
         const std::string depth{std::istreambuf_iterator<char>(input),std::istreambuf_iterator<char>()};
@@ -1119,6 +1164,7 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
     const auto root=std::filesystem::temp_directory_path()/("crimson-graph-shaders-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     struct Cleanup {std::filesystem::path path;~Cleanup(){std::error_code ec;const auto resolved=std::filesystem::weakly_canonical(path,ec);const auto parent=std::filesystem::weakly_canonical(std::filesystem::temp_directory_path(),ec);if(!ec&&resolved.parent_path()==parent&&resolved.filename().string().starts_with("crimson-graph-shaders-"))std::filesystem::remove_all(resolved,ec);}} cleanup{root};
     const ShaderCompileConfig config{compiler,source,include,root};
+    if(spotAbiOnly){spotAbiCompileChecks(config);return;}
     const auto grunge=grungeAdjustmentFixture();
     const auto grungeShader=generateMaterialGraphShader(grunge);
     const auto compileGenerated=[&](const MaterialGraphShader& generated) {
@@ -1305,7 +1351,7 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
                 const auto found=std::find_if(variant.manifest.begin(),variant.manifest.end(),[&](const auto& item){return item.name==name;});
                 check(found!=variant.manifest.end()&&found->kind==kind&&found->count==count,"Scene lighting uniform manifest changed shape.");
             };
-            for(const char* name:{"u_surfaceCategory","u_clusterRecordLayoutV6","u_ambientLight"})binding(name,ShaderUniformKind::Vec4,1);
+            for(const char* name:{"u_surfaceCategory","u_clusterRecordLayoutV8","u_ambientLight"})binding(name,ShaderUniformKind::Vec4,1);
             const auto fragment=compileShader(config,materialGraphShaderRecipe(config,edited,variant));
             const auto vertex=compileShader(config,variant.vertexName);std::string diagnostic;
             if(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,variant.manifest,diagnostic))
@@ -1314,14 +1360,11 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
             std::erase_if(oldManifest,[](const auto& item){return item.name=="u_directionColor";});
             check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,oldManifest,diagnostic)&&diagnostic.find("u_directionColor")!=std::string::npos,
                 "A material map edit accepted the missing directional color uniform.");
-            oldManifest=variant.manifest;
-            std::find_if(oldManifest.begin(),oldManifest.end(),[](const auto& item){return item.name=="u_clusterRecordLayoutV6";})->name="u_clusterRecordLayoutV5";
-            check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,oldManifest,diagnostic)&&diagnostic.find("u_clusterRecordLayoutV6")!=std::string::npos,
-                "A material map edit accepted a light record ABI that the previous engine cannot bind.");
             auto wrongArray=variant.manifest;
             std::find_if(wrongArray.begin(),wrongArray.end(),[](const auto& item){return item.name=="u_directionColor";})->count=1;
             check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,wrongArray,diagnostic),
                 "A material map edit accepted an undersized directional uniform array.");
+            spotAbiPreflightChecks(variant,vertex,fragment);
         }
     }
     auto rgbScalar=rgbScalarFixture();
@@ -1480,7 +1523,8 @@ int main(int argc,char** argv) {
         else if(argc==5&&std::string_view(argv[1])=="--image-style")imageStyleCompileChecks(argv[2],argv[3],argv[4]);
         else if(argc==5&&std::string_view(argv[1])=="--detail-balance")imageStyleCompileChecks(argv[2],argv[3],argv[4],true);
         else if(argc==5&&std::string_view(argv[1])=="--blend-height")heightBlendCompileChecks(argv[2],argv[3],argv[4]);
-        else if(argc!=1)throw std::runtime_error("Usage: material_graph_shader_tests [--ssr|--stylization|--image-style|--detail-balance|--blend-height] <shaderc> <source-dir> <include-dir>");
+        else if(argc==5&&std::string_view(argv[1])=="--spot-abi")compileChecks(argv[2],argv[3],argv[4],true);
+        else if(argc!=1)throw std::runtime_error("Usage: material_graph_shader_tests [--ssr|--stylization|--image-style|--detail-balance|--blend-height|--spot-abi] <shaderc> <source-dir> <include-dir>");
         std::cout<<"Material graph lowering, packets, limits and generated shader checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

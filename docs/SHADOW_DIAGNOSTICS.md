@@ -4,7 +4,7 @@ The **Shadows** section in **Scene diagnostics** reports the active world's shad
 
 For current feature ownership, Inspector controls and renderer limits, see [Renderer and character lighting](RENDERER_AND_CHARACTER_LIGHTING.md) and [the architecture](ENGINE_ARCHITECTURE.md). This page describes the diagnostics in the current implementation; historical benchmark evidence is linked separately.
 
-New point lights start with **Cast Shadows off**. Eight point-light entities can illuminate the scene while this panel reports zero active point-shadow lights. A shadow-casting directional light is reported separately. Current limits are six faces per point map, sixteen resident point slots and four complete point-map updates per world frame.
+New point and spot lights start with **Cast Shadows off**. Eight point-light entities can illuminate the scene while this panel reports zero active point-shadow lights. A shadow-casting directional light is reported separately. Point maps use six faces and Spot maps one perspective face. They share sixteen resident local-light slots and four complete updates per world frame, capped at twenty-four projection draws.
 
 ## Point source size and softness
 
@@ -16,33 +16,37 @@ Changing Source Radius updates receiver filtering without regenerating cached si
 
 ### `Lights: A / C allocated; R px per face`
 
-- **A** is the number of admitted, enabled, shadow-casting **point lights** in the active world. Directional lights are excluded. Ordinary lights with Cast Shadows off are excluded.
-- **C** is the point-light capacity of the current GPU atlas. Each point-light slot contains six depth faces. It is a storage capacity, not a per-frame update budget or the number of faces.
-- **R** is the inner resolution of each point face and directional projection: 256, 512 or 1024 pixels. Each physical atlas tile also has two guard texels on each side, so its stored width and height are `R + 4`.
+- **A** is the number of admitted, enabled, shadow-casting **point and spot lights with positive intensity** in the active world. Directional lights are excluded. Ordinary lights with Cast Shadows off are excluded.
+- **C** is the local-light capacity reserved in the current GPU atlas, capped at the sixteen-light admission limit. A Point reserves six faces; a Spot reserves one. Point block rounding, retained high-water allocations and guarded tile padding can consume more storage than the currently active sources. C is neither the update budget nor the number of faces.
+- **R** is the inner resolution of each Point face, Spot projection and directional projection: 256, 512 or 1024 pixels. Each physical atlas tile also has two guard texels on each side, so its stored width and height are `R + 4`.
 
-**Edit → Preferences → Rendering → Shadow resolution** changes R for both point and directional shadows. Higher resolution gives finer shadow texels and increases memory approximately with the square of resolution. Changing it replaces the atlas and requires the maps to be rebuilt.
+**Edit → Preferences → Rendering → Shadow resolution** changes R for point, spot and directional shadows. Higher resolution gives finer shadow texels and increases memory approximately with the square of resolution. Changing it replaces the atlas and requires the maps to be rebuilt.
 
-The active point-shadow limit is sixteen. Eligibility requires an enabled light, Cast Shadows on, finite position, and positive finite radius and intensity. With more than sixteen eligible lights, admission prioritizes squared distance to the frozen world focus divided by squared radius, with persistent light identity resolving ties. The frozen focus is the visible Game camera's eye, otherwise the Scene camera's eye; Player mesh presence and the free editor camera target do not select Game shadows. Lights that are not admitted continue to illuminate normally without a resident shadow map.
+The shared active Point/Spot shadow limit is sixteen. Eligibility requires an enabled light, Cast Shadows on, finite position, and positive finite radius and intensity. With more than sixteen eligible lights, admission prioritizes squared distance to the frozen world focus divided by squared radius, with persistent light identity resolving ties. The frozen focus is the visible Game camera's eye, otherwise the Scene camera's eye; Player mesh presence and the free editor camera target do not select Game shadows. Lights that are not admitted continue to illuminate normally without a resident shadow map.
 
-Atlas capacity grows in powers of two according to the highest occupied stable slot. It does not automatically shrink when lights are removed. Therefore `8 / 16 allocated` is possible and is not a failure to count the eight lights. Likewise, after disabling all point shadows while keeping the sun active, `0 / 8 allocated` can be legitimate retained storage. A fresh scene with only a shadow-casting sun normally reads `0 / 0 allocated`; the resolution can still read 1024 because the same atlas contains the sun's directional projections.
+Point storage rounds to powers of two; Spot storage uses packed projective tiles. The combined logical capacity is capped at sixteen, while atlas high-water storage does not automatically shrink when lights are removed. Therefore `8 / 16 allocated` is possible and is not a failure to count the eight lights. Likewise, after disabling all point shadows while keeping the sun active, `0 / 8 allocated` can be legitimate retained storage. A fresh scene with only a shadow-casting sun normally reads `0 / 0 allocated`; the resolution can still read 1024 because the same atlas contains the sun's directional projections.
 
 ### `Lights rendered: U; cached: H; faces: F`
 
-These three values concern **point lights only**:
+These three values concern **local Point and Spot lights**:
 
-- **U** is the number of complete point-light shadow maps rebuilt this frame.
-- **H** is the number of admitted point lights whose stored shadow content matched the current caster/projection signature and required no rebuild.
-- **F** is the number of point-shadow faces submitted this frame. One complete point map always updates all six faces, so `F = 6 × U`.
+- **U** is the number of complete local-light shadow maps rebuilt this frame.
+- **H** is the number of admitted positive-intensity local lights whose stored shadow content matched the current caster/projection signature and required no rebuild.
+- **F** is the number of local-shadow projections submitted this frame. Each updated Point contributes six; each Spot contributes one. `F = 6 × U` applies only to a Point-only update.
 
-The active-world budget is **four complete point maps / twenty-four faces per renderer frame**, shared by Scene and Game. Opening Game does not grant another four-map budget or render the same point maps twice.
+The active-world budget is **four complete local maps / twenty-four projections per renderer frame**, shared by Scene and Game. Opening Game does not grant another four-map budget or render the same point maps twice.
 
 Cached maps still participate in lighting and shadow sampling. `Lights rendered: 0; cached: 8; faces: 0` is the intended settled state for eight stationary shadow-casting point lights in a static scene. Zero rendered faces means that their depth maps are being reused, not that shadows have stopped working.
+
+An exact-zero flicker sample removes a light from active illumination and shadow work while retaining its existing valid resident identity. Off frames add no cache hit or depth draw. Only previously active, still-present enabled shadow sources retain storage; a new dark light allocates nothing. The next positive sample validates current caster/projection content before reuse. Positive admission can evict dormant residents at the sixteen-slot cap; disabling or deleting a source releases ownership. This avoids per-pulse atlas recreation without hiding changed geometry.
+
+Spot direction and Outer Angle also identify its projection. Inner Angle, Cone Falloff, color/intensity and Source Radius affect appearance without rebuilding unchanged depth. Spot Source Radius zero uses weighted 5×5 PCF; positive values add a bounded blocker search and contact-hardening filter. These sampling costs are not depth-work counters.
 
 The cache uses caster membership, transforms, relevant material/coverage signatures and resident geometry bindings, plus the light's position and radius. Changing geometry, importing a replacement mesh, publishing new geometry detail, changing alpha coverage, toggling casting or reloading shaders can trigger refreshes. Material publication can invalidate conservatively through its prepared signature, even when a particular edit does not visibly change its silhouette. Short bursts during resource refinement are therefore possible in an otherwise stationary scene.
 
 ### `Deferred: D; awaiting a valid map: V`
 
-- **D** is the number of dirty admitted point maps left pending after this frame's update selection.
+- **D** is the number of dirty admitted local maps left pending after this frame's update selection.
 - **V** is the subset of those pending maps that cannot currently be sampled because they are new, invalidated, or belong to a changed light projection.
 
 An unchanged light position and radius permit an old coherent map to remain in use while caster-only changes await refresh. Such a light contributes to D, but not V and not H: it is dirty and deferred, even though the old map is still sampled.

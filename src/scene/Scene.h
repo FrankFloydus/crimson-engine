@@ -114,6 +114,12 @@ struct ScenePointLight {
     LightFlickerSettings flicker{};
     bool operator==(const ScenePointLight&) const = default;
 };
+// Spot sources share point-light authoring and presentation. Angles describe
+// half-cones in degrees around the transformed local -Z emission axis.
+struct SceneSpotLight : ScenePointLight {
+    float innerAngle{30.f},outerAngle{45.f},coneFalloff{1.f};
+    bool operator==(const SceneSpotLight&) const = default;
+};
 // Global lighting settings are authored on ordinary entities. Spatial transforms
 // remain part of their hierarchy but do not alter these global settings.
 struct SceneEnvironment {
@@ -234,6 +240,7 @@ struct EntityRecord {
     std::optional<AssetRef<ModelAsset>> model;
     std::optional<SceneDirectionalLight> directional;
     std::optional<ScenePointLight> point;
+    std::optional<SceneSpotLight> spot;
     std::optional<SceneEnvironment> environment;
     // A present empty reference retains an editable emitter marker after an
     // explicit asset clear/deletion. A missing nonempty asset keeps its ID.

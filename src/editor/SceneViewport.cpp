@@ -71,6 +71,29 @@ void pointLightRange(ImDrawList& draw,const Vec3& position,float radius,const Ma
             draw.AddLine({(*line)[0][0],(*line)[0][1]},{(*line)[1][0],(*line)[1][1]},color,1.5f);
     }
 }
+void spotLightRange(ImDrawList& draw,const Mat4& world,const SceneSpotLight& light,const Mat4& vp,const Vec4& viewport,ImU32 color) {
+    const auto position=math::transformPoint(world,{0,0,0});
+    const auto direction=directionalLightDirection(world);
+    const auto right=math::normalized(math::cross(direction,std::abs(direction[1])<.95f?Vec3{0,1,0}:Vec3{1,0,0}));
+    const auto up=math::cross(right,direction);
+    const auto line=[&](Vec3 a,Vec3 b,float thickness) {
+        if(const auto projected=projectClippedSegment(a,b,vp,viewport))
+            draw.AddLine({(*projected)[0][0],(*projected)[0][1]},{(*projected)[1][0],(*projected)[1][1]},color,thickness);
+    };
+    constexpr unsigned segments=64;
+    for(const auto angle:{light.outerAngle,light.innerAngle}) {
+        const float radians=angle*std::numbers::pi_v<float>/180;
+        const auto center=position+direction*(light.radius*std::cos(radians));
+        const auto radius=light.radius*std::sin(radians);
+        const auto point=[&](unsigned i) {
+            const float phase=2*std::numbers::pi_v<float>*i/segments;
+            return center+(right*std::cos(phase)+up*std::sin(phase))*radius;
+        };
+        for(unsigned i=0;i<segments;++i)line(point(i),point(i+1),angle==light.outerAngle?1.5f:1.f);
+        for(unsigned i=0;i<4;++i)line(position,point(i*segments/4),1.f);
+    }
+    line(position,position+direction*light.radius,1.f);
+}
 float directionalMarker(ImDrawList& draw, const Camera& camera, const Mat4& world, const Mat4& viewProjection,
                         const Vec4& viewport, ImVec2 center, ImU32 color, ImVec2 mouse) {
     const Vec3 position=math::transformPoint(world,{0,0,0});
@@ -452,6 +475,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 float distance = centerVisible && viewportEntityHasCenterMarker(record)?
                     std::hypot(center.x-ImGui::GetIO().MousePos.x,center.y-ImGui::GetIO().MousePos.y):1e9f;
                 if(record.point && selected(document,record.id))pointLightRange(*draw,position,record.point->radius,vp,viewport,color);
+                if(record.spot && selected(document,record.id))spotLightRange(*draw,*world,*record.spot,vp,viewport,color);
                 if(record.navigationVolume) {
                     boxWireSegments(record.navigationVolume->size,[&](Vec3 a,Vec3 b) {
                         if(const auto line=projectClippedSegment(math::transformPoint(*world,a),math::transformPoint(*world,b),vp,viewport)) {
@@ -479,6 +503,10 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 else if(record.camera)distance=std::min(distance,gameplayMarker(*draw,record,*world,vp,viewport,color,ImGui::GetIO().MousePos));
                 else if(!centerVisible)continue;
                 else if (record.directional) distance=directionalMarker(*draw,camera,*world,vp,viewport,center,color,ImGui::GetIO().MousePos);
+                else if (record.spot) {
+                    distance=directionalMarker(*draw,camera,*world,vp,viewport,center,color,ImGui::GetIO().MousePos);
+                    draw->AddCircle(center,8,color,12,1.5f);
+                }
                 else if (record.point) draw->AddCircle(center,7,color,12,2);
                 else if (record.particle) {
                     draw->AddCircle(center,6,color,12,1.5f);
@@ -495,10 +523,10 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             // Collider whose edges coincide exactly with its selected parent.
             // Authored bounds also keep particle children from animating this box.
             const auto& selection=document.selection().ids;
-            const bool pointLightsOnly=!selection.empty() && std::all_of(selection.begin(),selection.end(),[&](EntityId id) {
-                const auto entity=document.scene().find(id);return entity && entity->point.has_value();
+            const bool localLightsOnly=!selection.empty() && std::all_of(selection.begin(),selection.end(),[&](EntityId id) {
+                const auto entity=document.scene().find(id);return entity && (entity->point || entity->spot);
             });
-            if(!pointLightsOnly)for(const auto& box:selectionBoxes(document.scene(),selection,[&](const std::string& id)->std::optional<Aabb> {
+            if(!localLightsOnly)for(const auto& box:selectionBoxes(document.scene(),selection,[&](const std::string& id)->std::optional<Aabb> {
                 const auto model=assets.findModel(id);return model?std::optional<Aabb>{model->bounds}:std::nullopt;
             },collisionMeshes_,agentProfiles_,[&](EntityId id)->std::optional<Aabb> {
                 const auto patch=decalPatches_?decalPatches_(id):nullptr;return patch?std::optional{patch->bounds}:std::nullopt;
