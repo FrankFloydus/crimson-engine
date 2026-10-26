@@ -441,6 +441,7 @@ AssetLibrary::~AssetLibrary() {
 }
 
 void AssetLibrary::refreshScenes() {
+    ++modelOwnershipRevision_;
     std::erase_if(catalog_, [](const AssetEntry& entry) { return entry.kind == AssetKind::Scene; });
     std::vector<std::string> errors;
     for (const auto& scene : scanSceneAssets(projectRoot_, &errors))
@@ -578,6 +579,7 @@ std::shared_ptr<const GameplayEffectAsset> AssetLibrary::copyGameplayEffect(cons
     publishGameplayEffect(profile);noteAssetWrite(profile->id);refreshGameplayEffects();select(profile->id);return profile;
 }
 void AssetLibrary::refreshAnimations() {
+    ++modelOwnershipRevision_;
     std::erase_if(catalog_,[](const auto& entry){return entry.kind==AssetKind::Animation;});
     std::unordered_set<std::string> present;
     for(const auto& file:storedAssetPaths(projectRoot_))if(file.file.extension()==".crimson-animation"&&!references_.deleted(file.id)) {
@@ -608,6 +610,7 @@ void AssetLibrary::publishAnimation(std::shared_ptr<const AnimationAsset> animat
     if(!animation)return;validateAnimationAsset(*animation);
     if(isEngineAssetId(animation->id)||references_.deleted(animation->id))throw std::runtime_error("Protected or deleted Animation cannot be published.");
     auto& entry=animations_[animation->id];
+    if(!entry.definition||entry.definition->sourceModel!=animation->sourceModel)++modelOwnershipRevision_;
     if(!entry.definition||*entry.definition!=*animation){entry.definition=std::move(animation);entry.revision=nextAnimationRevision_++;}
     entry.diagnostic.clear();
     const auto catalog=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& value){return value.id==entry.definition->id;});
@@ -620,6 +623,7 @@ std::shared_ptr<const AnimationAsset> AssetLibrary::copyAnimation(const std::str
     publishAnimation(definition);noteAssetWrite(definition->id);refreshAnimations();select(definition->id);return definition;
 }
 void AssetLibrary::refreshRagdolls() {
+    ++modelOwnershipRevision_;
     std::erase_if(catalog_,[](const auto& entry){return entry.kind==AssetKind::Ragdoll;});
     std::unordered_set<std::string> present;
     for(const auto& file:storedAssetPaths(projectRoot_))if(file.file.extension()==".crimson-ragdoll"&&!references_.deleted(file.id)) {
@@ -650,6 +654,7 @@ void AssetLibrary::publishRagdoll(std::shared_ptr<const RagdollAsset> ragdoll) {
     if(!ragdoll)return;validateRagdollAsset(*ragdoll);
     if(isEngineAssetId(ragdoll->id)||references_.deleted(ragdoll->id))throw std::runtime_error("Protected or deleted Ragdoll cannot be published.");
     auto& entry=ragdolls_[ragdoll->id];
+    if(!entry.definition||entry.definition->sourceModel!=ragdoll->sourceModel)++modelOwnershipRevision_;
     if(entry.definition&&*entry.definition==*ragdoll&&entry.diagnostic.empty())return;
     if(!entry.definition||*entry.definition!=*ragdoll){entry.definition=std::move(ragdoll);entry.revision=nextRagdollRevision_++;}
     entry.diagnostic.clear();
@@ -704,12 +709,11 @@ std::string AssetLibrary::displayName(const std::string& id) const {
 }
 
 bool AssetLibrary::deleteScene(const std::string& id) {
-    std::string error;
-    if (!deleteSceneAsset(projectRoot_, id, error)) { status_ = error; return false; }
-    if (selectedId() == id) browserSelection_.clear();
-    refreshScenes();
-    status_ = "Scene deleted.";
-    return true;
+    // Use the durable deletion policy as well as removing the file, so an
+    // intentional deletion is distinguishable from an unavailable source.
+    const auto scene=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& entry){return entry.id==id||entry.id==canonicalAssetId(id);});
+    if(scene==catalog_.end()||scene->kind!=AssetKind::Scene){status_="Scene asset no longer exists.";return false;}
+    return deleteAssets(planDeletion({scene->id}),{});
 }
 
 const TextureAsset* AssetLibrary::find(const std::string& id) const {
@@ -1047,6 +1051,11 @@ void AssetLibrary::updateResources(std::uint32_t bgfxFrame) {
     const auto message=textureStreamer_->diagnostic(); if(!message.empty()) status_=message;
 }
 void AssetLibrary::onFileChanged(const std::filesystem::path& changed) {
+    // These small durable files may retain a model without a scene/catalog
+    // change. External edits must invalidate the destructive ownership proof.
+    const auto filename=changed.filename();
+    if(filename=="references.json"||filename=="material.json"||filename=="environment.json"||
+        filename=="preview.json"||filename=="editor-session.json")++modelOwnershipRevision_;
     if(changed.extension()==".crimson-quader") {
         try {
             // Rebuild derived files before any request can observe the source
@@ -2463,25 +2472,30 @@ void AssetLibrary::refreshQuaderModelCatalog(){
     // Keep pruned IDs retired for this session as well: a completed background
     // snapshot must not republish a card after its unused source was reclaimed.
     auto inactive=inactiveQuaderModels_;std::unordered_set<std::string> retained;
+    std::unordered_map<std::string,std::uint64_t> fingerprints;
     for(const auto& entry:storedAssetPaths(projectRoot_)){
         if(entry.file.extension()!=".crimson-quader"||!std::filesystem::is_regular_file(entry.file))continue;
         std::ifstream input(entry.file,std::ios::binary);if(!input)throw std::runtime_error("Cannot read Quader bundle catalog.");
         const std::string bytes{std::istreambuf_iterator<char>(input),{}};const auto bundle=decodeQuaderSceneBundle(bytes);
         if(bundle.id!=entry.id)throw std::runtime_error("Quader bundle catalog identity mismatch.");
+        auto fingerprint=streaming::detail::HashSeed;streaming::detail::hash(fingerprint,bytes.data(),bytes.size());
+        fingerprints.emplace(entry.id,fingerprint);
         for(const auto& model:bundle.models)if(model.current)inactive.erase(model.id);else {inactive.insert(model.id);retained.insert(model.id);}
     }
     const auto count=catalog_.size();std::erase_if(catalog_,[&](const auto& entry){return entry.kind==AssetKind::Model&&inactive.contains(entry.id);});
     if(inactive!=inactiveQuaderModels_||count!=catalog_.size())++catalogRevision_;
+    if(retained!=retainedQuaderModels_||fingerprints!=quaderBundleFingerprints_)++modelOwnershipRevision_;
     inactiveQuaderModels_=std::move(inactive);
     retainedQuaderModels_=std::move(retained);
+    quaderBundleFingerprints_=std::move(fingerprints);
 }
 void AssetLibrary::collectUnusedQuaderModels(const SceneDocument& active){
     if(active.transactionActive())return;
-    const auto state=std::array<std::uint64_t,8>{catalogRevision_,contentStorageRevision(projectRoot_),active.documentGeneration(),
+    const auto state=std::array<std::uint64_t,8>{modelOwnershipRevision_,contentStorageRevision(projectRoot_),active.documentGeneration(),
         active.scene().revision(),active.scene().generation(),active.loadedFingerprint(),static_cast<std::uint64_t>(active.history().size()),references_.revision()};
     if(quaderCollectionInitialized_&&state==quaderCollectionState_)return;
     // Most scene revisions are poses/properties. Rescan saved dependencies only
-    // when model references/history or an external catalog boundary changed.
+    // when model references/history or an authored ownership boundary changed.
     auto documentReferences=active.historicalModelReferences();
     for(const auto& record:active.scene().records()){
         if(record.model)documentReferences.push_back(record.model->id);
@@ -2521,6 +2535,16 @@ void AssetLibrary::collectUnusedQuaderModels(const SceneDocument& active){
             for(const auto& id:referenced)protect(id);
             const auto allProtected=[&]{return std::all_of(retainedQuaderModels_.begin(),retainedQuaderModels_.end(),[&](const auto& id){return protectedModels.contains(id);});};
             if(allProtected())return;
+            // A directory rename outside the editor can arrive before its
+            // location index is corrected. Missing indexed scenes are not
+            // proof that their authored model owners were deleted. Managed
+            // deletion records a durable tombstone, including external policy
+            // changes which the live policy has not observed yet.
+            for(const auto& entry:storedAssetPaths(projectRoot_))if(entry.file.extension()==".crimson-scene"&&!persistedPolicy.deleted(entry.id)){
+                std::error_code error;
+                if(!std::filesystem::is_regular_file(entry.file,error))
+                    throw std::runtime_error("Saved scene source is unavailable; refresh its asset location before mesh cleanup: "+utf8(entry.file));
+            }
             {
                 CRIMSON_PROFILE_ZONE("Quader retained model saved scene scan");
                 for(const auto& scene:savedScenes(projectRoot_))for(const auto& record:scene.records) {
@@ -2548,8 +2572,8 @@ void AssetLibrary::collectUnusedQuaderModels(const SceneDocument& active){
         }
         for(const auto& source:writtenSources)ownWrites_.push_back(source);
         std::erase_if(models_,[&](const auto& model){return std::find(removed.begin(),removed.end(),model->id)!=removed.end();});
-        ++catalogRevision_;
-        quaderCollectionState_={catalogRevision_,contentStorageRevision(projectRoot_),active.documentGeneration(),active.scene().revision(),
+        ++catalogRevision_;++modelOwnershipRevision_;
+        quaderCollectionState_={modelOwnershipRevision_,contentStorageRevision(projectRoot_),active.documentGeneration(),active.scene().revision(),
             active.scene().generation(),active.loadedFingerprint(),static_cast<std::uint64_t>(active.history().size()),references_.revision()};
     }catch(const std::exception& error){status_="Quader mesh cleanup deferred: "+std::string(error.what());}
 }
@@ -2872,7 +2896,7 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         if(preparedScene) { const auto committed=active->commitExternalAssetChanges(std::move(*preparedScene));if(!committed)std::terminate(); }
         references_=std::move(nextReferences);models_=std::move(nextModels);
         browserCatalog_=std::move(preparedBrowser);catalog_=std::move(preparedCatalog);materials_=std::move(preparedMaterials);particles_=std::move(preparedParticles);decals_=std::move(preparedDecals);
-        inactiveQuaderModels_=std::move(preparedInactiveQuaderModels);retainedQuaderModels_=std::move(preparedRetainedQuaderModels);
+        inactiveQuaderModels_=std::move(preparedInactiveQuaderModels);retainedQuaderModels_=std::move(preparedRetainedQuaderModels);++modelOwnershipRevision_;
         authoredMaterials_=std::move(preparedAuthoredMaterials);nextMaterialRevision_=preparedMaterialRevision;nextParticleRevision_=preparedParticleRevision;nextDecalRevision_=preparedDecalRevision;
         ownWrites_.insert(ownWrites_.end(),std::make_move_iterator(writtenPaths.begin()),std::make_move_iterator(writtenPaths.end()));
         if(locationsChanged)refreshContentStorage(projectRoot_);

@@ -4,6 +4,7 @@
 #include "assets/MaterialGraphReferences.h"
 #include "assets/ModelBlendSettings.h"
 #include "assets/AtomicFile.h"
+#include "assets/AssetTransaction.h"
 #include "assets/ContentStorage.h"
 #include "resources/AssetId.h"
 #include "assets/MaterialAsset.h"
@@ -523,7 +524,11 @@ void retiredQuaderModelCollection(bool asynchronous){
     require(scene.reloadFromDisk(),scene.status());
     const auto broken=fixturePath(project.root,"assets/scenes/broken.crimson-scene");writeFileAtomically(broken,"{broken");
     library.collectUnusedQuaderModels(scene);require(fs::is_regular_file(cache)&&library.status().find("cleanup deferred")!=std::string::npos,"An unreadable saved scene did not defer physical model cleanup.");
-    fs::remove(broken);library.refreshScenes();library.collectUnusedQuaderModels(scene);
+    fs::remove(broken);
+    const std::array removedScenes{assetIdAtPath(project.root,broken)};
+    const std::array changes{AssetFileChange{".crimson/asset-locations.json",prepareAssetPathRegistration(project.root,{},removedScenes)}};
+    commitAssetTransaction(project.root,changes);refreshContentStorage(project.root);
+    library.refreshScenes();library.collectUnusedQuaderModels(scene);
     require(!fs::exists(cache)&&!fs::exists(fixture.file)&&!library.references().deleted(fixture.modelId)&&!scene.dirty(),
         "Unused retired geometry was retained, tombstoned or dirtied the active scene.");
     const auto paths=storedAssetPaths(project.root);require(std::none_of(paths.begin(),paths.end(),[&](const auto& path){return path.id==fixture.modelId;}),"Retired mesh cleanup left a dead asset location.");
@@ -606,6 +611,97 @@ void retiredQuaderOwnershipProof() {
                 read(resolveAssetPath(project.root,saved.assetId()))==sceneBytes,
                 "The complete fallback failed to prune only the newly unowned model or changed its saved sibling.");
         }
+    }
+}
+void retiredQuaderHydrationScheduling() {
+    Project project;auto fixture=bundle_test::writeCornerFixture(project.root);
+    fixture.bundle.models[0].current=false;
+    writeFileAtomically(fixture.file,encodeQuaderSceneBundle(fixture.bundle));initializeQuaderSceneBundles(project.root);
+    SceneDocument saved(project.root);saved.createModel(fixture.modelIds[0],"Saved retired mesh");
+    require(saved.save("Retained before hydration"),saved.status());
+    const auto sceneFile=resolveAssetPath(project.root,saved.assetId());const auto sceneBytes=read(sceneFile);
+    const auto retiredFile=resolveAssetPath(project.root,fixture.modelIds[0]);
+    ResourceManager resources;AssetLibrary library(project.root,&resources);SceneDocument active(project.root);
+    library.collectUnusedQuaderModels(active);
+    require(fs::is_regular_file(retiredFile),"Initial ownership proof removed a saved retired model.");
+    library.references().setUsages({{fixture.modelIds[0],"sentinel","Stable ownership proof","Sentinel"}});
+    // A hydration-triggered proof would try to parse this saved scene. The
+    // actual source-change boundary is intentionally delivered only below.
+    writeFileAtomically(sceneFile,"{not a scene");
+    const auto catalogBefore=library.catalogRevision(),storageBefore=contentStorageRevision(project.root);
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};
+    std::shared_ptr<const ModelAsset> loaded;
+    do {
+        loaded=library.findModel(fixture.modelIds[1]);resources.pump();library.updateResources(0);
+        if(loaded&&library.catalogRevision()!=catalogBefore)break;
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }while(std::chrono::steady_clock::now()<deadline);
+    require(loaded&&library.catalogRevision()!=catalogBefore&&contentStorageRevision(project.root)==storageBefore,
+        "The scheduling regression did not hydrate an existing model across a catalog-only publication.");
+    library.collectUnusedQuaderModels(active);
+    require(library.status().find("cleanup deferred")==std::string::npos&&library.references().usages().size()==1&&
+        library.references().usages().front().ownerId=="sentinel"&&fs::is_regular_file(retiredFile),
+        "Unrelated model hydration restarted the project-wide retired ownership proof.");
+    writeFileAtomically(sceneFile,sceneBytes);
+    auto released=readSceneSnapshot(project.root,saved.assetId());released.records.clear();saveSceneSnapshot(project.root,saved.assetId(),released);
+    library.refreshScenes();library.collectUnusedQuaderModels(active);
+    require(!fs::exists(retiredFile)&&fs::is_regular_file(resolveAssetPath(project.root,fixture.modelIds[1])),
+        "A saved owner release failed to collect only the newly unowned generation.");
+    // A newly retired source generation must be observed even when the active
+    // document and the browser's source identities did not change.
+    auto bundle=decodeQuaderSceneBundle(read(fixture.file));bundle.models.front().current=false;
+    writeFileAtomically(fixture.file,encodeQuaderSceneBundle(bundle));library.publishManagedModels({});
+    const auto newlyRetired=resolveAssetPath(project.root,fixture.modelIds[1]);
+    library.setAnimationDocumentReferences({fixture.modelIds[1]},{});library.collectUnusedQuaderModels(active);
+    require(fs::is_regular_file(newlyRetired),"A new retirement ignored an open Animation model owner.");
+    library.setAnimationDocumentReferences({},{fixture.modelIds[1]});library.collectUnusedQuaderModels(active);
+    require(fs::is_regular_file(newlyRetired),"Animation Undo history failed to retain newly retired geometry.");
+    library.setRagdollDocumentReferences({},{fixture.modelIds[1]});library.setAnimationDocumentReferences({},{});
+    library.collectUnusedQuaderModels(active);
+    require(fs::is_regular_file(newlyRetired),"Ragdoll Undo history failed to retain newly retired geometry.");
+    library.setRagdollDocumentReferences({},{});library.collectUnusedQuaderModels(active);
+    require(!fs::exists(newlyRetired)&&!fs::exists(fixture.file),"Releasing actual document owners failed to reclaim retired bundle data.");
+    resources.stop();
+}
+
+void retiredQuaderUnavailableScene() {
+    {
+        Project project;auto fixture=bundle_test::writeFixture(project.root);
+        fixture.bundle.models.front().current=false;writeFileAtomically(fixture.file,encodeQuaderSceneBundle(fixture.bundle));
+        SceneDocument saved(project.root);saved.createModel(fixture.modelId,"Retained across folder relocation");
+        require(saved.save("Externally relocated owner"),saved.status());
+        const auto id=saved.assetId();const auto original=resolveAssetPath(project.root,id);
+        const auto before=project.root/"Content"/"Before external relocation",after=project.root/"Content"/"After external relocation";
+        fs::create_directories(before);fs::rename(original,before/original.filename());registerAssetPath(project.root,id,before/original.filename());
+        AssetLibrary library(project.root);SceneDocument active(project.root);library.collectUnusedQuaderModels(active);
+        const auto cache=resolveAssetPath(project.root,fixture.modelId);const auto sourceBytes=read(fixture.file),sceneBytes=read(before/original.filename());
+        fs::rename(before,after);library.onFileChanged(before);library.onFileChanged(after);
+        // An unrelated actual scene ownership boundary must not interpret the
+        // temporarily unavailable indexed source as an intentional deletion.
+        library.refreshScenes();library.collectUnusedQuaderModels(active);
+        require(fs::is_regular_file(cache)&&read(fixture.file)==sourceBytes&&read(after/original.filename())==sceneBytes&&
+            library.status().find("Saved scene source is unavailable")!=std::string::npos,
+            "An externally relocated saved scene lost its retained geometry before its location was corrected.");
+        registerAssetPath(project.root,id,after/original.filename());library.refreshScenes();library.collectUnusedQuaderModels(active);
+        require(fs::is_regular_file(cache)&&read(after/original.filename())==sceneBytes,
+            "Correcting a relocated scene location failed to preserve its model owner.");
+        require(library.deleteScene(id),library.status());library.collectUnusedQuaderModels(active);
+        require(library.references().deleted(id)&&!fs::exists(cache)&&!fs::exists(fixture.file),
+            "Managed scene deletion was mistaken for an unavailable source and prevented retired geometry reclamation.");
+    }
+    {
+        Project project;auto fixture=bundle_test::writeFixture(project.root);
+        fixture.bundle.models.front().current=false;writeFileAtomically(fixture.file,encodeQuaderSceneBundle(fixture.bundle));
+        SceneDocument saved(project.root);saved.createModel(fixture.modelId,"Externally deleted owner");
+        require(saved.save("Durable deletion policy"),saved.status());
+        const auto id=saved.assetId();const auto file=resolveAssetPath(project.root,id),cache=resolveAssetPath(project.root,fixture.modelId);
+        AssetLibrary library(project.root);SceneDocument active(project.root);library.collectUnusedQuaderModels(active);
+        AssetReferenceManager external(project.root);const std::array<AssetEntry,1> deleted{{{id,"Durable deletion policy",AssetKind::Scene}}};
+        external.replace(deleted,{});external.save();fs::remove(file);
+        require(!library.references().deleted(id),"The external-policy regression did not retain a stale live policy.");
+        library.onFileChanged(resolveAssetPath(project.root,"assets/references.json"));library.collectUnusedQuaderModels(active);
+        require(!fs::exists(cache)&&!fs::exists(fixture.file),
+            "A fresh durable scene-deletion policy failed to authorize reclamation before live policy reload.");
     }
 }
 
@@ -2650,7 +2746,7 @@ void blendOccurrenceMaterials() {
 
 int main(int argc,char** argv){try{
     if(argc==2&&std::string(argv[1])=="--quader-retention-proof") {
-        retiredQuaderOwnershipProof();std::cout<<"Retired Quader direct ownership proof and complete dependency fallback passed.\n";return 0;
+        retiredQuaderOwnershipProof();retiredQuaderHydrationScheduling();retiredQuaderUnavailableScene();std::cout<<"Retired Quader direct ownership proof, hydration scheduling, unavailable scene protection and complete dependency fallback passed.\n";return 0;
     }
     if(argc==2&&std::string(argv[1])=="--model-policy-snapshot") {
         modelPolicySnapshots();std::cout<<"Immutable model loader policy and usage-index isolation passed.\n";return 0;
@@ -2677,7 +2773,7 @@ int main(int argc,char** argv){try{
         return 0;
     }
     if(argc==5&&std::string(argv[1])=="--material-preview-resources") {materialPreviewResources(argv[2],argv[3],argv[4]);return 0;}
-    retiredQuaderOwnershipProof();
+    retiredQuaderOwnershipProof();retiredQuaderHydrationScheduling();retiredQuaderUnavailableScene();
     // Public deletion checks use disposable CPU data; the final fallback check
     // opens a scoped Noop device without a native application window.
     warningQueries();bundledModelPublicationAndReferences();manualBundledModelDeletion(false);manualBundledModelDeletion(true);bundledBatchDeletionContinuesFrames(false);bundledBatchDeletionContinuesFrames(true);multiBundleBatchDeletionWithSurvivingFallbacks();externallyChangedDeletionPolicy(0);externallyChangedDeletionPolicy(1);externallyChangedDeletionPolicy(2);lastBundledMeshFolderCleanup(false);lastBundledMeshFolderCleanup(true);referencedBundledModelDeletion(false);referencedBundledModelDeletion(true);cancelAndStaleBundledDeletion();failedBundledDeletion();retiredQuaderModelCollection(false);retiredQuaderModelCollection(true);retiredQuaderPolicyRetention();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();changedUsagePreservesConsumerAssignments();boxMaterialDeletionAndPublication();importedMaterialSlotsAndDeletion();legacyUnusedModelMaterialAssignments();immutableMaterialMetadata();modelPolicySnapshots();boxMaterialHistoryOnlyDeletion();dormantGraphTextureDeletion();pendingGraphKeepsCoverageExplicit();navigationProfileDeletion();gameplayEffectDeletion();unrelatedDeletionMaterializesLegacyEffects(false);unrelatedDeletionMaterializesLegacyEffects(true);unrelatedDeletionMaterializesLegacyProfiles(false);unrelatedDeletionMaterializesLegacyProfiles(true);

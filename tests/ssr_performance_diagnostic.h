@@ -18,10 +18,11 @@ Json ssrDistribution(std::vector<double> values) {
         {"p50",percentile(.5)},{"p95",percentile(.95)},{"min",values.front()},{"max",values.back()}};
 }
 int ssrPerformanceDiagnostic(int argc,char** argv) {
-    require(argc>=7,"Usage: forward_plus_room_benchmark --ssr-performance-project PROJECT SHADERC SHADER_SOURCES SHADER_INCLUDES OUTPUT [--width N --height N --scene-width N --scene-height N --warmup N --samples N --views game|both --ssr authored|off --contact-geometry prepared|dense --profile-views --tracy --backend dx11|dx12 --shader-cache DIR --contact-shader-override DIR --ssr-trace-shader-override DIR]");
+    require(argc>=7,"Usage: forward_plus_room_benchmark --ssr-performance-project PROJECT SHADERC SHADER_SOURCES SHADER_INCLUDES OUTPUT [--width N --height N --scene-width N --scene-height N --warmup N --samples N --views game|both --camera-motion fixed|scene --contact-reuse auto|fresh --ssr authored|off --contact-geometry prepared|dense --profile-views --tracy --backend dx11|dx12 --shader-cache DIR --contact-shader-override DIR --ssr-trace-shader-override DIR]");
     unsigned width=1280,height=720,warmupMinimum=60,sampleMinimum=120;
     std::optional<unsigned> sceneWidthOption,sceneHeightOption;
-    bool both=false,ssrOff=false,profile=false,tracy=false,denseContactGeometry=false,contactGeometryRequested=false;auto backend=selectedTestGraphicsBackend();
+    bool both=false,ssrOff=false,profile=false,tracy=false,denseContactGeometry=false,contactGeometryRequested=false;
+    bool moveSceneCamera=false,forceFreshContact=false;auto backend=selectedTestGraphicsBackend();
     fs::path persistentShaderCache,contactShaderSources,traceShaderSources;
     for(int i=7;i<argc;++i) {
         const std::string option=argv[i];
@@ -35,6 +36,8 @@ int ssrPerformanceDiagnostic(int argc,char** argv) {
             else if(option=="--contact-shader-override")contactShaderSources=fs::weakly_canonical(value);
             else if(option=="--ssr-trace-shader-override")traceShaderSources=fs::weakly_canonical(value);
             else if(option=="--views"){require(value=="game"||value=="both","--views must be game or both.");both=value=="both";}
+            else if(option=="--camera-motion"){require(value=="fixed"||value=="scene","--camera-motion must be fixed or scene.");moveSceneCamera=value=="scene";}
+            else if(option=="--contact-reuse"){require(value=="auto"||value=="fresh","--contact-reuse must be auto or fresh.");forceFreshContact=value=="fresh";}
             else if(option=="--ssr"){require(value=="authored"||value=="off","--ssr must be authored or off.");ssrOff=value=="off";}
             else if(option=="--contact-geometry"){require(value=="prepared"||value=="dense","--contact-geometry must be prepared or dense.");denseContactGeometry=value=="dense";contactGeometryRequested=true;}
             else if(option=="--backend"){const auto parsed=parseGraphicsBackend(value);require(parsed.has_value(),"Unknown SSR diagnostic backend.");backend=*parsed;}
@@ -48,6 +51,8 @@ int ssrPerformanceDiagnostic(int argc,char** argv) {
         }
     }
     const unsigned sceneWidth=sceneWidthOption.value_or(width),sceneHeight=sceneHeightOption.value_or(height);
+    require(!moveSceneCamera||both,"Moving the Scene camera requires --views both.");
+    require(!moveSceneCamera||!denseContactGeometry,"The frozen dense-geometry diagnostic requires fixed cameras.");
     const fs::path original=fs::weakly_canonical(argv[2]),output=fs::absolute(argv[6]);Temporary temporary;
     std::cout<<"Staging saved-scene snapshot at "<<temporary.root<<std::endl;
     copyGiProject(original,temporary.root);const auto project=temporary.root;initializeContentStorage(project);fs::create_directories(output);
@@ -111,7 +116,8 @@ int ssrPerformanceDiagnostic(int argc,char** argv) {
     renderer.resizeViewport(both?sceneWidth:1,both?sceneHeight:1);renderer.resizeGameViewport(width,height);renderer.setGridVisible(false);
     bgfx::reset(320,240,BGFX_RESET_NONE);bgfx::setDebug(profile?BGFX_DEBUG_PROFILER:BGFX_DEBUG_NONE);
     struct Cpu {double wall{},update{},prepare{},shadowPrepare{},receiverPrepare{},submit{},advance{},backend{};
-        std::uint64_t draws{},computes{},triangles{},shadowDraws{},sceneModels{},gameModels{},rayInstances{},rayTriangles{},rayNodes{};std::uint32_t frame{},query{};};
+        std::uint64_t draws{},computes{},triangles{},shadowDraws{},sceneModels{},gameModels{},rayInstances{},rayTriangles{},rayNodes{};
+        std::uint32_t sceneContactTraces{},sceneContactReuses{},gameContactTraces{},gameContactReuses{},frame{},query{};};
     struct Gpu {std::uint32_t frame{};double elapsed{};};
     std::uint32_t frame{};bool ready{};std::shared_ptr<const PreparedRenderFrame> lastPrepared;
     struct DenseModel {std::shared_ptr<const ModelAsset> source,replacement;};
@@ -171,6 +177,7 @@ int ssrPerformanceDiagnostic(int argc,char** argv) {
         denseSourceFrame=std::move(source);densePreparedFrame=std::move(adapted);
         return densePreparedFrame;
     };
+    bool measurementMotion{};unsigned motionFrame{};
     const auto tick=[&]() {
         const auto begin=Clock::now();Cpu sample;resources.pump();assets.updateResources(frame);renderer.advanceStreaming();prepared.beginFrame();sample.update=milliseconds(begin);
         EditorRenderFrameInput input;input.extracted=extracted;input.settings.environment=extracted.environment.environment;
@@ -178,11 +185,23 @@ int ssrPerformanceDiagnostic(int argc,char** argv) {
         input.settings.environment.map=assets.references().resolveEnvironment(input.settings.environment.map);
         input.settings.exposure=extracted.environment.exposure;input.settings.proceduralSun=extracted.proceduralSun;input.settings.antiAliasing=antiAliasing;
         input.sceneCamera=sceneCamera;input.gameCamera=gameCamera;input.sceneWidth=both?sceneWidth:1;input.sceneHeight=both?sceneHeight:1;
+        if(measurementMotion&&moveSceneCamera){
+            // A fixed path per submitted frame permits paired runs at different
+            // frame rates. Translate eye and target together; Game stays fixed.
+            const float phase=float(++motionFrame)*.07f;
+            const Vec3 offset{.05f*std::sin(phase),0,.05f*(std::cos(phase)-1.f)};
+            input.sceneCamera.position=input.sceneCamera.position+offset;input.sceneCamera.target=input.sceneCamera.target+offset;
+        }
         input.gameWidth=width;input.gameHeight=height;input.sceneAspect=float(sceneWidth)/sceneHeight;input.sceneVisible=both;input.gameVisible=true;
         input.worldId=1;input.giWorldId=1;input.gameCameraId=document.scene().properties().activeCamera;
         input.shadowResolution=static_cast<std::uint16_t>(shadowResolution);input.materialContext={};
         EditorRenderFramePreparationStats preparation;const auto preparationStart=Clock::now();
         lastPrepared=contactGeometryFrame(prepareEditorRenderFrame(std::move(input),assets,prepared,&preparation));sample.prepare=milliseconds(preparationStart);
+        if(forceFreshContact){
+            auto fresh=std::make_shared<PreparedRenderFrame>(*lastPrepared);
+            for(auto& view:fresh->views)view.meshPopulationRevision=0;
+            lastPrepared=std::move(fresh);
+        }
         sample.shadowPrepare=preparation.shadowPreparationMs;sample.receiverPrepare=preparation.receiverPreparationMs;
         const auto resourceState=resources.stats();ready=preparation.ready&&preparation.refined&&!resourceState.queued&&!resourceState.running;
         for(const auto& view:lastPrepared->views)if(view.identity.purpose==RenderViewPurpose::Game)sample.gameModels=view.instances.size();else sample.sceneModels=view.instances.size();
@@ -191,6 +210,8 @@ int ssrPerformanceDiagnostic(int argc,char** argv) {
         // here. Read before advance_frame can publish/reset another generation.
         const auto rayStats=renderer.shadowStats();sample.rayInstances=rayStats.rayInstances;
         sample.rayTriangles=rayStats.rayTriangles;sample.rayNodes=rayStats.rayNodes;
+        sample.sceneContactTraces=rayStats.contactTraces[0];sample.sceneContactReuses=rayStats.contactReuses[0];
+        sample.gameContactTraces=rayStats.contactTraces[1];sample.gameContactReuses=rayStats.contactReuses[1];
         prepared.endFrame();const auto retained=renderer.modelResidentBytes()+renderer.thumbnailResidentBytes();
         assets.trimTextureCache(retained>=resources.config().gpuRetentionBytes?0:resources.config().gpuRetentionBytes-retained);
         // Match the ordinary primary swapchain cadence on both APIs. There is
@@ -216,6 +237,26 @@ int ssrPerformanceDiagnostic(int argc,char** argv) {
     }while((warm<warmupMinimum||settled<8||readySince==Clock::time_point{}||Clock::now()-readySince<std::chrono::seconds{2})&&Clock::now()<deadline);
     require(ready&&settled>=8&&readySince!=Clock::time_point{}&&Clock::now()-readySince>=std::chrono::seconds{2},"Saved-scene resources did not become ready: "+prepared.status()+"; "+assets.status());
     freezeDenseFrame=denseContactGeometry;
+    Json receiverInputs=Json::array();
+    for(const auto& view:lastPrepared->views){
+        Json models=Json::array();
+        for(const auto& instance:view.instances){
+            Json bindings=Json::array();
+            if(instance.textures)for(const auto& binding:*instance.textures){
+                Json value{{"complete",binding.complete},{"source_ready",binding.sourceReady},{"graph_pending",binding.graphPending}};
+                if(binding.graph){const auto& graph=*binding.graph;value["graph"]={{"signature",graph.signature},{"runtime_parameters",graph.runtimeParameters.size()},
+                    {"dynamic_coverage",graph.dynamicCoverage},{"dynamic_height",graph.dynamicHeight},{"tessellation",graph.tessellation.enabled}};}
+                bindings.push_back(std::move(value));
+            }
+            Json primitives=Json::array();
+            if(instance.model.asset)for(const auto& primitive:instance.model.asset->primitives)primitives.push_back({{"skin",primitive.hasSkinning},
+                {"skin_weights",primitive.skinWeights.size()},{"morph_targets",primitive.morphTargets.size()},{"material",primitive.material}});
+            models.push_back({{"entity",instance.entityId},{"asset",instance.model.asset?instance.model.asset->id:std::string{}},
+                {"resource_revision",instance.resourceRevision},{"posed",bool(instance.pose)},{"opacity",instance.opacity},{"transform",instance.model.transform},
+                {"primitives",std::move(primitives)},{"bindings",std::move(bindings)}});
+        }
+        receiverInputs.push_back({{"view",view.identity.purpose==RenderViewPurpose::Game?"game":"scene"},{"population_revision",view.meshPopulationRevision},{"models",std::move(models)}});
+    }
     const auto denseModelsBefore=denseModels.size(),densePrimitivesBefore=denseClearedPrimitives;
     require(!denseContactGeometry||denseModelsBefore>0,
         "Dense contact reference found no worker-prepared contact geometry to replace.");
@@ -243,6 +284,7 @@ int ssrPerformanceDiagnostic(int argc,char** argv) {
         }
     };
     const auto measureStart=Clock::now();
+    measurementMotion=true;
     for(unsigned i=0;i<measurementFrames;++i){cpu.push_back(tick());require(ready,"Resource preparation changed during timed workload.");collect();}
     const double measurementWall=milliseconds(measureStart);
     shared::profiling::message("SSR diagnostic measurement end");
@@ -278,7 +320,10 @@ int ssrPerformanceDiagnostic(int argc,char** argv) {
                     {"asset",instance.model.asset?instance.model.asset->id:std::string{}},{"slot",slot},{"diagnostic",diagnostic}});
             }
     }
-    Json report{{"schema",1},{"scope","Static saved-scene render workload at authored pose/material time zero; no physics, Play simulation, editor UI, particle simulation, or asset IO in timed frames. Scene/Game dimensions are explicit diagnostic dimensions."},
+    Json report{{"schema",1},{"scope","Saved-scene render workload at authored world pose/material time zero; optional deterministic Scene camera motion is recorded separately. No physics, Play simulation, editor UI, particle simulation, or asset IO in timed frames. Scene/Game dimensions are explicit diagnostic dimensions."},
+        {"camera_motion",moveSceneCamera?"scene":"fixed"},{"contact_reuse",forceFreshContact?"fresh":"auto"},
+        {"camera_motion_path",moveSceneCamera?Json{{"phase_step_radians",.07},{"translation_radius_m",.05},{"scope","Scene eye and target translated per measured submitted frame; Game camera remains authored and fixed."}}:Json(nullptr)},
+        {"fresh_contact_control",forceFreshContact?Json("Copies the prepared frame and clears meshPopulationRevision to exercise the existing unknown-population path. This also disables retained CPU mesh packet reuse where otherwise eligible. Use this pair for native GPU conclusions; CPU timings include both diagnostic copies and unrelated packet preparation."):Json(nullptr)},
         {"timing_notes","Whole-frame GPU timestamps measure elapsed queue interval, not active GPU execution; primary Present/queue backpressure remains in wall timing. Whole-frame and per-view GPU queries are independently filtered to the measured submitted frame range and deduplicated by their actual GPU frame IDs. Profiled attribution must not be mixed with unprofiled baseline cadence."},
         {"source_project",original.string()},{"scene_id",sceneId},{"backend",renderer.backendName()},{"vendor_id",bgfx::getCaps()->vendorId},{"device_id",bgfx::getCaps()->deviceId},
         {"compiler",config.compiler.string()},{"shader_sources",config.sourceDirectory.string()},{"shader_includes",config.includeDirectory.string()},
@@ -312,6 +357,9 @@ int ssrPerformanceDiagnostic(int argc,char** argv) {
         {"contact_payload",{{"scope","Public shadow stats sampled immediately after renderFrame, before advance_frame; last submitted world view is Game. Scene and Game share the same immutable world caster asset list; these are not independent per-view counters."},
             {"last_view","game"},{"shared_world_casters",both},{"ray_instances",cpuValues(&Cpu::rayInstances)},
             {"ray_triangles",cpuValues(&Cpu::rayTriangles)},{"ray_nodes",cpuValues(&Cpu::rayNodes)}}},
+        {"contact_fields",{{"scene_traces",cpuValues(&Cpu::sceneContactTraces)},{"scene_reuses",cpuValues(&Cpu::sceneContactReuses)},
+            {"game_traces",cpuValues(&Cpu::gameContactTraces)},{"game_reuses",cpuValues(&Cpu::gameContactReuses)}}},
+        {"receiver_inputs",std::move(receiverInputs)},
         {"throughput_fps",1000.*measurementFrames/measurementWall},{"wall_measurement_ms",measurementWall},
         {"gpu_query_availability",{{"minimum_unique_queries",sampleMinimum},{"observed_unique_queries",gpuFrames.size()},{"measured_cpu_frames",measurementFrames},{"first_measured_frame",first},{"last_measured_frame",last},{"frame_ids",gpuFrames},{"complete",gpuFrames.size()>=sampleMinimum}}},
         {"status",{{"model",prepared.status()},{"assets",assets.status()},{"renderer_model",renderer.modelStatus()},{"ssr",renderer.ssrStatus()},{"ssgi",renderer.ssgiStatus()},{"ssao",renderer.ssaoStatus()},{"shadow",renderer.shadowStatus()}}},
@@ -325,14 +373,22 @@ int ssrPerformanceDiagnostic(int argc,char** argv) {
         report["view_attribution"][std::to_string(view)]={{"name",viewNames[view]},{"elapsed_ms",ssrDistribution(std::move(elapsed))},{"frame_ids",frameIds}};
     }
     std::ofstream cpuFile(output/"cpu-frames.csv"),gpuFile(output/"gpu-frames.csv");require(bool(cpuFile)&&bool(gpuFile),"Cannot write diagnostic raw samples.");
-    cpuFile<<"index,submitted_frame,published_gpu_frame,wall_ms,update_ms,prepare_ms,shadow_prepare_ms,receiver_prepare_ms,submission_ms,bgfx_frame_ms,backend_ms,draws,computes,triangles,shadow_draws,scene_models,game_models,last_view_ray_instances,last_view_ray_triangles,last_view_ray_nodes\n";
-    for(std::size_t i=0;i<cpu.size();++i){const auto& s=cpu[i];cpuFile<<i<<','<<s.frame<<','<<s.query<<','<<s.wall<<','<<s.update<<','<<s.prepare<<','<<s.shadowPrepare<<','<<s.receiverPrepare<<','<<s.submit<<','<<s.advance<<','<<s.backend<<','<<s.draws<<','<<s.computes<<','<<s.triangles<<','<<s.shadowDraws<<','<<s.sceneModels<<','<<s.gameModels<<','<<s.rayInstances<<','<<s.rayTriangles<<','<<s.rayNodes<<'\n';}
+    cpuFile<<"index,submitted_frame,published_gpu_frame,wall_ms,update_ms,prepare_ms,shadow_prepare_ms,receiver_prepare_ms,submission_ms,bgfx_frame_ms,backend_ms,draws,computes,triangles,shadow_draws,scene_models,game_models,last_view_ray_instances,last_view_ray_triangles,last_view_ray_nodes,scene_contact_traces,scene_contact_reuses,game_contact_traces,game_contact_reuses\n";
+    for(std::size_t i=0;i<cpu.size();++i){const auto& s=cpu[i];cpuFile<<i<<','<<s.frame<<','<<s.query<<','<<s.wall<<','<<s.update<<','<<s.prepare<<','<<s.shadowPrepare<<','<<s.receiverPrepare<<','<<s.submit<<','<<s.advance<<','<<s.backend<<','<<s.draws<<','<<s.computes<<','<<s.triangles<<','<<s.shadowDraws<<','<<s.sceneModels<<','<<s.gameModels<<','<<s.rayInstances<<','<<s.rayTriangles<<','<<s.rayNodes<<','<<s.sceneContactTraces<<','<<s.sceneContactReuses<<','<<s.gameContactTraces<<','<<s.gameContactReuses<<'\n';}
     gpuFile<<"gpu_frame,elapsed_ms\n";for(const auto& s:gpu)gpuFile<<s.frame<<','<<s.elapsed<<'\n';
     {std::ofstream file(output/"report.json");file<<report.dump(2)<<'\n';require(bool(file),"Cannot write diagnostic summary.");}
     if(profile){std::ofstream file(output/"view-samples.json");file<<rawViews.dump(2)<<'\n';require(bool(file),"Cannot write per-view diagnostic samples.");}
     resources.stop();lastPrepared.reset();renderer.drainPending(frame);
     std::cout<<report.dump(2)<<std::endl;
     require(gpuFrames.size()>=sampleMinimum,"Too few unique measured GPU queries; actual frame IDs and samples retained in report.");
+    require(!moveSceneCamera||gpuFrames.size()==measurementFrames,
+        "Moving-camera comparison requires every measured GPU frame so paired runs sample identical camera phases.");
+    if(forceFreshContact){
+        require(std::all_of(cpu.begin(),cpu.end(),[&](const auto& sample){
+            return sample.sceneContactReuses==0&&sample.gameContactReuses==0&&
+                (!contactGeometryRequested||(sample.gameContactTraces==1&&(!both||sample.sceneContactTraces==1)));
+        }),"The forced-fresh contact control did not trace each requested view without reuse.");
+    }
     require(!contactGeometryRequested||std::all_of(cpu.begin(),cpu.end(),[](const auto& sample) {
         return sample.rayInstances>0&&sample.rayTriangles>0&&sample.rayNodes>0;
     }),"The requested contact-geometry comparison did not render a nonempty contact payload in every measured frame.");

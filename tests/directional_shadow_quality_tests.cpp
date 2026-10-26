@@ -795,9 +795,15 @@ template<class Read> void contactPerformanceChecks(Renderer& renderer,const Shad
     const auto finiteImage=[&](const auto& programs,bool csmOnly=false){
         require(renderer.reloadPrograms(programs),renderer.shaderStatus());
         receiver.pose=csmOnly?floorPose:nullptr;finiteCasters[0].pose=receiver.pose;finiteCasters[1].pose=csmOnly?boxPose:nullptr;
-        for(unsigned i=0;i<6;++i)submit();require(renderer.shadowStatus().empty(),renderer.shadowStatus());return read(renderer.gameViewportTexture(),width,height);
+        submit();if(scene.meshPopulationRevision&&!csmOnly)require(renderer.shadowStats().contactTraces[1]>0,"Changed contact shader reused a prior program's field.");
+        for(unsigned i=1;i<6;++i)submit();require(renderer.shadowStatus().empty(),renderer.shadowStatus());return read(renderer.gameViewportTexture(),width,height);
     };
+    // Only this tiny correctness sequence enables immutable-field reuse.
+    // Real changed private programs must invalidate previously cached output.
+    // Every subsequent native timing window returns to forced fresh traversal.
+    scene.meshPopulationRevision=932;
     const auto csm=finiteImage(current,true),packet=finiteImage(amplePacket),fallback=finiteImage(ampleFallback),exact=finiteImage(ampleIndependent),limited=finiteImage(exhausted);
+    scene.meshPopulationRevision=0;
     require(packet.rgba==exact.rgba,"Ample-budget hard packet changed deterministic finite coverage.");
     require(fallback.rgba==exact.rgba,"Exhausted hard packet failed to restart exact independent-ray refinement.");
     require(limited.rgba==csm.rgba,"Total-work exhaustion published partial contact coverage instead of the CSM baseline.");
@@ -988,7 +994,147 @@ template<class Read> void paintedContactChecks(Renderer& renderer,const Read& re
     bgfx::setDebug(BGFX_DEBUG_NONE);
 }
 
-void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capture,bool closedRoomOnly,bool compiledModel,bool profileClosedRoom,bool contactOnly,bool contactPerformanceOnly,bool paintedContactOnly){
+// Embedded programs exercise the real owners and per-view pass plan. Zero
+// population revision is the existing force-fresh contract, not a quality mode.
+template<class Read> void contactReuseChecks(Renderer& renderer,const Read& read,std::uint32_t& frame,const fs::path& capture){
+    const auto floor=floorGeometry();const auto box=builtinBoxGeometry();
+    require(renderer.prepareModel(*floor)&&renderer.prepareModel(*box),renderer.modelStatus());
+    std::vector<ModelMaterial> white(1);white[0].baseColor={1,1,1,1};white[0].roughness=1;white[0].metallic=white[0].specular=0;
+    std::vector<ModelMaterialTextures> textures(1);
+    RenderModelInstance receiver;receiver.entityId=1400;receiver.model.asset=floor;receiver.materials=&white;receiver.textures=&textures;receiver.forceFullDetail=true;
+    auto blocker=receiver;blocker.entityId=1401;blocker.model.asset=box;
+    blocker.model.transform=math::translation({.06f,.03f,0})*math::eulerRotationXYZ({0,.29670597f,0})*math::scaling({.55f,.01f,.55f});
+    auto masked=white;masked[0].alphaMask=true;masked[0].alphaCutoff=.5f;
+    auto roof=blocker;roof.entityId=1402;roof.materials=&masked;roof.castShadows=false;
+    roof.model.transform=math::translation({0,.5f,0})*math::scaling({4,.01f,4});
+    std::array casters{receiver,blocker,roof};
+    SceneSettings settings;settings.environment.enabled=false;settings.environment.ambientLight.source=AmbientLightSource::Disabled;
+    settings.environment.background.overrideColor=true;settings.environment.background.color={};settings.environment.toneMapping=ToneMapping::Linear;
+    settings.environment.fog.enabled=settings.environment.glow.enabled=settings.environment.ssgi.enabled=false;
+    settings.environment.ssao.enabled=settings.environment.ssr.enabled=false;settings.antiAliasing=AntiAliasing::Off;settings.exposure=1;
+    settings.camera.position={0,4,0};settings.camera.target={0,0,0};settings.camera.up={0,0,-1};
+    settings.camera.nearPlane=.05f;settings.camera.fov=45;settings.camera.fovAxis=CameraFovAxis::Vertical;
+    auto gameSettings=settings;DirectionalLight sun;sun.entityId=1410;sun.direction={0,-1,0};sun.intensity=1;sun.castShadows=true;
+    sun.shadowAngularDiameter=0;sun.shadowDistance=20;sun.shadowDepthBias=0;sun.shadowNormalBias=4;
+    RenderScene scene{settings,{}},game{gameSettings,{}};
+    for(auto* value:{&scene,&game}){value->sceneMode=true;value->instances=std::span(&receiver,1);value->shadowInstances=casters;
+        value->directionalLights=std::span(&sun,1);value->shadowWorldId=1420;value->shadowResolution=256;value->meshPopulationRevision=1421;}
+    std::uint16_t width=257,height=193;renderer.resizeViewport(width,height);renderer.resizeGameViewport(width,height);
+    const auto compilerBefore=shaderCompilerMetrics().compilerInvocations;bgfx::setDebug(BGFX_DEBUG_PROFILER);
+    const auto submit=[&](bool moveScene=false,bool requireContact=true){
+        renderer.advanceStreaming();
+        if(moveScene){settings.camera.position[0]+=.017f;settings.camera.target[0]+=.017f;}
+        renderer.render(scene);renderer.renderGame(game);require(renderer.shadowStatus().empty(),renderer.shadowStatus());
+        const auto stats=renderer.shadowStats();require(!requireContact||(stats.contactTraces[0]+stats.contactReuses[0]==1&&stats.contactTraces[1]+stats.contactReuses[1]==1),
+            "Reuse fixture did not submit exactly one real contact field per view.");
+        bgfx::touch(ToolsView);frame=renderer.advance_frame();return stats;
+    };
+    const auto image=[&]{return read(renderer.gameViewportTexture(),width,height);};
+    const auto freshParity=[&](const std::string& label){const auto cached=image();const auto revision=game.meshPopulationRevision;game.meshPopulationRevision=0;
+        require(submit().contactTraces[1]==1,label+": zero population revision reused contact scratch.");const auto fresh=image();
+        require(cached.rgba==fresh.rgba,label+": reused field changed completed source/camera visibility.");game.meshPopulationRevision=revision;
+        require(submit().contactTraces[1]==1,label+": static/dynamic/static transition retained the overwritten scratch key.");
+        require(submit().contactReuses[1]==1,label+": restored static field did not become reusable.");return cached;};
+    for(unsigned i=0;i<5;++i)submit();
+    require(submit().contactReuses[0]==1&&renderer.shadowStats().contactReuses[1]==1,"Unchanged Scene/Game fields failed to reuse.");
+    const auto initial=freshParity("static-hard");
+    for(unsigned i=0;i<12;++i){const auto stats=submit(true);
+        require(stats.contactTraces[0]==1&&stats.contactReuses[0]==0&&stats.contactReuses[1]==1&&stats.contactTraces[1]==0,
+            "Scene camera navigation retraced fixed Game or reused the moving Scene field.");}
+    require(image().rgba==initial.rgba,"Moving Scene changed fixed Game contact pixels.");
+    const auto floorPose=std::make_shared<ModelPose>(evaluateModelPose(*floor)),boxPose=std::make_shared<ModelPose>(evaluateModelPose(*box));
+    receiver.pose=floorPose;casters[0].pose=floorPose;casters[1].pose=boxPose;for(unsigned i=0;i<3;++i)submit(false,false);const auto csm=image();
+    receiver.pose.reset();casters[0].pose.reset();casters[1].pose.reset();submit();const auto refined=freshParity("restored-rigid-hard");
+    unsigned corrected{};for(unsigned i=0;i<refined.rgba.size();i+=4)corrected+=brightness(csm,i)>brightness(refined,i)+5;
+    require(corrected>=10,"Reuse parity did not exercise observable finite contact correction over CSM.");
+    // A CSM-only masked caster does not enter the immutable ray scene. Its
+    // disappearance must still invalidate the old CSM-zero early-out field.
+    casters[2].castShadows=true;auto changed=submit();require(changed.contactTraces[1]==1&&changed.rayCacheHits==1,"CSM-only roof change did not invalidate contact reuse independently of the BVH.");
+    require(submit().contactReuses[1]==1,"Static masked CSM roof failed to settle.");
+    casters[2].castShadows=false;changed=submit();require(changed.contactTraces[1]==1&&changed.rayCacheHits==1,"Removing a CSM-only roof reused its old neutral field.");
+    freshParity("masked-roof-removed");
+    for(const float angle:{.53f,2.f,0.f}){sun.shadowAngularDiameter=angle;
+        require(submit().contactTraces[1]==1,"Source angular-diameter edit reused an old field.");freshParity("source-angle-"+std::to_string(angle));}
+    sun.shadowNormalBias=1;require(submit().contactTraces[1]==1,"CSM bias-only edit reused an old field.");freshParity("normal-bias");
+    casters[1].model.transform=math::translation({.12f,.035f,.03f})*math::scaling({.6f,.01f,.5f});
+    require(submit().contactTraces[1]==1,"Offscreen rigid caster motion reused an old field.");freshParity("offscreen-caster");
+    gameSettings.camera.position[0]+=.11f;gameSettings.camera.target[0]+=.11f;
+    require(submit().contactTraces[1]==1,"Game camera motion reused an old field.");freshParity("game-camera");
+    ++game.meshPopulationRevision;require(submit().contactTraces[1]==1,"Receiver population edit reused an old field.");freshParity("receiver-population");
+    ++game.shadowWorldId;scene.shadowWorldId=game.shadowWorldId;
+    require(submit().contactTraces[1]==1,"World replacement reused an old field.");freshParity("world");
+    sun.castShadows=false;for(unsigned i=0;i<2;++i)submit(false,false);sun.castShadows=true;
+    require(submit().contactTraces[1]==1,"Re-enabled directional shadows reused disabled scratch.");freshParity("disable-enable");
+    width=269;height=201;renderer.resizeViewport(width,height);renderer.resizeGameViewport(width,height);
+    require(submit().contactTraces[1]==1,"Resized Game reused another pixel footprint.");freshParity("resized");
+    // AO allocates a new atlas region before the contact region. Scratch is
+    // still valid, and must be republished at the newly prepared destination.
+    gameSettings.environment.ssao.enabled=true;changed=submit();
+    require(changed.contactReuses[1]==1&&changed.rayUploads==1,"Atlas relocation unnecessarily traced or failed to relocate contact geometry.");freshParity("ao-atlas-relocation");
+    gameSettings.environment.ssao.enabled=false;submit();
+    RenderParticle particle;particle.position={0,1,0};particle.size=.1f;game.particles=std::span(&particle,1);
+    require(submit().contactReuses[1]==1,"An additive sprite unnecessarily invalidated opaque contact scratch.");
+    RenderParticleMaterial opaque;opaque.blend=MaterialBlend::Opaque;game.particleMaterials=std::span(&opaque,1);
+    require(submit().contactTraces[1]==1&&submit().contactTraces[1]==1,"A depth-writing particle reused a static mesh-only field.");
+    game.particles={};game.particleMaterials={};require(submit().contactTraces[1]==1,"Removing dynamic particles retained their overwritten field key.");
+    require(submit().contactReuses[1]==1,"Static field failed to recover after particles.");
+    particle.size=0;game.particles=std::span(&particle,1);game.particleMaterials=std::span(&opaque,1);
+    require(submit().contactReuses[1]==1,"An invalid, unsubmitted particle invalidated contact scratch.");game.particles={};game.particleMaterials={};
+    receiver.pose=floorPose;casters[0].pose=floorPose;
+    require(submit().contactTraces[1]==1&&submit().contactReuses[1]==1,"An unchanged immutable receiver pose failed to become reusable.");
+    freshParity("posed-identity");
+    receiver.pose.reset();casters[0].pose.reset();submit();freshParity("posed-restored");
+    // Real skin and morph inputs must decide reuse independently of a caller's
+    // optional pose signature or population hash. Keep both unchanged while
+    // replacing immutable snapshots with different deformation payloads.
+    auto animated=std::make_shared<ModelAsset>(*floor);animated->id="contact-reuse-skin-morph-floor";
+    animated->draws[0].node=0;animated->nodes.resize(1);animated->nodes[0].mesh=0;animated->nodes[0].skin=0;
+    animated->skins.resize(1);animated->skins[0].joints={0};animated->skins[0].inverseBindMatrices.resize(1);
+    auto& animatedPrimitive=animated->primitives[0];animatedPrimitive.hasSkinning=true;animatedPrimitive.skinWeights.resize(animatedPrimitive.vertices.size());
+    for(auto& weights:animatedPrimitive.skinWeights)weights.weights[0]=1;
+    ModelMorphTarget morph;morph.positions.assign(animatedPrimitive.vertices.size(),Vec3{0,.2f,0});animatedPrimitive.morphTargets.push_back(std::move(morph));
+    require(renderer.prepareModel(*animated),renderer.modelStatus());
+    auto immutablePose=std::make_shared<ModelPose>();immutablePose->localTransforms.resize(1);immutablePose->worldTransforms.resize(1);
+    immutablePose->drawTransforms.resize(1);immutablePose->skinPalettes={{Mat4{}}};immutablePose->nodeWeights={{0}};immutablePose->bounds=floor->bounds;
+    receiver.model.asset=animated;receiver.pose=immutablePose;++scene.meshPopulationRevision;++game.meshPopulationRevision;
+    sun.shadowNormalBias=4;require(submit().contactTraces[1]==1&&submit().contactReuses[1]==1,"An unchanged skinned/morphed receiver failed to reuse.");
+    const auto unchangedPose=freshParity("skin-morph-unchanged");
+    const auto posePayload=[&](const std::string& label,std::shared_ptr<ModelPose> pose){
+        require(pose->signature==0&&immutablePose->signature==0,"Pose payload regression accidentally relied on a signature.");receiver.pose=std::move(pose);
+        require(submit().contactTraces[1]==1,label+": changed deformation payload reused old scratch with the same pose signature.");
+        require(submit().contactReuses[1]==1,label+": unchanged replacement snapshot failed to reuse.");const auto changedPose=freshParity(label);
+        require(changedPose.rgba!=unchangedPose.rgba,label+": native deformation did not change any receiver pixel.");
+        receiver.pose=immutablePose;require(submit().contactTraces[1]==1,label+": restoring the original payload retained the changed field.");
+        require(submit().contactReuses[1]==1,label+": restored immutable payload failed to reuse.");};
+    auto drawPose=std::make_shared<ModelPose>(*immutablePose);drawPose->drawTransforms[0]=math::translation({0,.2f,0});posePayload("posed-draw-transform",std::move(drawPose));
+    auto skinPose=std::make_shared<ModelPose>(*immutablePose);skinPose->skinPalettes[0][0]=math::translation({0,.2f,0});posePayload("posed-skin-palette",std::move(skinPose));
+    auto morphPose=std::make_shared<ModelPose>(*immutablePose);morphPose->nodeWeights[0][0]=1;posePayload("posed-morph-weight",std::move(morphPose));
+    receiver.pose.reset();receiver.model.asset=floor;sun.shadowNormalBias=1;++scene.meshPopulationRevision;++game.meshPopulationRevision;
+    submit();freshParity("skin-morph-restored");
+    const auto measure=[&](bool fresh){const auto revision=game.meshPopulationRevision;if(fresh)game.meshPopulationRevision=0;
+        for(unsigned i=0;i<6;++i)submit(true);const auto first=frame+1,last=first+15;
+        std::array<std::set<std::uint32_t>,2> seen;std::array<std::vector<double>,2> values;
+        unsigned traces{},reuses{};
+        const auto collect=[&]{const auto* stats=bgfx::getStats();if(stats->gpuTimerFreq<=0)return;
+            const std::array ids{renderViewPassSlots(RenderViewPurpose::Scene).lightingEffects,renderViewPassSlots(RenderViewPurpose::Game).lightingEffects};
+            for(unsigned i=0;i<stats->numViews;++i)for(unsigned context=0;context<2;++context){const auto& view=stats->viewStats[i];
+                if(view.view==ids[context]&&view.gpuFrameNum>=first&&view.gpuFrameNum<=last&&view.gpuTimeEnd>view.gpuTimeBegin&&seen[context].insert(view.gpuFrameNum).second)
+                    values[context].push_back(double(view.gpuTimeEnd-view.gpuTimeBegin)*1000./stats->gpuTimerFreq);}};
+        for(unsigned i=0;i<32;++i){const auto stats=submit(true);if(i<16){traces+=stats.contactTraces[1];reuses+=stats.contactReuses[1];
+            require(stats.contactTraces[0]==1,"Moving Scene timing reused its field.");}collect();}
+        require(fresh?traces==16&&reuses==0:traces==0&&reuses==16,"Native moving-Scene timing bypassed the requested fresh/reuse path.");
+        for(unsigned context=0;context<2;++context){require(values[context].size()>=8,"Native reuse GPU queries were unavailable.");std::sort(values[context].begin(),values[context].end());
+            std::cout<<"contact-reuse-performance mode="<<(fresh?"fresh":"auto")<<" camera="<<(context?"fixed-Game":"moving-Scene")<<" gpu_samples="<<values[context].size()
+                <<" median_ms="<<values[context][values[context].size()/2]<<" max_ms="<<values[context].back()<<" game_traces="<<traces<<" game_reuses="<<reuses<<std::endl;}
+        game.meshPopulationRevision=revision;};
+    measure(false);measure(true);
+    require(shaderCompilerMetrics().compilerInvocations==compilerBefore,"Embedded contact reuse checks invoked a shader compiler.");
+    save(refined,capture,"contact-reuse-rigid");save(csm,capture,"contact-reuse-csm-only");
+    std::cout<<"contact-reuse corrected_pixels="<<corrected<<" static_dynamic_static=pass finite_parity=pass per_view_navigation=pass"<<std::endl;
+    bgfx::setDebug(BGFX_DEBUG_NONE);
+}
+
+void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capture,bool closedRoomOnly,bool compiledModel,bool profileClosedRoom,bool contactOnly,bool contactPerformanceOnly,bool paintedContactOnly,bool contactReuseOnly){
     // Readback storage survives exceptional renderer shutdown.
     std::vector<std::shared_ptr<DecodedImage>> destinations;
     ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));MaterialGraphPrograms programs(resources,config);
@@ -1013,6 +1159,7 @@ void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capt
         for(unsigned i=0;i<120;++i){tick();if(picking::frameReady(frame,ready))return *image;}
         throw std::runtime_error("Directional quality readback timed out.");
     };
+    if(contactReuseOnly){contactReuseChecks(renderer,read,frame,capture);resources.stop();renderer.drainPending(frame);return;}
     if(paintedContactOnly){paintedContactChecks(renderer,read,frame,capture);resources.stop();renderer.drainPending(frame);return;}
     if(contactPerformanceOnly){contactPerformanceChecks(renderer,config,read,frame,capture);resources.stop();renderer.drainPending(frame);return;}
     if(contactOnly){const auto floor=floorGeometry();const auto box=builtinBoxGeometry();
@@ -1150,13 +1297,14 @@ void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capt
 }
 }
 int main(int argc,char** argv){try{
-    require(argc>=4,"Pass shaderc, source, include directories; optionally --closed-room-only, --contact-only, --contact-performance-only, --painted-contact-only, --compiled-model, --profile-closed-room and --capture output-directory.");
-    bool closedRoomOnly{},compiledModel{},profileClosedRoom{},contactOnly{},contactPerformanceOnly{},paintedContactOnly{};fs::path capture;
+    require(argc>=4,"Pass shaderc, source, include directories; optionally --closed-room-only, --contact-only, --contact-performance-only, --contact-reuse-only, --painted-contact-only, --compiled-model, --profile-closed-room and --capture output-directory.");
+    bool closedRoomOnly{},compiledModel{},profileClosedRoom{},contactOnly{},contactPerformanceOnly{},paintedContactOnly{},contactReuseOnly{};fs::path capture;
     for(int index=4;index<argc;++index){const std::string argument=argv[index];
         if(argument=="--closed-room-only")closedRoomOnly=true;
         else if(argument=="--contact-only")contactOnly=true;
         else if(argument=="--contact-performance-only")contactPerformanceOnly=true;
         else if(argument=="--painted-contact-only")paintedContactOnly=true;
+        else if(argument=="--contact-reuse-only")contactReuseOnly=true;
         else if(argument=="--compiled-model")compiledModel=true;
         else if(argument=="--profile-closed-room")profileClosedRoom=true;
         else if(argument=="--capture"&&index+1<argc)capture=argv[++index];
@@ -1167,7 +1315,8 @@ int main(int argc,char** argv){try{
     require(!(contactOnly&&(closedRoomOnly||profileClosedRoom)),"--contact-only cannot be combined with closed-room diagnostics.");
     require(!(contactPerformanceOnly&&(contactOnly||closedRoomOnly||profileClosedRoom||compiledModel)),"--contact-performance-only is an isolated GPU comparison.");
     require(!(paintedContactOnly&&(contactOnly||contactPerformanceOnly||closedRoomOnly||profileClosedRoom||compiledModel)),"--painted-contact-only is an isolated embedded-program GPU comparison.");
-    require(bool(window),SDL_GetError());exercise(window.get(),config,capture,closedRoomOnly,compiledModel,profileClosedRoom,contactOnly,contactPerformanceOnly,paintedContactOnly);
-    std::cout<<(paintedContactOnly?"Painted contact exact geometry, native upload counts, hard/soft coverage and immutable paint checks passed.\n":contactPerformanceOnly?"Directional contact native GPU budget and exact 32-ray image parity passed.\n":contactOnly?"Directional physical contact edge, finite opening and visible-corner checks passed.\n":closedRoomOnly?"Directional closed inward-normal double-sided room checks passed.\n":
+    require(!(contactReuseOnly&&(paintedContactOnly||contactOnly||contactPerformanceOnly||closedRoomOnly||profileClosedRoom||compiledModel)),"--contact-reuse-only is an isolated embedded-program GPU comparison.");
+    require(bool(window),SDL_GetError());exercise(window.get(),config,capture,closedRoomOnly,compiledModel,profileClosedRoom,contactOnly,contactPerformanceOnly,paintedContactOnly,contactReuseOnly);
+    std::cout<<(contactReuseOnly?"Directional contact exact per-view reuse, invalidation, navigation and native GPU checks passed.\n":paintedContactOnly?"Painted contact exact geometry, native upload counts, hard/soft coverage and immutable paint checks passed.\n":contactPerformanceOnly?"Directional contact native GPU budget and exact 32-ray image parity passed.\n":contactOnly?"Directional physical contact edge, finite opening and visible-corner checks passed.\n":closedRoomOnly?"Directional closed inward-normal double-sided room checks passed.\n":
         "Directional closed-room leaks, Scene/Game oblique/grazing floor/wall acne, generated/fallback materials, contact edge filtering and near-contact checks passed.\n");return 0;
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

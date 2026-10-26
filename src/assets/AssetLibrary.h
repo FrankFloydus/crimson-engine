@@ -171,7 +171,7 @@ public:
     std::shared_ptr<const AnimationAsset> copyAnimation(const std::string& id,const std::string& name={});
     void protectAnimationDocument(std::string id){animationDocumentId_=std::move(id);}
     void setAnimationDocumentReferences(std::vector<std::string> active,std::vector<std::string> history) {
-        if(active!=animationDocumentReferences_||history!=animationDocumentHistory_)++catalogRevision_;
+        if(active!=animationDocumentReferences_||history!=animationDocumentHistory_){++catalogRevision_;++modelOwnershipRevision_;}
         animationDocumentReferences_=std::move(active);animationDocumentHistory_=std::move(history);
     }
     std::shared_ptr<const RagdollAsset> findRagdoll(const std::string& id) const;
@@ -183,7 +183,7 @@ public:
     std::shared_ptr<const RagdollAsset> copyRagdoll(const std::string& id,const std::string& name={});
     void protectRagdollDocument(std::string id){ragdollDocumentId_=std::move(id);}
     void setRagdollDocumentReferences(std::vector<std::string> active,std::vector<std::string> history) {
-        if(active!=ragdollDocumentReferences_||history!=ragdollDocumentHistory_)++catalogRevision_;
+        if(active!=ragdollDocumentReferences_||history!=ragdollDocumentHistory_){++catalogRevision_;++modelOwnershipRevision_;}
         ragdollDocumentReferences_=std::move(active);ragdollDocumentHistory_=std::move(history);
     }
     ResourceManager* resources() const { return resources_; }
@@ -354,6 +354,10 @@ private:
     std::vector<AssetEntry> catalog_;
     std::unordered_set<std::string> inactiveQuaderModels_;
     std::unordered_set<std::string> retainedQuaderModels_;
+    // Authored model ownership changes independently of browser/catalog
+    // hydration. Loading an existing model must not restart project-wide GC.
+    std::uint64_t modelOwnershipRevision_{1};
+    std::unordered_map<std::string,std::uint64_t> quaderBundleFingerprints_;
     std::vector<std::string> quaderDocumentModelReferences_;
     std::array<std::uint64_t,8> quaderCollectionState_{};
     bool quaderCollectionInitialized_{};

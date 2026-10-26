@@ -294,7 +294,22 @@ void shadow_contact_contracts() {
         auto prefix=resources;prefix.bindings[index(Resource::ShadowContactVisibility)].textureCount=0;
         check(bool(validateRenderPassBindings(plan,prefix,Kind::ShadowContactTrace)),
             "Tracing required a future visibility allocation before its publication boundary.");
-        config.shadow_contact=false;const auto off=buildRenderPassPlan(config);
+        config.shadow_contact_reuse=true;const auto reused=buildRenderPassPlan(config);const auto retained=concrete(reused);
+        check(bool(validateRenderPassPlan(reused,retained)),"Exact unchanged contact scratch could not be imported.");
+        check(!reused.has(Kind::ShadowContactTrace)&&reused.has(Kind::ShadowContactPublish),"Reused contact field retained tracing or omitted publication.");
+        check(reused.bindings[index(Resource::ShadowContactScratch)].initiallyAvailable,"Reused contact scratch lacks a coherent import contract.");
+        auto undefined=retained;undefined.bindings[index(Resource::ShadowContactScratch)].initialized=false;
+        error(reused,undefined,Error::MissingProducer,"Reused contact publication accepted uninitialized scratch.");
+        auto absent=retained;absent.bindings[index(Resource::ShadowContactScratch)].textureCount=0;
+        error(reused,absent,Error::MissingBinding,"Reused contact publication accepted missing scratch.");
+        auto foreign=retained;++foreign.bindings[index(Resource::ShadowContactScratch)].view.instanceId;
+        error(reused,foreign,Error::InvalidOwner,"Game contact imported another camera's scratch.");
+        auto wrong_extent=retained;--wrong_extent.bindings[index(Resource::ShadowContactScratch)].textures[0].width;
+        error(reused,wrong_extent,Error::InvalidTexture,"Reused contact scratch has another pixel footprint.");
+        auto unannounced=resources;unannounced.bindings[index(Resource::ShadowContactScratch)].initialized=true;
+        error(plan,unannounced,Error::InvalidExternalState,"Fresh contact tracing silently imported old visibility.");
+        config.shadow_contact=false;error(buildRenderPassPlan(config),Error::UnsupportedFeature,"Contact reuse remained enabled without contact publication.");
+        config.shadow_contact_reuse=false;const auto off=buildRenderPassPlan(config);
         check(!off.has(Kind::ShadowContactTrace)&&!off.has(Kind::ShadowContactPublish),"Disabled contact retained compute work.");
         for(const auto& pass:off.passes())for(const auto use:pass.uses())
             check(use.resource!=Resource::ReceiverPosition&&use.resource!=Resource::ReceiverPlane&&

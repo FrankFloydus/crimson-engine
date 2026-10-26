@@ -22,7 +22,7 @@
     "implot"
   ],
   "overrides": [
-    { "name": "bgfx", "version": "1.129.8940-496", "port-version": 16 },
+    { "name": "bgfx", "version": "1.129.8940-496", "port-version": 17 },
     { "name": "tracy", "version": "0.14.1" }
   ]
 }
