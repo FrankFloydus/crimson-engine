@@ -45,6 +45,18 @@ std::optional<Vec3> sphereAnchor(const Camera& camera,const ViewportRegion& regi
     return distance > .0001f ? std::optional<Vec3>{add(camera.eye(),scale(ray,distance))} : std::nullopt;
 }
 }
+bool navigationBlocksEditorEvent(const SDL_Event& event,SDL_WindowID owner,bool flying) {
+    if(!flying)return false;
+    switch(event.type) {
+    case SDL_EVENT_MOUSE_MOTION:return event.motion.windowID==owner;
+    case SDL_EVENT_MOUSE_WHEEL:return event.wheel.windowID==owner;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:return event.button.windowID==owner;
+    case SDL_EVENT_KEY_DOWN:
+        return event.key.windowID==owner && (event.key.scancode==SDL_SCANCODE_W || event.key.scancode==SDL_SCANCODE_A ||
+            event.key.scancode==SDL_SCANCODE_S || event.key.scancode==SDL_SCANCODE_D);
+    default:return false;
+    }
+}
 Navigation::Navigation(SDL_Window* window) {
     baseWindowId_ = window ? SDL_GetWindowID(window) : 0;
     ownerWindowId_ = baseWindowId_;
@@ -59,6 +71,9 @@ void Navigation::handleEvent(const SDL_Event& event) {
         event.type != SDL_EVENT_MOUSE_MOTION && event.type != SDL_EVENT_MOUSE_WHEEL && event.type != SDL_EVENT_KEY_DOWN && event.type != SDL_EVENT_KEY_UP) return;
     auto value = event;
     const auto sourceId = eventWindowId(event);
+    // A minimized/unfocused application may skip drawing and update(). Release
+    // the existing owner immediately rather than retaining native capture.
+    if(active() && belongsTo(sourceId,ownerWindowId_) && cancelsNavigation(event)) { cancel();return; }
     if (desktopCoordinates_ && sourceId && (event.type == SDL_EVENT_MOUSE_MOTION ||
         event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP)) {
         auto* sourceWindow = SDL_GetWindowFromID(sourceId);

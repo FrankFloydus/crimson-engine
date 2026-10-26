@@ -5,6 +5,7 @@
 #include <crimson/renderer/BuildIdentity.hpp>
 #include "assets/AssetLibrary.h"
 #include "input/Navigation.h"
+#include "input/NavigationUiInput.h"
 #include "platform/WindowIcon.h"
 #include "platform/WindowPlacement.h"
 #include "tools/Tools.h"
@@ -163,9 +164,9 @@ int run(const AppOptions& options) {
             {
             CRIMSON_PROFILE_ZONE("Input and window events");
             while (SDL_PollEvent(&event)) {
-                // Game relative mouse input and FPS press edges must not
-                // activate widgets beneath the captured platform cursor.
-                if(!editor || !editor->blocksEditorEvent(event))ImGui_ImplSDL3_ProcessEvent(&event);
+                // Relative Scene/Game input must not move ImGui's pointer or
+                // activate widgets beneath the hidden platform cursor.
+                if(!navigation.blocksEditorEvent(event) && (!editor || !editor->blocksEditorEvent(event)))ImGui_ImplSDL3_ProcessEvent(&event);
                 if(!editor || !editor->handleEvent(event,assets))navigation.handleEvent(event);
                 if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_HIDDEN) {
                     focusLossEvent=true;
@@ -213,6 +214,7 @@ int run(const AppOptions& options) {
                 else assets.processImports();
             }
 
+            NavigationUiMouseScope navigationUiMouse(navigation.flying());
             {
             CRIMSON_PROFILE_ZONE("Editor and simulation");
             toolsRenderer.newFrame(bgfxFrame);

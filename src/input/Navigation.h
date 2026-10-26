@@ -6,6 +6,9 @@
 #include <vector>
 
 namespace crimson {
+// Relative flight owns these native events before they reach ImGui. Releases
+// and interruption events remain visible to clear any pre-acquisition state.
+bool navigationBlocksEditorEvent(const SDL_Event&,SDL_WindowID owner,bool flying);
 class Navigation {
 public:
     explicit Navigation(SDL_Window* window);
@@ -13,6 +16,7 @@ public:
     // ImGui native viewports use desktop positions; SDL events remain window-local.
     void setDesktopCoordinates(bool enabled);
     void handleEvent(const SDL_Event& event);
+    bool blocksEditorEvent(const SDL_Event& event) const { return navigationBlocksEditorEvent(event,ownerWindowId_,flying()); }
     void update(Camera& camera, const ViewportRegion& region, float dt, bool sphereVisible = true, bool preserveRoll = false);
     void cancel();
     bool active() const { return mode_ != Mode::None; }

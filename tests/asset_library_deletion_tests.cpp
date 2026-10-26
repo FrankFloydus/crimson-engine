@@ -568,6 +568,46 @@ void retiredQuaderPolicyRetention(){
     AssetLibrary reopened(project.root);reopened.collectUnusedQuaderModels(scene);
     require(!fs::exists(cache)&&!fs::exists(fixture.file),"Released replacement-only owners still pinned unused mesh payloads.");
 }
+void retiredQuaderOwnershipProof() {
+    for(const bool allSceneOwned:{true,false}) {
+        Project project;auto fixture=bundle_test::writeCornerFixture(project.root);
+        for(auto& model:fixture.bundle.models)model.current=false;
+        writeFileAtomically(fixture.file,encodeQuaderSceneBundle(fixture.bundle));initializeQuaderSceneBundles(project.root);
+        SceneDocument saved(project.root);saved.createModel(fixture.modelIds[0],"Saved old mesh");
+        if(allSceneOwned)saved.createModel(fixture.modelIds[1],"Second saved old mesh");
+        require(saved.save("Retained old meshes"),saved.status());
+        const auto sceneBytes=read(resolveAssetPath(project.root,saved.assetId())),bundleBytes=read(fixture.file);
+        AnimationAsset animation;animation.id=newAssetId();animation.name="Detached source owner";animation.sourceModel.id=fixture.modelIds[1];
+        animation.sourceClipIdentity=newAssetId();animation.bindingSignature=newAssetId();animation.endTime=1;
+        if(!allSceneOwned)saveAnimationAsset(project.root,animation);
+        SceneDocument active(project.root);AssetLibrary library(project.root);
+        library.references().setUsages({{fixture.modelIds[0],"sentinel","Unchanged usage index","Sentinel"}});
+        const auto cache=resolveAssetPath(project.root,fixture.modelIds[1]);const auto cacheBytes=read(cache);
+        // The direct ownership proof must not open any model package. A full
+        // reference rebuild would reject this unrelated cold metadata input.
+        if(allSceneOwned)writeFileAtomically(cache,"{unreadable model metadata");
+        library.collectUnusedQuaderModels(active);
+        require(read(fixture.file)==bundleBytes&&read(resolveAssetPath(project.root,saved.assetId()))==sceneBytes&&
+            fs::is_regular_file(cache)&&library.status().find("cleanup deferred")==std::string::npos,
+            "Direct saved owners or an indirect animation owner failed to retain old model data.");
+        if(allSceneOwned) {
+            require(library.references().usages().size()==1&&library.references().usages().front().ownerId=="sentinel",
+                "All directly owned retired models still rebuilt the full reference index.");
+            writeFileAtomically(cache,cacheBytes);
+        } else {
+            require(std::any_of(library.references().usages().begin(),library.references().usages().end(),[&](const auto& usage){
+                return usage.targetId==fixture.modelIds[1]&&usage.ownerId==animation.id;}),
+                "An unproven model skipped the complete dependency fallback or lost an animation source owner.");
+            animation.sourceModel.id=fixture.modelIds[0];saveAnimationAsset(project.root,animation);library.refreshAnimations();
+            library.collectUnusedQuaderModels(active);
+            const auto remaining=decodeQuaderSceneBundle(read(fixture.file));
+            require(!fs::exists(cache)&&remaining.models.size()==1&&remaining.models.front().id==fixture.modelIds[0]&&
+                remaining.models.front().manifest==fixture.bundle.models.front().manifest&&
+                read(resolveAssetPath(project.root,saved.assetId()))==sceneBytes,
+                "The complete fallback failed to prune only the newly unowned model or changed its saved sibling.");
+        }
+    }
+}
 
 void legacyEnvironmentGlowPersistence(){
     Project p;ResourceManager resources;AssetLibrary library(p.root,&resources);
@@ -2609,6 +2649,9 @@ void blendOccurrenceMaterials() {
 }
 
 int main(int argc,char** argv){try{
+    if(argc==2&&std::string(argv[1])=="--quader-retention-proof") {
+        retiredQuaderOwnershipProof();std::cout<<"Retired Quader direct ownership proof and complete dependency fallback passed.\n";return 0;
+    }
     if(argc==2&&std::string(argv[1])=="--model-policy-snapshot") {
         modelPolicySnapshots();std::cout<<"Immutable model loader policy and usage-index isolation passed.\n";return 0;
     }
@@ -2634,6 +2677,7 @@ int main(int argc,char** argv){try{
         return 0;
     }
     if(argc==5&&std::string(argv[1])=="--material-preview-resources") {materialPreviewResources(argv[2],argv[3],argv[4]);return 0;}
+    retiredQuaderOwnershipProof();
     // Public deletion checks use disposable CPU data; the final fallback check
     // opens a scoped Noop device without a native application window.
     warningQueries();bundledModelPublicationAndReferences();manualBundledModelDeletion(false);manualBundledModelDeletion(true);bundledBatchDeletionContinuesFrames(false);bundledBatchDeletionContinuesFrames(true);multiBundleBatchDeletionWithSurvivingFallbacks();externallyChangedDeletionPolicy(0);externallyChangedDeletionPolicy(1);externallyChangedDeletionPolicy(2);lastBundledMeshFolderCleanup(false);lastBundledMeshFolderCleanup(true);referencedBundledModelDeletion(false);referencedBundledModelDeletion(true);cancelAndStaleBundledDeletion();failedBundledDeletion();retiredQuaderModelCollection(false);retiredQuaderModelCollection(true);retiredQuaderPolicyRetention();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();changedUsagePreservesConsumerAssignments();boxMaterialDeletionAndPublication();importedMaterialSlotsAndDeletion();legacyUnusedModelMaterialAssignments();immutableMaterialMetadata();modelPolicySnapshots();boxMaterialHistoryOnlyDeletion();dormantGraphTextureDeletion();pendingGraphKeepsCoverageExplicit();navigationProfileDeletion();gameplayEffectDeletion();unrelatedDeletionMaterializesLegacyEffects(false);unrelatedDeletionMaterializesLegacyEffects(true);unrelatedDeletionMaterializesLegacyProfiles(false);unrelatedDeletionMaterializesLegacyProfiles(true);

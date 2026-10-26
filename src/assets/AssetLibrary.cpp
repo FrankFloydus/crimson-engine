@@ -2499,16 +2499,46 @@ void AssetLibrary::collectUnusedQuaderModels(const SceneDocument& active){
         // retained generation intact. Runtime residency is not authored usage.
         // Read the durable policy again at this destructive boundary. An
         // external edit cannot silently discard replacement-only owners.
-        AssetReferenceManager persistedPolicy(projectRoot_);
-        if(!references_.valid()||!persistedPolicy.valid())throw std::runtime_error("Asset reference policy is invalid; retained meshes were preserved.");
-        refreshReferenceIndex(&active);auto referenced=references_.replacementTargets();
-        const auto persistedTargets=persistedPolicy.replacementTargets();referenced.insert(referenced.end(),persistedTargets.begin(),persistedTargets.end());
+        std::vector<std::string> referenced;
+        {
+            CRIMSON_PROFILE_ZONE("Quader retained model ownership proof");
+            AssetReferenceManager persistedPolicy(projectRoot_);
+            if(!references_.valid()||!persistedPolicy.valid())throw std::runtime_error("Asset reference policy is invalid; retained meshes were preserved.");
+            referenced=references_.replacementTargets();
+            const auto persistedTargets=persistedPolicy.replacementTargets();referenced.insert(referenced.end(),persistedTargets.begin(),persistedTargets.end());
+            // If direct scene/history/policy owners retain every old model,
+            // no package can be pruned. Avoid rebuilding unrelated material,
+            // image, animation and document usage metadata on catalog hydration.
+            std::unordered_set<std::string> protectedModels;
+            const auto protect=[&](const std::string& id) {
+                if(id.empty())return;
+                protectedModels.insert(id);
+                const auto current=references_.resolve(id),persisted=persistedPolicy.resolve(id);
+                if(!current.empty())protectedModels.insert(current);
+                if(!persisted.empty())protectedModels.insert(persisted);
+            };
+            for(const auto& id:quaderDocumentModelReferences_)protect(id);
+            for(const auto& id:referenced)protect(id);
+            const auto allProtected=[&]{return std::all_of(retainedQuaderModels_.begin(),retainedQuaderModels_.end(),[&](const auto& id){return protectedModels.contains(id);});};
+            if(allProtected())return;
+            {
+                CRIMSON_PROFILE_ZONE("Quader retained model saved scene scan");
+                for(const auto& scene:savedScenes(projectRoot_))for(const auto& record:scene.records) {
+                    if(record.model)protect(record.model->id);
+                    if(record.collider)protect(record.collider->source.id);
+                    if(record.decal)protect(record.decal->seed.modelId);
+                }
+            }
+            if(allProtected())return;
+        }
+        {CRIMSON_PROFILE_ZONE("Quader full reference index");refreshReferenceIndex(&active);}
         for(const auto& usage:references_.usages()){
             referenced.push_back(usage.targetId);const auto resolved=references_.resolve(usage.targetId);if(!resolved.empty())referenced.push_back(resolved);
         }
-        std::unordered_map<std::string,std::filesystem::path> sources;
+        std::unordered_map<std::string,std::filesystem::path> sources;std::vector<std::string> removed;
+        {CRIMSON_PROFILE_ZONE("Quader bundle pruning");
         for(const auto& id:retainedQuaderModels_)if(const auto source=quaderBundleSource(projectRoot_,id))sources.emplace(id,*source);
-        const auto removed=pruneUnusedQuaderBundleModels(projectRoot_,referenced);
+        removed=pruneUnusedQuaderBundleModels(projectRoot_,referenced);}
         if(removed.empty())return;
         std::set<std::filesystem::path> writtenSources;
         for(const auto& id:removed){
