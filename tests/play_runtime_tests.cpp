@@ -11,6 +11,7 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <numbers>
 #include <stdexcept>
 
@@ -177,10 +178,12 @@ void playFromHereTransformsAndIsolation() {
         for(int cycle=0;cycle<3;++cycle) {
             Camera view;view.position={5.f+cycle,3.2f,-4.f};
             const auto direction=math::normalized(Vec3{.7f,-.24f,-.6f});view.target=view.position+direction;view.fov=99;
-            require(play.startFromView(authored,view),"Play From Here rejected a clear parented Player.");
+            const Vec3 clicked{7.f+cycle,0,-3.f};
+            require(play.startFromPoint(authored,clicked,view),"Play From Here rejected a clear parented Player.");
+            const auto expectedEye=math::transformPoint(*play.document().scene().worldTransform(4),{});
             const auto resolved=resolveGameCamera(play.presentationScene());
-            require(resolved && math::length(resolved->position-view.position)<3e-4f && math::dot(resolved->forward(),direction)>.99999f,
-                "Play From Here lost the actual eye position or initial view orientation.");
+            require(resolved && math::length(resolved->position-expectedEye)<3e-4f && math::dot(resolved->forward(),direction)>.99999f,
+                "Play From Here lost the authored eye offset or initial view orientation.");
             require(resolved->fov==73 && resolved->nearPlane==.035f && resolved->farPlane==1234,
                 "Play From Here replaced the authored Player lens with the editor lens.");
             const auto actual=*play.presentationScene().worldTransform(4);
@@ -190,6 +193,8 @@ void playFromHereTransformsAndIsolation() {
                 require(std::abs(original-relocated)<2e-4,"Play From Here changed the eye's residual affine basis.");
             }
             const auto playerWorld=*play.document().scene().worldTransform(2);
+            require(math::length(math::transformPoint(playerWorld,{})-clicked)<3e-4f,
+                "Play From Here placed the eye or editor camera at the clicked point instead of the capsule feet.");
             require(std::abs(playerWorld[4])<2e-5f && std::abs(playerWorld[5]-1)<2e-5f && std::abs(playerWorld[6])<2e-5f,
                 "Play From Here inherited parent scale or tilt into the upright collision capsule.");
             require(play.document().scene().find(4)->cameraFollow==authored.scene().find(4)->cameraFollow &&
@@ -198,7 +203,7 @@ void playFromHereTransformsAndIsolation() {
                 "Play From Here changed follow definitions, its parent, or the clean transient history.");
             play.advance(0,Vec2{},view);
             const auto initialized=resolveGameCamera(play.presentationScene());
-            require(initialized && math::length(initialized->position-view.position)<3e-4f && math::dot(initialized->forward(),direction)>.99999f,
+            require(initialized && math::length(initialized->position-expectedEye)<3e-4f && math::dot(initialized->forward(),direction)>.99999f,
                 "The first ordinary Play frame reset the initial eye look.");
             play.stop();
             const auto after=authored.scene().records();require(after.size()==before.size(),"Play From Here added authored entities.");
@@ -226,7 +231,7 @@ void playFromHereClearance() {
     const auto before=authored.scene().records();const auto history=authored.history().size();PlaySession play(root);
     const auto attempt=[&](const Vec3& feet) {
         Camera view;view.position=feet+authored.scene().find(4)->cameraFollow->offset;view.target=view.position+Vec3{0,0,-1};
-        return play.startFromView(authored,view);
+        return play.startFromPoint(authored,feet,view);
     };
     require(!attempt({5,0,0}) && !play.playing() && play.status().find("blocked")!=std::string::npos,
         "Play From Here admitted a capsule penetrating solid collision.");
@@ -235,11 +240,13 @@ void playFromHereClearance() {
     require(attempt({0,0,0}),"Touching the floor incorrectly blocked Play From Here.");play.stop();
     require(attempt({10,0,0}),"A trigger incorrectly blocked Play From Here.");play.stop();
     Camera invalid;invalid.position={0,2,0};invalid.target=invalid.position;
-    require(!play.startFromView(authored,invalid) && !play.playing(),"A degenerate Scene view started Play From Here.");
+    require(!play.startFromPoint(authored,{},invalid) && !play.playing(),"A degenerate Scene view started Play From Here.");
+    require(!play.startFromPoint(authored,{std::numeric_limits<float>::quiet_NaN(),0,0},camera()) && !play.playing(),
+        "A nonfinite clicked point started Play From Here.");
     const auto after=authored.scene().records();require(after.size()==before.size()&&authored.history().size()==history,"Failed placement changed authored history.");
     for(std::size_t i=0;i<after.size();++i)require(sameEntity(after[i],before[i]),"Failed placement modified authored records.");
     SceneDocument missing(root);fixture(missing);
-    require(!play.startFromView(missing,camera()) && !play.playing(),"Play From Here invented a missing Player camera.");
+    require(!play.startFromPoint(missing,{},camera()) && !play.playing(),"Play From Here invented a missing Player camera.");
 }
 SDL_Event gameKey(SDL_Scancode code) {
     SDL_Event event{};event.type=SDL_EVENT_KEY_DOWN;event.key.windowID=9;event.key.scancode=code;event.key.down=true;return event;

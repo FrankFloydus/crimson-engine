@@ -9,27 +9,6 @@
         "toPin": 7
       },
       {
-        "fromNode": 3,
-        "fromPin": 1,
-        "id": 2,
-        "toNode": 5,
-        "toPin": 8
-      },
-      {
-        "fromNode": 4,
-        "fromPin": 1,
-        "id": 3,
-        "toNode": 5,
-        "toPin": 9
-      },
-      {
-        "fromNode": 5,
-        "fromPin": 0,
-        "id": 4,
-        "toNode": 1,
-        "toPin": 10
-      },
-      {
         "fromNode": 2,
         "fromPin": 7,
         "id": 5,
@@ -37,28 +16,21 @@
         "toPin": 7
       },
       {
+        "fromNode": 3,
+        "fromPin": 27,
+        "id": 9,
+        "toNode": 1,
+        "toPin": 10
+      },
+      {
         "fromNode": 6,
-        "fromPin": 2,
-        "id": 6,
-        "toNode": 8,
-        "toPin": 8
-      },
-      {
-        "fromNode": 7,
-        "fromPin": 0,
-        "id": 7,
-        "toNode": 8,
-        "toPin": 9
-      },
-      {
-        "fromNode": 8,
-        "fromPin": 0,
-        "id": 8,
+        "fromPin": 27,
+        "id": 10,
         "toNode": 1,
         "toPin": 11
       }
     ],
-    "nextLinkId": 9,
+    "nextLinkId": 11,
     "nextNodeId": 9,
     "nodes": [
       {
@@ -116,8 +88,8 @@
           "transmission": 1.0
         },
         "position": [
-          650.0,
-          50.0
+          99.0,
+          30.0
         ]
       },
       {
@@ -125,11 +97,11 @@
         "kind": 1,
         "name": "UV",
         "position": [
-          -650.0,
-          80.0
+          -763.0,
+          122.0
         ],
         "uv": {
-          "mode": 0,
+          "mode": 3,
           "offset": [
             0.0,
             0.0,
@@ -141,9 +113,9 @@
             0.0
           ],
           "scale": [
-            1.0,
-            1.0,
-            1.0
+            0.5,
+            0.5,
+            0.5
           ],
           "scaleLinked": true
         }
@@ -153,8 +125,8 @@
         "kind": 2,
         "name": "Texture 2D",
         "position": [
-          -400.0,
-          0.0
+          -367.0,
+          -284.0
         ],
         "texture": {
           "image": "85dfbfbf-7720-5f7f-bd86-230b61b17035",
@@ -169,54 +141,12 @@
         }
       },
       {
-        "color": [
-          1.0,
-          1.0,
-          1.0,
-          1.0
-        ],
-        "id": 4,
-        "kind": 4,
-        "name": "Base Color factor",
-        "position": [
-          -380.0,
-          105.0
-        ]
-      },
-      {
-        "id": 5,
-        "kind": 5,
-        "left": {
-          "type": 0,
-          "value": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ]
-        },
-        "name": "Multiply",
-        "position": [
-          0.0,
-          0.0
-        ],
-        "right": {
-          "type": 0,
-          "value": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ]
-        }
-      },
-      {
         "id": 6,
         "kind": 2,
         "name": "Texture 2D",
         "position": [
-          -400.0,
-          240.0
+          -271.0,
+          214.0
         ],
         "texture": {
           "image": "ce5567e1-9463-54f7-aa04-fdcfa20c9d21",
@@ -228,47 +158,6 @@
             "wrapU": 0,
             "wrapV": 0
           }
-        }
-      },
-      {
-        "id": 7,
-        "kind": 3,
-        "name": "Roughness factor",
-        "position": [
-          -380.0,
-          345.0
-        ],
-        "range": [
-          0.0,
-          1.0
-        ],
-        "scalar": 0.6600000262260437
-      },
-      {
-        "id": 8,
-        "kind": 5,
-        "left": {
-          "type": 0,
-          "value": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ]
-        },
-        "name": "Multiply",
-        "position": [
-          0.0,
-          240.0
-        ],
-        "right": {
-          "type": 0,
-          "value": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ]
         }
       }
     ],

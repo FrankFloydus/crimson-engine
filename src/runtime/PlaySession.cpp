@@ -32,7 +32,8 @@ EntityId playerCamera(const Scene& scene,EntityId actor) {
        ((!active->cameraFollow && active->parent==actor) || (active->cameraFollow && active->cameraFollow->target==actor)))return active->id;
     return resolveOwnedActorCamera(scene,actor);
 }
-EntityId placePlayerFromView(SceneDocument& document,const Camera& view) {
+EntityId placePlayerAtPoint(SceneDocument& document,const PlayStartPoint& start) {
+    const auto& view=start.view;
     const auto& scene=document.scene();
     const auto actor=scene.properties().playerCharacter;
     const auto player=scene.find(actor);
@@ -43,7 +44,7 @@ EntityId placePlayerFromView(SceneDocument& document,const Camera& view) {
        !player->playerInput || !player->playerInput->enabled || !camera || !camera->camera || !actorWorld || !cameraWorld ||
        (camera->cameraFollow && camera->cameraFollow->target!=actor))
         throw std::runtime_error("Play From Here requires a designated Player with an enabled controller and an owned Camera.");
-    if(!math::finite(view.position) || !math::finite(view.target) || math::length(view.target-view.position)<1e-6f)
+    if(!math::finite(start.position) || !math::finite(view.position) || !math::finite(view.target) || math::length(view.target-view.position)<1e-6f)
         throw std::runtime_error("Play From Here requires a finite Scene view direction.");
     const auto parent=player->parent?scene.worldTransform(player->parent):std::optional{Mat4{}};
     const auto inverseParent=parent?math::inverse(*parent):std::nullopt;
@@ -56,16 +57,9 @@ EntityId placePlayerFromView(SceneDocument& document,const Camera& view) {
     // The motor stays upright with unit world scale. The complete parent
     // inverse retains authored affine hierarchies, including scaled parents.
     auto world=math::rotation(math::axisAngle({0,1,0},actorHeading+heading-cameraHeading));
-    const auto apply=[&] {
-        const ScenePoseUpdate pose{actor,*inverseParent*world};
-        if(!document.applyRuntimePoses(std::span{&pose,1}))throw std::runtime_error(document.status());
-    };
-    apply();
-    const auto relocatedEye=document.scene().worldTransform(cameraId);
-    if(!relocatedEye)throw std::runtime_error("Play From Here could not resolve the Player's Camera.");
-    const auto feet=view.position-math::transformPoint(*relocatedEye,{});
-    for(int axis=0;axis<3;++axis)world[12+axis]=feet[axis];
-    apply();
+    for(int axis=0;axis<3;++axis)world[12+axis]=start.position[axis];
+    const ScenePoseUpdate pose{actor,*inverseParent*world};
+    if(!document.applyRuntimePoses(std::span{&pose,1}))throw std::runtime_error(document.status());
     return actor;
 }
 }
@@ -101,17 +95,18 @@ NavigationProjection PlaySession::projectToNavigation(const std::string& profile
 bool PlaySession::start(const SceneDocument& authored) {
     return startInternal(authored,nullptr);
 }
-bool PlaySession::startFromView(const SceneDocument& authored,const Camera& view) {
-    return startInternal(authored,&view);
+bool PlaySession::startFromPoint(const SceneDocument& authored,const Vec3& position,const Camera& view) {
+    const PlayStartPoint start{position,view};
+    return startInternal(authored,&start);
 }
-bool PlaySession::startInternal(const SceneDocument& authored,const Camera* view) {
+bool PlaySession::startInternal(const SceneDocument& authored,const PlayStartPoint* start) {
     CRIMSON_PROFILE_ZONE("Play session startup");
     if(playing())return true;
     try {
         auto document=std::make_unique<SceneDocument>(projectRoot_);
         if(!document->resetTransientFrom(authored)){status_=document->status();return false;}
-        const auto relocated=view?placePlayerFromView(*document,*view):NoEntity;
-        if(view) {
+        const auto relocated=start?placePlayerAtPoint(*document,*start):NoEntity;
+        if(start) {
             const auto camera=playerCamera(document->scene(),relocated);
             if(document->scene().properties().activeCamera!=camera) {
                 if(!document->setActiveCamera(camera))throw std::runtime_error(document->status());
@@ -135,11 +130,11 @@ bool PlaySession::startInternal(const SceneDocument& authored,const Camera* view
         controlled_=inputOwner_=NoEntity;inputCancellation_=0;lastControlledPose_.reset();
         editRevision_=document_->scene().revision();reconcileAttributes();reconcileAgents();resetInterpolation();reconcileParticles(0);
         runtimeAnimations_.clear();advanceRagdollRuntime(0,false);
-        if(view) {
+        if(start) {
             controlled_=relocated;lastControlledPose_=document_->scene().worldTransform(relocated);
             reconcileFirstPerson(relocated,true);
             if(!firstPerson_)throw std::runtime_error("Play From Here could not initialize the Player's Camera.");
-            const auto forward=view->forward();
+            const auto forward=start->view.forward();
             firstPerson_->yaw=firstPerson_->initialYaw=std::atan2(-forward[0],-forward[2]);
             firstPerson_->pitch=std::clamp(std::asin(std::clamp(static_cast<double>(forward[1]),-1.0,1.0)),
                 -89.0*std::numbers::pi/180,89.0*std::numbers::pi/180);
@@ -233,7 +228,8 @@ std::string PlaySession::firePlayerTrace(EntityId id) {
     if(!result.valid||result.hits.empty()||result.hits.front().ragdollBodyIndex<0)return {};
     const auto& hit=result.hits.front();
     if(!ragdollActive(hit.entity)&&!activateRagdoll(hit.entity,{},std::move(initialPose)))return status_;
-    if(settings.hitImpulse>0&&!applyRagdollImpulse(hit.entity,math::normalized(request.ray.direction)*settings.hitImpulse,hit.position,hit.ragdollBodyIndex))
+    const auto impulse=math::normalized(request.ray.direction)*settings.hitImpulse+Vec3{0,settings.upwardImpulse,0};
+    if((settings.hitImpulse>0||settings.upwardImpulse>0)&&!applyRagdollImpulse(hit.entity,impulse,hit.position,hit.ragdollBodyIndex))
         return "Cannot apply the trace impulse to the hit ragdoll body.";
     return {};
 }

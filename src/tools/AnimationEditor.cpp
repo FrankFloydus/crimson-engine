@@ -157,7 +157,8 @@ void AnimationEditor::properties(AssetLibrary& assets,const std::shared_ptr<cons
         }
     };
     if(ImGui::CollapsingHeader("Animation",ImGuiTreeNodeFlags_DefaultOpen)) {
-        if(ImGui::Button(assets.displayName(document_.definition().sourceModel.id).c_str(),{ImGui::GetContentRegionAvail().x,0}))assets.select(document_.definition().sourceModel.id);
+        const auto sourceLabel=assets.displayName(document_.definition().sourceModel.id)+"###AnimationSourceModel";
+        if(ImGui::Button(sourceLabel.c_str(),{ImGui::GetContentRegionAvail().x,0}))assets.select(document_.definition().sourceModel.id);
         if(source&&document_.definition().sourceClip<source->animations.size())ImGui::TextWrapped("%s",source->animations[document_.definition().sourceClip].name.c_str());
         auto value=document_.definition();
         float sourceDuration=value.endTime;

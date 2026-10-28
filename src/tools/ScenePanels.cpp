@@ -88,7 +88,7 @@ enum class Edit { None, Name, InlineName, Visible,
     EnvironmentSsrTolerance,EnvironmentSsrRoughness,EnvironmentSsrBias,
     CharacterRoute, CharacterCollisionVisible, CharacterCollisionColor,
     NavigationEnabled,PlayerInputEnabled,PlayerMouseSensitivity,PlayerInvertY,
-    PlayerTraceDuration,PlayerTraceLength,PlayerTraceQuadSize,PlayerTraceLayers,PlayerTraceHitImpulse,
+    PlayerTraceDuration,PlayerTraceLength,PlayerTraceQuadSize,PlayerTraceLayers,PlayerTraceHitImpulse,PlayerTraceUpwardImpulse,
     MovementEnabled,PlayerJumpHeight,
     PlayerGroundAcceleration,PlayerGroundFriction,PlayerAirAcceleration,PlayerAirControl,PlayerStrafeTilt,PlayerTiltResponse,PlayerStairSmoothingTime,
     EnemyBehaviour,EnemyRadius,EnemyMinWait,EnemyMaxWait,
@@ -1184,7 +1184,9 @@ bool profileAssetField(SceneDocument& document,AssetLibrary& assets,const char* 
     if(ImGui::BeginPopup("Choose Profile")) {
         static ImGuiTextFilter filter;filter.Draw("Search");
         for(const auto& asset:assets.catalog())if(asset.kind==AssetKind::NavigationAgentProfile && filter.PassFilter(asset.name.c_str())) {
+            ImGui::PushID(asset.id.c_str());
             if(ImGui::Selectable(asset.name.c_str(),asset.id==current)){assign(asset.id);changed=true;ImGui::CloseCurrentPopup();}
+            ImGui::PopID();
         }
         ImGui::EndPopup();
     }
@@ -1245,8 +1247,11 @@ void navigationVolumeControls(SceneDocument& document,PanelsState& state,const E
         if(ImGui::Button("Add Profile"))ImGui::OpenPopup("Add supported profile");
         if(ImGui::BeginPopup("Add supported profile")) {
             for(const auto& asset:assets.catalog())if(asset.kind==AssetKind::NavigationAgentProfile &&
-                std::none_of(volume.profiles.begin(),volume.profiles.end(),[&](const auto& value){return value.id==asset.id;}))
+                std::none_of(volume.profiles.begin(),volume.profiles.end(),[&](const auto& value){return value.id==asset.id;})) {
+                ImGui::PushID(asset.id.c_str());
                 if(ImGui::Selectable(asset.name.c_str())){auto values=volume.profiles;values.emplace_back(asset.id);assignProfiles(std::move(values));ImGui::CloseCurrentPopup();}
+                ImGui::PopID();
+            }
             ImGui::EndPopup();
         }
         ImGui::TreePop();
@@ -1256,7 +1261,9 @@ void navigationVolumeControls(SceneDocument& document,PanelsState& state,const E
         if(ImGui::BeginCombo("Preview Agent Type",current?current->name.c_str():"None")) {
             for(const auto& reference:volume.profiles) {
                 const auto profile=inspectorProfile(document,assets,reference.id);
+                ImGui::PushID(reference.id.c_str());
                 if(ImGui::Selectable(profile?profile->name.c_str():reference.id.c_str(),reference.id==*context.previewProfile))*context.previewProfile=reference.id;
+                ImGui::PopID();
             }
             ImGui::EndCombo();
         }
@@ -1304,8 +1311,11 @@ void startingEffectControls(SceneDocument& document,AssetLibrary& assets,const E
         ImGui::EndDisabled();
         if(ImGui::BeginPopup("Choose Effect")) {
             static ImGuiTextFilter filter;filter.Draw("Search");
-            for(const auto& asset:assets.catalog())if(asset.kind==AssetKind::GameplayEffect&&filter.PassFilter(asset.name.c_str()))
+            for(const auto& asset:assets.catalog())if(asset.kind==AssetKind::GameplayEffect&&filter.PassFilter(asset.name.c_str())) {
+                ImGui::PushID(asset.id.c_str());
                 if(ImGui::Selectable(asset.name.c_str(),asset.id==id)) {auto values=starting;values[index]=AssetRef<GameplayEffectAsset>{asset.id};assign(std::move(values),"Assign starting effect");ImGui::CloseCurrentPopup();}
+                ImGui::PopID();
+            }
             ImGui::EndPopup();
         }
         if(!definition) {
@@ -1317,8 +1327,11 @@ void startingEffectControls(SceneDocument& document,AssetLibrary& assets,const E
     if(ImGui::Button("Add Effect"))ImGui::OpenPopup("Add Starting Effect");
     if(ImGui::BeginPopup("Add Starting Effect")) {
         static ImGuiTextFilter filter;filter.Draw("Search");
-        for(const auto& asset:assets.catalog())if(asset.kind==AssetKind::GameplayEffect&&filter.PassFilter(asset.name.c_str()))
+        for(const auto& asset:assets.catalog())if(asset.kind==AssetKind::GameplayEffect&&filter.PassFilter(asset.name.c_str())) {
+            ImGui::PushID(asset.id.c_str());
             if(ImGui::Selectable(asset.name.c_str())){auto values=starting;values.emplace_back(asset.id);assign(std::move(values),"Add starting effect");ImGui::CloseCurrentPopup();}
+            ImGui::PopID();
+        }
         ImGui::EndPopup();
     }
 }
@@ -1360,6 +1373,8 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
                 static_cast<unsigned>(TraceTestInspectorControl::CollisionLayers));
             static_assert(static_cast<unsigned>(Edit::PlayerTraceHitImpulse)-static_cast<unsigned>(Edit::PlayerTraceDuration)==
                 static_cast<unsigned>(TraceTestInspectorControl::HitImpulse));
+            static_assert(static_cast<unsigned>(Edit::PlayerTraceUpwardImpulse)-static_cast<unsigned>(Edit::PlayerTraceDuration)==
+                static_cast<unsigned>(TraceTestInspectorControl::UpwardImpulse));
             if(ImGui::CollapsingHeader("Trace Test",ImGuiTreeNodeFlags_DefaultOpen)) {
                 drawTraceTestInspectorControls(value.traceTest,collisionNames,[&](TraceTestInspectorControl control,const char* label,bool changed) {
                     const auto property=static_cast<Edit>(static_cast<unsigned>(Edit::PlayerTraceDuration)+static_cast<unsigned>(control));
@@ -1372,7 +1387,7 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
             if(document.scene().properties().playerCharacter==record.id)ImGui::TextUnformatted("Controlled Player");
             else if(ImGui::Button("Make Player")){finishScenePanelEdit(document);document.setPlayerCharacter(record.id);}
         }
-        if(!activeDrawn&&state.active>=Edit::PlayerInputEnabled&&state.active<=Edit::PlayerTraceHitImpulse)finishEdit(document,state,state.active);
+        if(!activeDrawn&&state.active>=Edit::PlayerInputEnabled&&state.active<=Edit::PlayerTraceUpwardImpulse)finishEdit(document,state,state.active);
     }
     if(record.movement && section==SceneComponentKind::Movement) {
         static_assert(static_cast<unsigned>(Edit::PlayerStairSmoothingTime)-static_cast<unsigned>(Edit::MovementEnabled)==
@@ -1642,6 +1657,7 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
         state.inspectorEntity=record.id;
         ImGui::PushID(static_cast<int>(record.id>>32));ImGui::PushID(static_cast<int>(record.id));
         for(const auto section:sceneInspectorSections(record)) {
+            ImGui::PushID(static_cast<int>(section));
             if(section==SceneComponentKind::Transform && !ownedCamera) {
                 const InspectorTransformTransactions transactions{
                     [&](unsigned field,const char* label){return beginEdit(document,state,static_cast<Edit>(static_cast<unsigned>(Edit::PositionX)+field),label,record.id);},
@@ -1857,8 +1873,11 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                 if(ImGui::Button("X##clear-effect",{height,height})) { assigned.clear();changed=true; }
                 if(ImGui::BeginPopup("Select particle effect")) {
                     static ImGuiTextFilter filter;filter.Draw("Search");
-                    for(const auto& entry:assets.catalog()) if(entry.kind==AssetKind::Particle && filter.PassFilter(assets.displayName(entry.id).c_str()))
+                    for(const auto& entry:assets.catalog()) if(entry.kind==AssetKind::Particle && filter.PassFilter(assets.displayName(entry.id).c_str())) {
+                        ImGui::PushID(entry.id.c_str());
                         if(ImGui::Selectable(assets.displayName(entry.id).c_str(),assigned==entry.id)) { assigned=entry.id;changed=true;ImGui::CloseCurrentPopup(); }
+                        ImGui::PopID();
+                    }
                     ImGui::EndPopup();
                 }
                 if(changed) { auto next=record;next.particle=AssetRef<ParticleEffectAsset>{assigned};document.updateEntity(record.id,next,"Assign particle effect"); }
@@ -1879,6 +1898,7 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                     sceneEnvironmentControls(document,state,record,assets,renderer);
                 else if(environmentEdit(state.active))finishEdit(document,state,state.active);
             }
+            ImGui::PopID();
         }
         ImGui::PopID();ImGui::PopID();
     };

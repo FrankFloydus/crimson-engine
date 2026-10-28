@@ -299,9 +299,9 @@ void firstPersonInputStorageAndCameraConversion() {
 void playerTraceSettingsStorageHistoryAndRuntime() {
     TempProject project;SceneDocument document(project.root);const auto player=document.createPlayer("Trace player");
     const SceneTraceTestSettings defaults;
-    require(defaults.duration==.5f&&defaults.length==10.f&&defaults.collisionQuadSize==.12f&&defaults.collisionMask==AllCollisionLayers&&defaults.hitImpulse==50.f&&
+    require(defaults.duration==.5f&&defaults.length==10.f&&defaults.collisionQuadSize==.12f&&defaults.collisionMask==AllCollisionLayers&&defaults.hitImpulse==50.f&&defaults.upwardImpulse==0.f&&
         document.scene().find(player)->playerInput->traceTest==defaults,"Player trace defaults changed.");
-    auto tuned=*document.scene().find(player);tuned.playerInput->traceTest={1.25f,23.f,.3f,WorldCollisionLayer|EnemyCollisionLayer|(1u<<31),250.f};
+    auto tuned=*document.scene().find(player);tuned.playerInput->traceTest={1.25f,23.f,.3f,WorldCollisionLayer|EnemyCollisionLayer|(1u<<31),250.f,125.f};
     const auto history=document.history().size();require(document.updateEntity(player,tuned,"Tune trace test")&&
         document.history().size()==history+1,document.status());
     require(document.undo()&&document.scene().find(player)->playerInput->traceTest==defaults,"Trace properties did not undo together.");
@@ -311,8 +311,10 @@ void playerTraceSettingsStorageHistoryAndRuntime() {
     same(document.scene().records(),reopened.scene().records());
     const auto saved=Json::parse(serializeSceneSnapshot({{},"Trace",document.scene().records(),document.scene().properties()}));
     require(saved.at("version")==25,"Optional trace settings did not retain the current scene schema.");
-    for(const auto& entity:saved.at("entities"))if(entity.contains("playerInput"))
+    for(const auto& entity:saved.at("entities"))if(entity.contains("playerInput")) {
         require(entity.at("playerInput").at("traceTest").at("hitImpulse")==250.f,"Trace hit impulse was omitted from the current writer.");
+        require(entity.at("playerInput").at("traceTest").at("upwardImpulse")==125.f,"Trace upward impulse was omitted from the current writer.");
+    }
     auto legacy=saved;for(auto& entity:legacy["entities"])if(entity.contains("playerInput"))entity["playerInput"].erase("traceTest");
     const std::string legacyId="assets/scenes/no-trace-settings.crimson-scene";writeSceneFixture(project.root,legacyId,legacy);
     require(reopened.load(legacyId)&&!reopened.dirty()&&reopened.scene().find(player)->playerInput->traceTest==defaults,
@@ -326,8 +328,15 @@ void playerTraceSettingsStorageHistoryAndRuntime() {
         "Missing hit impulse changed existing trace settings or dirtied the scene.");
     {std::ifstream input(sceneAssetPath(project.root,legacyId),std::ios::binary);
         require(std::string{std::istreambuf_iterator<char>(input),{}}==previousTrace.dump(),"Loading the optional hit impulse rewrote saved scene data.");}
+    auto previousUpward=saved;for(auto& entity:previousUpward["entities"])if(entity.contains("playerInput"))entity["playerInput"]["traceTest"].erase("upwardImpulse");
+    writeSceneFixture(project.root,legacyId,previousUpward);
+    auto previousUpwardDefaults=tuned.playerInput->traceTest;previousUpwardDefaults.upwardImpulse=0;
+    require(reopened.load(legacyId)&&!reopened.dirty()&&reopened.scene().find(player)->playerInput->traceTest==previousUpwardDefaults,
+        "Missing upward impulse changed existing trace settings or dirtied the scene.");
+    {std::ifstream input(sceneAssetPath(project.root,legacyId),std::ios::binary);
+        require(std::string{std::istreambuf_iterator<char>(input),{}}==previousUpward.dump(),"Loading the optional upward impulse rewrote saved scene data.");}
     const auto records=document.scene().records();const auto beforeHistory=document.history().size();
-    constexpr std::array<float SceneTraceTestSettings::*,4> fields{&SceneTraceTestSettings::duration,&SceneTraceTestSettings::length,&SceneTraceTestSettings::collisionQuadSize,&SceneTraceTestSettings::hitImpulse};
+    constexpr std::array<float SceneTraceTestSettings::*,5> fields{&SceneTraceTestSettings::duration,&SceneTraceTestSettings::length,&SceneTraceTestSettings::collisionQuadSize,&SceneTraceTestSettings::hitImpulse,&SceneTraceTestSettings::upwardImpulse};
     for(const auto field:fields)for(const float bad:{-1.f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
         auto invalid=tuned;invalid.playerInput->traceTest.*field=bad;
         require(!document.updateEntity(player,invalid),"Invalid trace dimensions were accepted.");
@@ -341,27 +350,29 @@ void playerTraceSettingsStorageHistoryAndRuntime() {
         auto valid=tuned;valid.playerInput->traceTest.collisionMask=mask;valid.playerInput->traceTest.duration=0;
         require(document.updateEntity(player,valid)&&document.undo(),"Empty/full trace mask or zero duration was rejected.");
     }
-    for(const float impulse:{0.f,100000.f}) {
-        auto valid=tuned;valid.playerInput->traceTest.hitImpulse=impulse;
+    for(const auto field:{&SceneTraceTestSettings::hitImpulse,&SceneTraceTestSettings::upwardImpulse})for(const float impulse:{0.f,100000.f}) {
+        auto valid=tuned;valid.playerInput->traceTest.*field=impulse;
         require(document.updateEntity(player,valid)&&document.undo(),"A bounded trace impulse endpoint was rejected.");
     }
-    {auto invalid=tuned;invalid.playerInput->traceTest.hitImpulse=100001.f;
+    for(const auto field:{&SceneTraceTestSettings::hitImpulse,&SceneTraceTestSettings::upwardImpulse}) {
+        auto invalid=tuned;invalid.playerInput->traceTest.*field=100001.f;
         require(!document.updateEntity(player,invalid),"A trace impulse above the maximum was accepted.");
-        same(records,document.scene().records());}
+        same(records,document.scene().records());
+    }
     for(const auto mask:{Json(-1),Json(4294967296ull),Json(1.5),Json("World")}) {
         auto invalid=saved;for(auto& entity:invalid["entities"])if(entity.contains("playerInput"))entity["playerInput"]["traceTest"]["collisionMask"]=mask;
         writeSceneFixture(project.root,legacyId,invalid);require(!reopened.load(legacyId),"Invalid persisted trace mask was accepted.");
     }
-    for(const auto impulse:{Json(-1),Json(100001),Json(nullptr),Json("50"),Json(true)}) {
-        auto invalid=saved;for(auto& entity:invalid["entities"])if(entity.contains("playerInput"))entity["playerInput"]["traceTest"]["hitImpulse"]=impulse;
-        writeSceneFixture(project.root,legacyId,invalid);require(!reopened.load(legacyId),"Invalid persisted hit impulse was accepted.");
+    for(const auto name:{"hitImpulse","upwardImpulse"})for(const auto impulse:{Json(-1),Json(100001),Json(nullptr),Json("50"),Json(true)}) {
+        auto invalid=saved;for(auto& entity:invalid["entities"])if(entity.contains("playerInput"))entity["playerInput"]["traceTest"][name]=impulse;
+        writeSceneFixture(project.root,legacyId,invalid);require(!reopened.load(legacyId),"Invalid persisted trace impulse was accepted.");
     }
     SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
-    auto live=*runtime.scene().find(player);live.playerInput->traceTest.length=42;live.playerInput->traceTest.hitImpulse=0;
+    auto live=*runtime.scene().find(player);live.playerInput->traceTest.length=42;live.playerInput->traceTest.hitImpulse=0;live.playerInput->traceTest.upwardImpulse=300;
     require(runtime.updateEntity(player,live,"Live trace length"),runtime.status());pose(runtime,player,{3,0,4});
     require(runtime.undo()&&runtime.scene().find(player)->playerInput->traceTest==tuned.playerInput->traceTest,
         "Runtime trace tuning did not undo.");near(position(runtime.scene(),player),{3,0,4});
-    require(runtime.redo()&&runtime.scene().find(player)->playerInput->traceTest.length==42&&runtime.scene().find(player)->playerInput->traceTest.hitImpulse==0,"Runtime trace tuning did not redo.");
+    require(runtime.redo()&&runtime.scene().find(player)->playerInput->traceTest==live.playerInput->traceTest,"Runtime trace tuning did not redo.");
     near(position(runtime.scene(),player),{3,0,4});same(records,document.scene().records());
 }
 

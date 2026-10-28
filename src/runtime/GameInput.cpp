@@ -24,7 +24,6 @@ std::optional<std::size_t> actionKey(SDL_Scancode code) {
     case SDL_SCANCODE_S:return 2;
     case SDL_SCANCODE_D:return 3;
     case SDL_SCANCODE_SPACE:return 4;
-    case SDL_SCANCODE_F:return 5;
     default:return {};
     }
 }
@@ -64,7 +63,7 @@ void GameInput::releaseMouseCapture() {
     captureWindowId_=0;discardNextMotion_=false;
 }
 void GameInput::cancel() {
-    releaseMouseCapture();held_.fill(false);lookDelta_={};jumpPending_=false;tracePending_=false;armed_=false;++cancellationRevision_;
+    releaseMouseCapture();held_.fill(false);lookDelta_={};jumpPending_=false;tracePending_=false;traceHeld_=false;armed_=false;++cancellationRevision_;
     if(imageAcquisition_==ImageAcquisition::Pending)imageAcquisition_=ImageAcquisition::Canceled;
 }
 void GameInput::syncMouseCapture() {
@@ -108,13 +107,24 @@ bool GameInput::handleEvent(const SDL_Event& event) {
         return true;
     }
     if(event.type==SDL_EVENT_MOUSE_BUTTON_DOWN) {
+        const auto pressTrace=[&](bool fire) {
+            if(event.button.button!=SDL_BUTTON_LEFT)return;
+            if(fire&&!traceHeld_)tracePending_=true;
+            traceHeld_=true;
+        };
         // During relative capture the platform cursor need not be in the image
         // (Play also acquires automatically). Its absolute position is irrelevant.
-        if(ownsKeyboard() && captureWindowId_==event.button.windowID)return true;
+        if(ownsKeyboard() && captureWindowId_ && captureWindowId_==event.button.windowID) {
+            pressTrace(true);return true;
+        }
+        const bool alreadyOwned=ownsKeyboard();
         const auto position=eventPosition(event.button.x,event.button.y,event.button.windowID,desktopCoordinates_);
         const bool imagePress=enabled_ && event.button.windowID==viewport_.windowId && position && contains(*position);
         if(!imagePress || blocked_)cancel();
         if(imagePress && event.button.button==SDL_BUTTON_LEFT) {
+            // The click that acquires Game is only an input handoff. A new
+            // press while already owned performs the trace action.
+            pressTrace(alreadyOwned&&!blocked_);
             imageAcquisition_=ImageAcquisition::Pending;
             acquire();
         }
@@ -122,6 +132,7 @@ bool GameInput::handleEvent(const SDL_Event& event) {
     }
     if(event.type==SDL_EVENT_MOUSE_BUTTON_UP || event.type==SDL_EVENT_MOUSE_WHEEL) {
         const auto window=event.type==SDL_EVENT_MOUSE_BUTTON_UP?event.button.windowID:event.wheel.windowID;
+        if(event.type==SDL_EVENT_MOUSE_BUTTON_UP && event.button.button==SDL_BUTTON_LEFT && window==viewport_.windowId)traceHeld_=false;
         return ownsKeyboard() && window==viewport_.windowId;
     }
     if(event.type!=SDL_EVENT_KEY_DOWN && event.type!=SDL_EVENT_KEY_UP)return false;
@@ -134,7 +145,6 @@ bool GameInput::handleEvent(const SDL_Event& event) {
     // another jump while Space is held. A new physical press is required.
     if(down && event.key.repeat)return true;
     if(*index==4 && down && !held_[*index])jumpPending_=true;
-    if(*index==5 && down && !held_[*index])tracePending_=true;
     held_[*index]=down;
     return true;
 }

@@ -49,7 +49,6 @@ public:
     const PanelVisibility& panels() const { return panels_; }
     void setPanels(const PanelVisibility& panels) { panels_=panels; }
     void setCameraBookmarks(CameraBookmarks* bookmarks){cameraBookmarks_=bookmarks;}
-    void setPlayPaused(bool paused){playPaused_=paused;}
     const OverlayVisibility& overlays() const { return overlays_; }
     void setOverlays(const OverlayVisibility& overlays) { overlays_=overlays; }
     void setCameraViewState(EntityId camera, bool piloting, bool gestureActive=false) {
@@ -76,6 +75,12 @@ public:
     void setRagdollActiveQuery(std::function<bool(EntityId)> query){ragdollActive_=std::move(query);}
     void drawDecalPlacementPlane(const Mat4& frame,const Camera& camera,bgfx::TextureHandle texture,const Vec4& color) { viewport_.drawDecalPlacementPlane(frame,camera,texture,color); }
     void drawTraces(const Camera& camera,std::span<const TraceVisualRecord> traces) { viewport_.drawTraces(camera,traces); }
+    void focusViewport(Camera& camera,const SceneDocument& document,const AssetLibrary& assets,float aspect) {
+        viewport_.focus(camera,document,assets,aspect);
+    }
+    void requestViewportContextMenu(Vec2 screen,const SceneDocument& document,const Camera& camera,bool menu=true) {
+        viewport_.requestContextMenu(screen,document,camera,menu);
+    }
     const std::string& navigationPreviewProfile() const { return navigationPreviewProfile_; }
 private:
     enum class Pending { None, New, Open, Exit };
@@ -89,7 +94,6 @@ private:
     AssetReferencesPanel assetReferences_;
     std::optional<std::pair<std::string,EntityId>> referenceSelection_;
     std::uint64_t referenceSelectionGeneration_{};
-    bool playPaused_{};
     OverlayVisibility overlays_;
     EntityId viewedCamera_{};
     bool pilotingCamera_{},cameraGestureActive_{};

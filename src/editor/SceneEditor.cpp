@@ -460,15 +460,9 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
             }
             ImGui::EndMenu();
         }
-        const PlayControlsContext playControls{document.transient(),playPaused_,
+        const PlayControlsContext playControls{document.transient(),false,
             (document.transactionActive()&&!viewport_.vertexPaintActive())||opening_||deletion_||pending_!=Pending::None||
-                viewportCommandsBlocked()||ImGui::GetTopMostPopupModal(),
-            document.scene().properties().playerCharacter!=NoEntity};
-        if(ImGui::BeginMenu("Play")) {
-            const auto action=drawPlayMenu(playControls);
-            if(action!=PlayAction::None){viewport_.finishVertexPaintCommand(document,renderer);playAction=action;}
-            ImGui::EndMenu();
-        }
+                viewportCommandsBlocked()||ImGui::GetTopMostPopupModal()};
         if (ImGui::BeginMenu("View")) {
             ImGui::MenuItem("Outliner",nullptr,&panels_.outliner);
             ImGui::MenuItem("Inspector",nullptr,&panels_.inspector);
@@ -521,7 +515,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
             if (ImGui::MenuItem("Reset layout")) resetLayout=true;
             ImGui::EndMenu();
         }
-        const float playWidth=playToolbarWidth(playControls);
+        const float playWidth=playButtonWidth();
         const float playPosition=ImGui::GetWindowWidth()-playWidth-ImGui::GetStyle().WindowPadding.x;
         if(captures)drawProfilingMenu(*captures,document.transient(),playPosition-ImGui::GetStyle().ItemSpacing.x);
         const auto titlePosition=ImGui::GetCursorScreenPos();
@@ -534,7 +528,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
         ImGui::SameLine(playPosition);
         auto toolbarControls=playControls;
         toolbarControls.blocked|=ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup);
-        const auto toolbarAction=drawPlayToolbar(toolbarControls);
+        const auto toolbarAction=drawPlayButton(toolbarControls);
         if(toolbarAction!=PlayAction::None){viewport_.finishVertexPaintCommand(document,renderer);playAction=toolbarAction;}
         ImGui::EndMainMenuBar();
     }
@@ -693,11 +687,13 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     frame.viewport.inputBlocked |= io.WantTextInput || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) ||
         ImGui::GetDragDropPayload() != nullptr || (document.transactionActive() && !cameraGestureActive_) || actionPending || preferencesMouse;
     frame.documentReplaced=documentReplaced_;
-    frame.playAction=playAction;
-    if(!documentReplaced_ && playAction==PlayAction::None && !document.transient() && !playTransitionBlocked() &&
+    if(playAction!=PlayAction::None)frame.playAction=playAction;
+    if(!documentReplaced_ && frame.playAction==PlayAction::None && !document.transient() && !playTransitionBlocked() &&
         !document.transactionActive() && !viewportBusy() && !ImGui::GetTopMostPopupModal()) {
-        frame.cameraAction=cameraAction;frame.cameraEntity=cameraEntity;frame.bookmarkCamera=bookmarkCamera;
-    }
+        if(cameraAction!=EditorCameraAction::None) {
+            frame.cameraAction=cameraAction;frame.cameraEntity=cameraEntity;frame.bookmarkCamera=bookmarkCamera;
+        }
+    } else {frame.cameraAction=EditorCameraAction::None;frame.cameraEntity=NoEntity;}
     return frame;
 }
 }

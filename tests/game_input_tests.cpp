@@ -58,21 +58,33 @@ void jumpUsesPhysicalPressEdges() {
 }
 void traceUsesOwnedPhysicalPressEdges() {
     GameInput input;input.setViewport(Region,true,false);
-    require(!input.handleEvent(key(SDL_SCANCODE_F)) && !input.consumeTrace(),"An unowned F press queued a trace.");
-    input.acquire();
-    require(!input.handleEvent(key(SDL_SCANCODE_F,true,10)),"A different window supplied a trace.");
-    input.handleEvent(key(SDL_SCANCODE_F));input.handleEvent(key(SDL_SCANCODE_F,false));
-    require(input.consumeTrace() && !input.consumeTrace(),"A short F press was lost or consumed twice.");
-    input.handleEvent(key(SDL_SCANCODE_F));require(input.consumeTrace(),"A new F press did not queue a trace.");
-    input.handleEvent(key(SDL_SCANCODE_F,true,9,true));input.handleEvent(key(SDL_SCANCODE_F));
-    require(!input.consumeTrace(),"Holding F generated repeated traces.");
-    input.handleEvent(key(SDL_SCANCODE_F,false));input.handleEvent(key(SDL_SCANCODE_F));
-    input.cancel();input.acquire();
-    require(!input.consumeTrace(),"Canceled input retained a queued trace.");
-    input.handleEvent(key(SDL_SCANCODE_F,true,9,true));
-    require(!input.consumeTrace(),"Key repeat revived a trace after lost ownership.");
-    input.handleEvent(key(SDL_SCANCODE_F,false));input.handleEvent(key(SDL_SCANCODE_F));
-    require(input.consumeTrace(),"A fresh trace remained suppressed after reacquisition.");
+    require(input.handleEvent(mouse(50,60))&&input.ownsKeyboard()&&!input.consumeTrace(),"The Game acquisition click fired a trace.");
+    input.acquireFromImageClick();input.handleEvent(mouse(50,60));
+    require(!input.consumeTrace(),"Holding or acknowledging the acquisition click fired a trace.");
+    input.handleEvent(mouse(50,60,SDL_EVENT_MOUSE_BUTTON_UP));
+    require(input.handleEvent(mouse(50,60)),"Game did not consume an owned LMB press.");
+    input.handleEvent(mouse(50,60,SDL_EVENT_MOUSE_BUTTON_UP));
+    require(input.consumeTrace()&&!input.consumeTrace(),"A short owned LMB press was lost or consumed twice.");
+    input.handleEvent(mouse(50,60));require(input.consumeTrace(),"A new LMB press did not queue a trace.");
+    input.handleEvent(mouse(50,60));input.handleEvent(mouse(50,60));
+    require(!input.consumeTrace(),"Duplicate held LMB-down events generated repeated traces.");
+    input.handleEvent(mouse(50,60,SDL_EVENT_MOUSE_BUTTON_UP,10));input.handleEvent(mouse(50,60));
+    require(!input.consumeTrace(),"A foreign native window released the held trace button.");
+    input.handleEvent(mouse(50,60,SDL_EVENT_MOUSE_BUTTON_UP));input.handleEvent(mouse(50,60,SDL_EVENT_MOUSE_BUTTON_UP));
+    require(!input.consumeTrace(),"LMB release events fired a trace.");
+    for(const auto button:{SDL_BUTTON_RIGHT,SDL_BUTTON_MIDDLE}) {
+        input.handleEvent(mouse(50,60,SDL_EVENT_MOUSE_BUTTON_DOWN,9,button));
+        input.handleEvent(mouse(50,60,SDL_EVENT_MOUSE_BUTTON_UP,9,button));
+        require(!input.consumeTrace(),"Another mouse button queued the LMB trace action.");
+    }
+    require(!input.handleEvent(key(SDL_SCANCODE_F))&&!input.handleEvent(key(SDL_SCANCODE_F,false))&&!input.consumeTrace(),
+        "The removed F binding consumed editor input or queued a trace.");
+    input.handleEvent(mouse(50,60));input.cancel();input.acquire();
+    require(!input.consumeTrace(),"Canceled input retained a queued LMB trace.");
+    input.handleEvent(mouse(50,60));require(input.consumeTrace(),"A fresh owned LMB trace remained suppressed after cancellation.");
+    require(!input.handleEvent(mouse(50,60,SDL_EVENT_MOUSE_BUTTON_DOWN,10))&&!input.consumeTrace(),"A foreign native window supplied a trace.");
+    input.acquire();input.handleEvent(mouse(900,700));
+    require(!input.ownsKeyboard()&&!input.consumeTrace(),"An uncaptured editor-panel click fired a trace or retained gameplay ownership.");
 }
 void relativeLookAccumulatesOnce() {
     GameInput input;input.setViewport(Region,true,false);input.acquire();
@@ -90,16 +102,16 @@ void ownershipCancellationClearsActions() {
     for(const auto type:{SDL_EVENT_WINDOW_FOCUS_LOST,SDL_EVENT_WINDOW_HIDDEN,SDL_EVENT_WINDOW_MINIMIZED,
                          SDL_EVENT_WINDOW_CLOSE_REQUESTED,SDL_EVENT_WINDOW_DESTROYED}) {
         GameInput input;input.setViewport(Region,true,false);input.acquire();
-        input.handleEvent(key(SDL_SCANCODE_W));input.handleEvent(key(SDL_SCANCODE_SPACE));input.handleEvent(motion(3,4));
+        input.handleEvent(key(SDL_SCANCODE_W));input.handleEvent(key(SDL_SCANCODE_SPACE));input.handleEvent(mouse(50,60));input.handleEvent(motion(3,4));
         const auto revision=input.cancellationRevision();
         SDL_Event event{};event.type=type;event.window.windowID=10;input.handleEvent(event);
         require(input.ownsKeyboard() && input.cancellationRevision()==revision,"An unrelated native window canceled Game.");
         event.window.windowID=9;input.handleEvent(event);idle(input,"Window interruption retained owned movement.");
-        require(input.cancellationRevision()>revision && !input.consumeJump() && input.consumeLookDelta()==Vec2{},"Window interruption retained pending actions.");
+        require(input.cancellationRevision()>revision && !input.consumeJump() && !input.consumeTrace() && input.consumeLookDelta()==Vec2{},"Window interruption retained pending actions.");
     }
     for(int reason=0;reason<6;++reason) {
         GameInput input;input.setViewport(Region,true,false);input.acquire();
-        input.handleEvent(key(SDL_SCANCODE_D));input.handleEvent(key(SDL_SCANCODE_SPACE));input.handleEvent(motion(3,4));
+        input.handleEvent(key(SDL_SCANCODE_D));input.handleEvent(key(SDL_SCANCODE_SPACE));input.handleEvent(mouse(50,60));input.handleEvent(motion(3,4));
         auto region=Region;
         if(reason==1)region.inputBlocked=true;
         if(reason==2)region.windowId=10;
@@ -107,7 +119,7 @@ void ownershipCancellationClearsActions() {
         if(reason==5)region.height=std::numeric_limits<float>::quiet_NaN();
         const auto revision=input.cancellationRevision();input.setViewport(region,reason!=3,reason==0);
         idle(input,"Blocked, disabled, migrated or invalid Game retained movement.");
-        require(input.cancellationRevision()>revision && !input.consumeJump() && input.consumeLookDelta()==Vec2{},"Viewport interruption retained pending actions.");
+        require(input.cancellationRevision()>revision && !input.consumeJump() && !input.consumeTrace() && input.consumeLookDelta()==Vec2{},"Viewport interruption retained pending actions.");
     }
     GameInput input;input.setViewport(Region,true,false);input.acquire();input.handleEvent(key(SDL_SCANCODE_W));
     require(input.handleEvent(key(SDL_SCANCODE_ESCAPE)),"Escape was not consumed by the gameplay owner.");
@@ -117,7 +129,7 @@ void imageClickOnlyAcquiresAndHonorsCancellation() {
     GameInput input;input.setViewport(Region,true,true);
     require(!input.handleEvent(mouse(50,60)),"Blocked native press unexpectedly acquired Game.");
     input.setViewport(Region,true,false);input.acquireFromImageClick();
-    require(input.ownsKeyboard() && input.movement()==Vec2{} && !input.consumeJump() && input.consumeLookDelta()==Vec2{},
+    require(input.ownsKeyboard() && input.movement()==Vec2{} && !input.consumeJump() && !input.consumeTrace() && input.consumeLookDelta()==Vec2{},
         "The first image click leaving text editing failed to acquire or fabricated an FPS action.");
     input.handleEvent(mouse(50,60,SDL_EVENT_MOUSE_BUTTON_UP));
     require(input.ownsKeyboard(),"Releasing the acquisition click released keyboard ownership.");
@@ -139,7 +151,7 @@ void missingNativeOwnerCannotCapture() {
 }
 void editorEventGateSeparatesFpsAndUi() {
     require(!gameInputBlocksEditorEvent(mouse(50,60),9,true,false),"The first acquisition click was hidden from the Game image.");
-    for(const auto event:{mouse(50,60),motion(5,6)}) {
+    for(const auto event:{mouse(50,60),mouse(-1000,5000),motion(5,6)}) {
         require(gameInputBlocksEditorEvent(event,9,true,true),"Captured mouse input could activate an editor widget.");
         require(!gameInputBlocksEditorEvent(event,10,true,true),"Game suppressed another native window's UI input.");
         require(!gameInputBlocksEditorEvent(event,9,false,true),"Released Game suppressed editor mouse input.");
@@ -147,12 +159,12 @@ void editorEventGateSeparatesFpsAndUi() {
     SDL_Event wheel{};wheel.type=SDL_EVENT_MOUSE_WHEEL;wheel.wheel.windowID=9;
     require(gameInputBlocksEditorEvent(wheel,9,true,true),"Captured gameplay wheel input reached editor controls.");
     require(!gameInputBlocksEditorEvent(mouse(50,60,SDL_EVENT_MOUSE_BUTTON_UP),9,true,true),"Acquisition mouse release could leave ImGui's image held.");
-    for(const auto code:{SDL_SCANCODE_W,SDL_SCANCODE_A,SDL_SCANCODE_S,SDL_SCANCODE_D,SDL_SCANCODE_SPACE,SDL_SCANCODE_F}) {
+    for(const auto code:{SDL_SCANCODE_W,SDL_SCANCODE_A,SDL_SCANCODE_S,SDL_SCANCODE_D,SDL_SCANCODE_SPACE}) {
         require(gameInputBlocksEditorEvent(key(code),9,true,true),"FPS press edges could activate an editor shortcut or widget.");
         require(!gameInputBlocksEditorEvent(key(code,false),9,true,true),"A key pressed before acquisition could remain stuck in ImGui.");
         require(!gameInputBlocksEditorEvent(key(code),9,false,false),"Released Game suppressed editor keyboard input.");
     }
-    for(const auto code:{SDL_SCANCODE_P,SDL_SCANCODE_ESCAPE,SDL_SCANCODE_F1,SDL_SCANCODE_TAB})
+    for(const auto code:{SDL_SCANCODE_P,SDL_SCANCODE_ESCAPE,SDL_SCANCODE_F,SDL_SCANCODE_F1,SDL_SCANCODE_TAB})
         require(!gameInputBlocksEditorEvent(key(code),9,true,true),"FPS input suppressed Play, release or debug shortcuts.");
 }
 }

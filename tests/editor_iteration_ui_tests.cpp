@@ -1,7 +1,10 @@
 #include "editor/CameraBookmarks.h"
+#include "editor/ViewportContextMenu.h"
 #include "tools/CameraBookmarksPanel.h"
 #include "tools/PlayControls.h"
+#include "tools/ViewportContextActions.h"
 #include <imgui_internal.h>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -9,6 +12,7 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -98,16 +102,21 @@ void sceneAndRenameOwnership() {
 }
 class PlayUi {
 public:
-    PrivateUi ui;PlayControlsContext context;PlayAction action{};float width{};
+    PrivateUi ui;PlayControlsContext context;PlayAction action{};float width{};bool gameToolbar{};
     PlayUi(){tick();tick();}
     void tick(){ui.frame([&]{ImGui::SetNextWindowPos({20,20});ImGui::SetNextWindowSize({700,160});ImGui::Begin("Play Controls");
-        width=playToolbarWidth(context);action=drawPlayToolbar(context);ImGui::End();});}
-    PlayAction activate(const char* label){auto* window=ImGui::FindWindowByName("Play Controls");require(window,"Play toolbar unavailable.");ui.activation=window->GetID(label);tick();return action;}
+        width=gameToolbar?gamePlayToolbarWidth(context):playButtonWidth();
+        action=gameToolbar?drawGamePlayToolbar(context):drawPlayButton(context);ImGui::End();});}
+    PlayAction activate(const char* label){auto* window=ImGui::FindWindowByName("Play Controls");require(window,"Play toolbar unavailable.");
+        const auto scope=window->GetID(gameToolbar?"GamePlayControls":"MainPlayButton");
+        ui.activation=ImHashStr(label,0,scope);tick();return action;}
 };
 void playToolbarStates() {
     PlayUi view;require(view.activate("Play")==PlayAction::Start,"Stopped Play button did not request Play.");
     require(std::isfinite(view.width)&&view.width>0,"Stopped Play toolbar width was invalid.");
-    view.context={true,false,false,true};view.tick();
+    view.context={true,false,false};view.tick();
+    require(view.activate("Play")==PlayAction::None,"Main Play button restarted an existing Play session.");
+    view.gameToolbar=true;view.tick();
     require(view.activate("Pause")==PlayAction::TogglePause,"Running toolbar did not request Pause.");
     require(view.activate("Step")==PlayAction::None,"Running Step button was enabled.");
     require(view.activate("Stop")==PlayAction::Stop,"Running Stop button was disabled.");
@@ -117,8 +126,106 @@ void playToolbarStates() {
     require(view.activate("Stop")==PlayAction::Stop,"Paused Stop button was disabled.");
     view.context.blocked=true;view.tick();
     require(view.activate("Resume")==PlayAction::None&&view.activate("Step")==PlayAction::None&&view.activate("Stop")==PlayAction::None,"Blocked Play toolbar accepted an action.");
-    view.context={false,false,true,true};view.tick();require(view.activate("Play")==PlayAction::None,"Blocked stopped toolbar accepted Play.");
+    view.context={false,false,true};view.tick();
+    require(view.width==0&&view.activate("Pause")==PlayAction::None&&view.activate("Stop")==PlayAction::None&&view.activate("Step")==PlayAction::None,
+        "Inactive Game toolbar retained runtime controls.");
+    view.gameToolbar=false;view.tick();require(view.activate("Play")==PlayAction::None,"Blocked stopped toolbar accepted Play.");
+}
+class ContextActionsUi {
+public:
+    PrivateUi ui;bool playEnabled=true,objectActions=true;ViewportContextAction action{};float menuHeight{};
+    void tick(){ui.frame([&]{
+        action=ViewportContextAction::None;
+        ImGui::SetNextWindowPos({20,20});ImGui::SetNextWindowSize({700,500});ImGui::Begin("Viewport context fixture");
+        if(openRequested){ImGui::OpenPopup("Scene context");openRequested=false;}
+        if(ImGui::BeginPopup("Scene context")) {
+            const auto before=ImGui::GetCursorPosY();
+            action=drawViewportContextActions(playEnabled,objectActions);
+            menuHeight=ImGui::GetCursorPosY()-before;
+            ImGui::EndPopup();
+        }
+        ImGui::End();
+    });}
+    ViewportContextAction activate(const char* label) {
+        openRequested=true;tick();tick();
+        require(!ui.context->OpenPopupStack.empty()&&ui.context->OpenPopupStack.back().Window,"Viewport context popup did not open.");
+        const auto scope=ui.context->OpenPopupStack.back().Window->GetID("SceneContextActions");
+        ui.activation=ImHashStr(label,0,scope);tick();return action;
+    }
+private:
+    bool openRequested{};
+};
+void viewportContextMenuActions() {
+    ContextActionsUi view;
+    for(const auto& [label,expected]:std::array{
+        std::pair{"Play From Here",ViewportContextAction::PlayFromHere},
+        std::pair{"Duplicate",ViewportContextAction::Duplicate},
+        std::pair{"Delete",ViewportContextAction::Delete},
+        std::pair{"Focus",ViewportContextAction::Focus}})
+        require(view.activate(label)==expected,"An enabled viewport context action did not activate through its actual menu item.");
+    const auto objectMenuHeight=view.menuHeight;
+    view.playEnabled=false;
+    require(view.activate("Play From Here")==ViewportContextAction::None,"Disabled Play From Here accepted an action.");
+    require(view.activate("Duplicate")==ViewportContextAction::Duplicate,"Disabling Play From Here also disabled object actions.");
+    view.objectActions=false;
+    for(const char* label:{"Duplicate","Delete","Focus"})
+        require(view.activate(label)==ViewportContextAction::None,"A context menu without a hit object retained an object action.");
+    require(view.menuHeight<objectMenuHeight,"A context menu without a hit object retained hidden object rows or their separator.");
+    require(view.activate("Play From Here")==ViewportContextAction::None,"An empty disabled context menu started Play.");
+    view.playEnabled=true;
+    require(view.activate("Play From Here")==ViewportContextAction::PlayFromHere,"A valid surface without object actions could not start Play From Here.");
+}
+void viewportContextSurfaceOwnership() {
+    const ViewportContextMenu::Stamp stamp{7,19,23,Mat4{},Mat4{},Vec2{800,600}};
+    const ViewportContextMenu::Pixel pixel{137,409};ViewportContextMenu context;
+    require(!context.active()&&!context.completed()&&!context.needsPick(),"Idle viewport context retained a surface request.");
+    context.begin(stamp,pixel);
+    require(context.active()&&context.matches(stamp)&&context.needsPick()&&!context.position(),"Context start did not retain its surface intent.");
+    for(unsigned field=0;field<6;++field) {
+        auto changed=stamp;
+        if(field==0)++changed.docGeneration;
+        if(field==1)++changed.generation;
+        if(field==2)++changed.revision;
+        if(field==3)changed.view[12]=1;
+        if(field==4)changed.projection[0]=2;
+        if(field==5)changed.size[0]=1600;
+        require(!context.matches(changed),"A changed document, scene, camera or viewport matched an old context target.");
+    }
+    const auto request=context.request(101);
+    require(request.mode==PickMode::Surface&&request.generation==stamp.generation&&request.revision==stamp.revision&&
+        request.serial==101&&request.x==pixel.x&&request.y==pixel.y&&request.width==1&&request.height==1&&!context.needsPick(),
+        "Context surface request lost the exact clicked pixel or source identity.");
+    PickResult result;result.mode=PickMode::Surface;result.generation=stamp.generation;result.revision=stamp.revision;
+    result.serial=101;result.entityId=31;result.surfaceValid=true;result.worldPosition={4,2,-8};
+    for(unsigned field=0;field<4;++field) {
+        auto stale=result;
+        if(field==0)++stale.serial;
+        if(field==1)++stale.generation;
+        if(field==2)++stale.revision;
+        if(field==3)stale.mode=PickMode::Selection;
+        require(!context.resolve(stale)&&!context.completed()&&!context.needsPick()&&!context.position(),
+            "An unrelated readback completed or discarded the current context request.");
+    }
+    result.surfacePending=true;require(context.resolve(result)&&!context.completed()&&context.needsPick()&&!context.position(),
+        "Preparing surface geometry became a terminal context failure.");
+    const auto retry=context.request(102);
+    require(retry.x==pixel.x&&retry.y==pixel.y&&retry.generation==request.generation&&retry.revision==request.revision,
+        "A surface retry followed the current pointer instead of the original RMB point.");
+    require(!context.resolve(result),"A retried context accepted its previous serial.");
+    result.serial=102;result.surfacePending=false;require(context.resolve(result)&&context.completed()&&!context.needsPick()&&
+        context.position()==result.worldPosition&&context.entity()==result.entityId,"A valid context hit lost the clicked object or world position.");
+    for(unsigned invalid=0;invalid<3;++invalid) {
+        context.begin(stamp,pixel);context.request(103);auto missing=result;missing.serial=103;
+        if(invalid==0)missing.entityId=0;
+        if(invalid==1)missing.surfaceValid=false;
+        if(invalid==2)missing.worldPosition[0]=std::numeric_limits<float>::quiet_NaN();
+        require(context.resolve(missing)&&context.completed()&&!context.position()&&!context.needsPick(),
+            "A missing or nonfinite surface supplied a context spawn point or retried forever.");
+        require(context.entity()==missing.entityId,"An object without a usable spawn surface lost its context actions.");
+    }
+    context.cancel();require(!context.active()&&!context.completed()&&!context.needsPick()&&!context.position()&&!context.entity()&&!context.resolve(result),
+        "Canceled context retained or republished a stale surface hit.");
 }
 }
-int main(){try{bookmarkWorkflow();sceneAndRenameOwnership();playToolbarStates();std::cout<<"Editor iteration UI: bookmark save/recall/update/rename/cancel/delete, scene ownership and Play pause/resume/step states passed.\n";return 0;}
+int main(){try{bookmarkWorkflow();sceneAndRenameOwnership();playToolbarStates();viewportContextMenuActions();viewportContextSurfaceOwnership();std::cout<<"Editor iteration UI: bookmarks, Play controls, context actions and clicked-surface context ownership passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

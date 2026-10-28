@@ -9,6 +9,7 @@
 #include "assets/RagdollAsset.h"
 #include "assets/ModelAnimation.h"
 #include "SceneAnimations.h"
+#include "PlayStartPoint.h"
 #include "navigation/NavigationWorld.h"
 #include <functional>
 #include <chrono>
@@ -23,7 +24,7 @@ public:
     static constexpr std::uint64_t MaximumCatchUpTicks=8;
     explicit PlaySession(std::filesystem::path projectRoot);
     bool start(const SceneDocument& authored);
-    bool startFromView(const SceneDocument& authored,const Camera&);
+    bool startFromPoint(const SceneDocument& authored,const Vec3&,const Camera&);
     void stop();
     bool playing() const {return document_!=nullptr;}
     bool paused() const {return paused_;}
@@ -206,7 +207,7 @@ private:
     std::uint64_t editRevision_{},agentsRevision_{},ticks_{},droppedTicks_{};
     double remainder_{},lightSeconds_{};
     bool suspended_{},failed_{},paused_{},resumePending_{};
-    bool startInternal(const SceneDocument&,const Camera*);
+    bool startInternal(const SceneDocument&,const PlayStartPoint*);
     void advanceInternal(double,Vec2,const Camera&,bool,GameInput* = nullptr,bool singleStep=false);
     void refreshPresentation();
     std::string firePlayerTrace(EntityId);

@@ -614,6 +614,10 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
                         if(!trace.at("hitImpulse").is_number())throw std::runtime_error("Player Trace Test hit impulse must be a number.");
                         input.traceTest.hitImpulse=trace.at("hitImpulse").get<float>();
                     }
+                    if(trace.contains("upwardImpulse")) {
+                        if(!trace.at("upwardImpulse").is_number())throw std::runtime_error("Player Trace Test upward impulse must be a number.");
+                        input.traceTest.upwardImpulse=trace.at("upwardImpulse").get<float>();
+                    }
                 }
                 if(!entity.contains("movement") && record.movement) {
                     auto& movement=*record.movement;
@@ -988,7 +992,8 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if(record.playerInput) {const auto& c=*record.playerInput;entity["playerInput"]={{"enabled",c.enabled},
             {"mouseSensitivity",c.mouseSensitivity},{"invertY",c.invertY},
             {"traceTest",{{"duration",c.traceTest.duration},{"length",c.traceTest.length},
-                {"collisionQuadSize",c.traceTest.collisionQuadSize},{"collisionMask",c.traceTest.collisionMask},{"hitImpulse",c.traceTest.hitImpulse}}}};}
+                {"collisionQuadSize",c.traceTest.collisionQuadSize},{"collisionMask",c.traceTest.collisionMask},
+                {"hitImpulse",c.traceTest.hitImpulse},{"upwardImpulse",c.traceTest.upwardImpulse}}}};}
         if (record.collider) { const auto& c=*record.collider;
             const auto shape=c.shape==ColliderShape::Box?"box":c.shape==ColliderShape::Sphere?"sphere":c.shape==ColliderShape::Cylinder?"cylinder":c.shape==ColliderShape::Capsule?"capsule":"trimesh";
             entity["collider"]={{"shape",shape},{"mode",c.mode==ColliderMode::Solid?"solid":"trigger"},{"collision",collisionFilterJson(c.collision)},{"size",c.size},{"radius",c.radius},{"height",c.height},{"source",c.source},

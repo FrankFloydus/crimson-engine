@@ -35,6 +35,7 @@ public:
     // sensitivity and inversion are applied by the player's look controller.
     Vec2 consumeLookDelta();
     bool consumeJump();
+    // One owned LMB press edge; the click acquiring Game only transfers input.
     bool consumeTrace();
     std::uint64_t cancellationRevision() const { return cancellationRevision_; }
 private:
@@ -42,12 +43,12 @@ private:
     void releaseMouseCapture();
     enum class ImageAcquisition { None, Pending, Canceled };
     ViewportRegion viewport_;
-    std::array<bool,6> held_{}; // W, A, S, D, Space, F.
+    std::array<bool,5> held_{}; // W, A, S, D, Space.
     Vec2 lookDelta_{};
     std::uint64_t cancellationRevision_{};
     SDL_WindowID captureWindowId_{};
     ImageAcquisition imageAcquisition_{};
-    bool jumpPending_{},tracePending_{},discardNextMotion_{};
+    bool jumpPending_{},tracePending_{},traceHeld_{},discardNextMotion_{};
     bool enabled_{},blocked_{},armed_{},desktopCoordinates_{};
 };
 }

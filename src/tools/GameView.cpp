@@ -1,6 +1,7 @@
 #include "GameView.h"
 #include "GameViewInteraction.h"
 #include "RenderDebugControls.h"
+#include "PlayControls.h"
 #include "ProfilingStatus.h"
 #include "editor/CollisionWire.h"
 #include "editor/TraceOverlay.h"
@@ -61,7 +62,7 @@ void GameView::drawMetrics(Vec2 origin,Vec2 size) const {
     draw->AddText({minimum.x+padding.x,minimum.y+padding.y},ImGui::GetColorU32(ImGuiCol_Text),text);draw->PopClipRect();
 }
 GameViewFrame GameView::draw(SceneDocument& document,Renderer& renderer,bool& open,bool playing,bool focus,std::uint64_t textureAndProgramBytes,
-                             bool attributeDebug) {
+                             bool attributeDebug,bool paused,bool playControlsBlocked) {
     GameViewFrame frame;
     imageDrawList_=nullptr;
     imageFont_=nullptr;
@@ -78,6 +79,13 @@ GameViewFrame GameView::draw(SceneDocument& document,Renderer& renderer,bool& op
         if(gameMetricsToggleRequested(playing))metricsVisible_=!metricsVisible_;
         frame.attributeDebugCycle=gameAttributeDebugCycleRequested(playing&&attributeDebug);
         if(playing)updateMetrics(renderer,textureAndProgramBytes);
+        const PlayControlsContext playControls{playing,paused,playControlsBlocked};
+        const float toolbarWidth=gamePlayToolbarWidth(playControls);
+        const float toolbarAvailable=ImGui::GetContentRegionAvail().x;
+        frame.playAction=drawGamePlayToolbar(playControls);
+        const float debugWidth=ImGui::CalcTextSize("Indirect Lighting").x+ImGui::GetStyle().FramePadding.x*2+
+            ImGui::GetFrameHeight()*2+ImGui::GetStyle().ItemInnerSpacing.x;
+        if(playing&&toolbarAvailable>=toolbarWidth+debugWidth+ImGui::GetStyle().ItemSpacing.x)ImGui::SameLine();
         drawRenderDebugControls(renderer,RenderViewPurpose::Game);
         const auto size=ImGui::GetContentRegionAvail();
         if(size.x>0 && size.y>0) {

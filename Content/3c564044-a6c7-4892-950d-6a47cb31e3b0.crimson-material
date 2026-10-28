@@ -29,7 +29,7 @@
           "heightMidpoint": 0.5,
           "heightScale": 1.0,
           "mapping": {
-            "mode": 0,
+            "mode": 3,
             "offset": [
               0.0,
               0.0,
@@ -47,7 +47,7 @@
             ],
             "scaleLinked": true
           },
-          "mappingOverride": false,
+          "mappingOverride": true,
           "metallicInfluence": 1.0,
           "normalInfluence": 1.0,
           "occlusionInfluence": 1.0,
@@ -252,7 +252,7 @@
           "heightMidpoint": 0.5,
           "heightScale": 1.0,
           "mapping": {
-            "mode": 0,
+            "mode": 3,
             "offset": [
               0.0,
               0.0,
@@ -270,7 +270,7 @@
             ],
             "scaleLinked": true
           },
-          "mappingOverride": false,
+          "mappingOverride": true,
           "metallicInfluence": 1.0,
           "normalInfluence": 1.0,
           "occlusionInfluence": 1.0,

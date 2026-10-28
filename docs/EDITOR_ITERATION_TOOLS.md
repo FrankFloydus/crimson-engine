@@ -28,21 +28,23 @@ The report is an explicit worker request over immutable source, catalog, locatio
 
 ## Play From Here
 
-Choose **Play → Play From Here** or press **Shift+F5** in Edit mode. This starts the scene's existing designated Player at the Scene view's eye position and look direction. It uses the Player's real owned Camera, authored eye offset, Movement and Controller profile. The Game lens remains the authored Player camera lens; the editor's field of view is not copied into it.
+In Edit mode, right-click a surface in the Scene viewport and choose **Play From Here**. **Shift+F5** runs the same command at the surface under the pointer. The rendered surface pick supplies the Player's feet position, and the Scene view supplies its facing direction. It uses the scene's existing designated Player, real owned Camera, authored eye offset, Movement and Controller profile. The Game lens remains the authored Player camera lens; the editor's field of view is not copied into it.
 
-The command changes only the transient Play copy. It converts the requested world placement through the Player's complete parent transform, retains the authored camera basis/follow definition, and selects the owned camera only for this run. It does not create a replacement Player or modify the saved spawn. An absent/disabled Player or unavailable owned camera reports an error. The accepted native character capsule must fit against solid collision and other characters. Touching support is allowed; an obstructed placement stays in Edit. A valid elevated placement begins falling under ordinary gravity.
+Right-clicking an object selects that object before exposing **Duplicate**, **Delete** and **Focus**. These commands use the ordinary scene duplication, deletion and editor-camera framing paths; Duplicate and Delete retain scene Undo/Redo. Empty space retains the placement menu without object actions. A right-button camera drag does not open the menu.
 
-Mesh-collision preparation retains the requested view while current resources become ready. Scene changes cancel that pending start. Ordinary **P / Play** still starts from the authored placement. **Shift+Escape / Stop** restores the original Edit world, selection, dirty state, history and editor view.
+The command changes only the transient Play copy. It converts the picked world placement through the Player's complete parent transform, retains the authored camera basis/follow definition, and selects the owned camera only for this run. It does not create a replacement Player or modify the saved spawn. An absent/disabled Player, unavailable owned camera or missing surface cannot start the run. The accepted native character capsule must fit against solid collision and other characters. Touching support is allowed; an obstructed placement stays in Edit. A rendered surface without physical support begins falling under ordinary gravity.
+
+Surface picking and mesh-collision preparation retain the requested point and Scene view while current resources become ready. Scene changes cancel that pending start. The **Play** button on the right of the main bar, or **P**, starts from the authored placement. **Shift+Escape / Stop** restores the original Edit world, selection, dirty state, history and editor view.
 
 ## Pause, Resume and Step
 
-During Play, use the top bar or **Play** menu:
+During Play, use **Pause/Resume**, **Stop** and **Step** on the left of the Game view's top bar:
 
 | Action | Shortcut | Behavior |
 | --- | --- | --- |
 | Pause / Resume | **F6** | Holds or resumes the existing runtime world |
-| Step | **F7** | While paused, advances exactly one 1/60 second tick and stays paused |
 | Stop | **Shift+Escape** | Discards the runtime copy and restores Edit |
+| Step | **F7** | While paused, advances exactly one 1/60 second tick and stays paused |
 
 Pause releases Game input and leaves Scene navigation and the runtime Inspector available. Physics, characters, ragdolls, enemies, Gameplay Effects, particles, imported animation and light presentation keep their state. Step advances those fixed-tick owners together and displays the completed pose. Paused wall time does not accumulate into a catch-up burst on Resume. Held movement, pending jump/look and trace edges are cancelled across these transitions; a Step has no gameplay input.
 
@@ -52,6 +54,6 @@ Shortcuts respect active text fields, popups, drags, native-window focus and doc
 
 ## Ownership and regression entry points
 
-`SceneOutlinerProjection` owns cached hierarchy filtering. `CameraBookmarks` owns validated atomic editor metadata, with `CameraBookmarksPanel` providing its UI. `AssetReferencesPanel` owns request cancellation, freshness and retained rows over `AssetReferenceReport`; `AssetLibrary` captures the authoritative source snapshot. `PlaySession` owns placement, pause/step and accepted time; `PhysicsWorld` owns native capsule clearance. `EditorSession` dispatches actions at its safe document boundary and owns Game input acquisition.
+`SceneOutlinerProjection` owns cached hierarchy filtering. `CameraBookmarks` owns validated atomic editor metadata, with `CameraBookmarksPanel` providing its UI. `AssetReferencesPanel` owns request cancellation, freshness and retained rows over `AssetReferenceReport`; `AssetLibrary` captures the authoritative source snapshot. The Scene viewport owns the clicked Play From Here request; rendered-surface picking resolves its feet position. `PlaySession` owns placement, pause/step and accepted time; `PhysicsWorld` owns native capsule clearance. `GameView` returns toolbar actions without mutating the runtime. `EditorSession` dispatches actions at its safe document boundary and owns Game input acquisition.
 
 Focused checks are `scene_component_core`, `outliner_ui_core`, `camera_bookmark_core`, `editor_iteration_ui_core`, `asset_reference_report_core`, `play_runtime_core`, `play_shortcut_core`, `ragdoll_runtime_core`, `physics_core`, `game_input_core`, `game_view_input_core`, `camera_pilot_core` and `fps_controller_core`. Existing browser, deletion/retention and scene history regressions remain applicable. These features introduce no material ABI, shader source or renderer view-layout change.

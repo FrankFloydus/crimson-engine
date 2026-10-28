@@ -278,9 +278,9 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
 void EditorSession::cancelInteraction(Renderer& renderer) {
     cameraPilot_.cancelGesture(activeDocument(),settings_.camera);cameraGestureCancel_=false;
     editor_.cancelInteraction(activeDocument(),renderer);particleEditor_.cancelInteraction();materialEditor_.cancelInteraction();navigationProfileEditor_.cancelInteraction();collisionLayersEditor_.cancelInteraction();gameplayEffectEditor_.cancelInteraction();animationEditor_.cancelInteraction();ragdollEditor_.cancelInteraction();decalEditor_.cancelInteraction();gameInput_.cancel();pendingDecalPlacement_.reset();decals_.clear();focusGame_=false;skipSimulationTime_=true;
-    playShortcuts_.cancel();playActionPending_=PlayAction::None;waitingForCollision_=false;playStartView_.reset();
+    playShortcuts_.cancel();playActionPending_=PlayAction::None;waitingForCollision_=false;playStartPoint_.reset();
 }
-void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,bool stop,std::optional<Camera> startView) {
+void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,bool stop,std::optional<PlayStartPoint> startPoint) {
     ragdollEditor_.cancelInteraction();
     attributeDebug_.reset();
     cameraPilot_.useEditorCamera(activeDocument(),settings_.camera);cameraGestureCancel_=false;
@@ -288,20 +288,20 @@ void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,boo
     editor_.cancelInteraction(activeDocument(),renderer);navigation.cancel();gameInput_.cancel();
     pendingDrops_.clear();pendingDecalPlacement_.reset();decals_.clear();renderer.cancelPicking();skipSimulationTime_=true;playStatus_.clear();
     if(play_.playing()) {
-        play_.stop();settings_.camera=editCameraBeforePlay_;playStartView_.reset();
+        play_.stop();settings_.camera=editCameraBeforePlay_;playStartPoint_.reset();
         if(deferredSceneReload_ && !document_.assetId().empty())changedFiles_.push_back(resolveAssetPath(root_,document_.assetId()));
         deferredSceneReload_=false;
     } else if(!stop) {
         editCameraBeforePlay_=settings_.camera;
-        playStartView_=startView;
-        const bool started=startView?play_.startFromView(document_,*startView):play_.start(document_);
-        if(started) { editor_.showGame();focusGame_=true;playStartView_.reset(); }
+        playStartPoint_=startPoint;
+        const bool started=startPoint?play_.startFromPoint(document_,startPoint->position,startPoint->view):play_.start(document_);
+        if(started) { editor_.showGame();focusGame_=true;playStartPoint_.reset(); }
         else {
             playStatus_=play_.status();
             if(playStatus_.starts_with("Preparing mesh collision")) {
                 waitingForCollision_=true;waitingSceneGeneration_=document_.documentGeneration();waitingSceneRevision_=document_.scene().revision();
             }
-            else playStartView_.reset();
+            else playStartPoint_.reset();
         }
     }
     documentEpoch_=activeDocument().documentGeneration();
@@ -309,9 +309,12 @@ void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,boo
 void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& navigation, SDL_Window* window,
                           uint32_t bgfxFrame, bool quitRequested, profiling::CaptureController* captures) {
     const bool forceStop=editor_.needsAuthoringDocument() || quitRequested || (play_.playing() && !editor_.panels().game);
+    if(playActionPending_==PlayAction::StartHere && (document_.documentGeneration()!=waitingSceneGeneration_ || document_.scene().revision()!=waitingSceneRevision_)) {
+        playActionPending_=PlayAction::None;playStartPoint_.reset();
+    }
     if(waitingForCollision_) {
         if(forceStop || document_.documentGeneration()!=waitingSceneGeneration_ || document_.scene().revision()!=waitingSceneRevision_ || playActionPending_==PlayAction::Stop) {
-            waitingForCollision_=false;playStartView_.reset();
+            waitingForCollision_=false;playStartPoint_.reset();
         }
         else {
             bool ready=true;
@@ -319,16 +322,16 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
                 const auto source=colliderMeshResult(*record.collider,[this](const auto& id){return collisions_.query(id);});
                 if(!source.mesh || !source.current) {
                     ready=false;playStatus_=source.diagnostic;
-                    if(!playStatus_.starts_with("Preparing mesh collision")){waitingForCollision_=false;playStartView_.reset();}
+                    if(!playStatus_.starts_with("Preparing mesh collision")){waitingForCollision_=false;playStartPoint_.reset();}
                     break;
                 }
             }
-            if(ready){waitingForCollision_=false;playActionPending_=playStartView_?PlayAction::StartHere:PlayAction::Start;}
+            if(ready){waitingForCollision_=false;playActionPending_=playStartPoint_?PlayAction::StartHere:PlayAction::Start;}
         }
     }
     if(play_.playing() && (forceStop || playActionPending_==PlayAction::Stop))transitionPlay(renderer,navigation,true);
     else if(!play_.playing() && !forceStop && (playActionPending_==PlayAction::Start||playActionPending_==PlayAction::StartHere))
-        transitionPlay(renderer,navigation,false,playActionPending_==PlayAction::StartHere?playStartView_:std::nullopt);
+        transitionPlay(renderer,navigation,false,playActionPending_==PlayAction::StartHere?playStartPoint_:std::nullopt);
     else if(play_.playing()&&!forceStop&&(playActionPending_==PlayAction::TogglePause||playActionPending_==PlayAction::Step)) {
         gameInput_.cancel();playShortcuts_.cancel();focusGame_=false;skipSimulationTime_=true;
         if(playActionPending_==PlayAction::TogglePause) {
@@ -347,7 +350,6 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(quitRequested) {cameraPilot_.useEditorCamera(document,settings_.camera);navigation.cancel();}
     cameraPilot_.sync(document,settings_.camera);
     editor_.setCameraViewState(cameraPilot_.selectedCamera(),cameraPilot_.piloting(),cameraPilot_.gestureActive());
-    editor_.setPlayPaused(play_.paused());
     const auto previousAsset=document.assetId();
     const float simulationSeconds=simulationSuspended_ || skipSimulationTime_?0.f:ImGui::GetIO().DeltaTime;
     materialRealSeconds_=std::chrono::duration<double>(std::chrono::steady_clock::now()-materialClockStart_).count();
@@ -399,10 +401,14 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     });
     const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_,navigationProfileEditor_,collisionLayersEditor_,gameplayEffectEditor_,animationEditor_,decalEditor_,gameplay,captures,&ragdollEditor_,lightPreview);
     const auto sceneCamera=frame.viewportCamera.value_or(settings_.camera);
-    if(frame.playAction!=PlayAction::None) {
+    if(frame.playAction!=PlayAction::None&&!frame.documentReplaced) {
         playActionPending_=frame.playAction;
-        if(frame.playAction==PlayAction::StartHere)playStartView_=sceneCamera;
-        else if(frame.playAction==PlayAction::Start||frame.playAction==PlayAction::Stop)playStartView_.reset();
+        if(frame.playAction==PlayAction::StartHere) {
+            playStartPoint_=frame.playStartPoint;
+            if(!playStartPoint_)playActionPending_=PlayAction::None;
+            waitingSceneGeneration_=document.documentGeneration();waitingSceneRevision_=document.scene().revision();
+        }
+        else if(frame.playAction==PlayAction::Start||frame.playAction==PlayAction::Stop)playStartPoint_.reset();
     }
     if(frame.createParticle) particleEditor_.requestCreate(frame.particleFolder,assets);
     if(!frame.openParticle.empty()) particleEditor_.requestOpen(frame.openParticle,assets);
@@ -532,15 +538,25 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         }
     }
     bool gameOpen=editor_.panels().game;
-    const auto game=gameView_.draw(document,renderer,gameOpen,play_.playing(),focusGame_,assets.textureResidentBytes(),attributeDebug_.enabled());
+    const bool playControlsBlocked=quitRequested || editor_.playTransitionBlocked() || document.transactionActive() ||
+        particleEditor_.transactionActive() || materialEditor_.transactionActive() || navigationProfileEditor_.transactionActive() ||
+        collisionLayersEditor_.transactionActive() || gameplayEffectEditor_.transactionActive() || animationEditor_.transactionActive() ||
+        ragdollEditor_.transactionActive() || decalEditor_.transactionActive();
+    const auto game=gameView_.draw(document,renderer,gameOpen,play_.playing(),focusGame_,assets.textureResidentBytes(),attributeDebug_.enabled(),play_.paused(),playControlsBlocked);
+    if(game.playAction!=PlayAction::None)playActionPending_=game.playAction;
     if(captures)gameView_.drawCaptureStatus(captures->status());
     if(!gameOpen) { editor_.hideGame();renderer.releaseGameViewport();if(play_.playing())playActionPending_=PlayAction::Stop; }
     const auto playShortcut=playShortcuts_.consume({play_.playing(),quitRequested || editor_.playTransitionBlocked(),
         navigation.active() || document.transactionActive() || particleEditor_.transactionActive() || materialEditor_.transactionActive() || navigationProfileEditor_.transactionActive() || collisionLayersEditor_.transactionActive() || gameplayEffectEditor_.transactionActive() || animationEditor_.transactionActive() || ragdollEditor_.transactionActive() || decalEditor_.transactionActive(),play_.paused()});
     if(playShortcut!=PlayAction::None) {
-        playActionPending_=playShortcut;
-        if(playShortcut==PlayAction::StartHere)playStartView_=sceneCamera;
-        else if(playShortcut==PlayAction::Start||playShortcut==PlayAction::Stop)playStartView_.reset();
+        if(playShortcut==PlayAction::StartHere) {
+            const auto pointer=ImGui::GetIO().MousePos;
+            if(frame.viewport.hovered&&!frame.viewport.inputBlocked)
+                editor_.requestViewportContextMenu({pointer.x,pointer.y},document,sceneCamera,false);
+        } else {
+            playActionPending_=playShortcut;
+            if(playShortcut==PlayAction::Start||playShortcut==PlayAction::Stop)playStartPoint_.reset();
+        }
     }
     auto gameCamera=resolveGameCamera(document.scene());
     auto* gameWindow=game.viewport.windowId?SDL_GetWindowFromID(game.viewport.windowId):nullptr;
@@ -574,6 +590,13 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
                 cameraPilot_.useEditorCamera(document,settings_.camera);settings_.camera=*frame.bookmarkCamera;
             }
             break;
+        case EditorCameraAction::FocusSelection:
+            if(document.scene().contains(frame.cameraEntity)) {
+                cameraPilot_.useEditorCamera(document,settings_.camera);
+                document.select({frame.cameraEntity},frame.cameraEntity);
+                editor_.focusViewport(settings_.camera,document,assets,frame.viewport.height>0?frame.viewport.width/frame.viewport.height:1.f);
+            }
+            break;
         case EditorCameraAction::None:break;
         }
     }
@@ -583,6 +606,8 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     // Input still uses current-frame panel ownership. Its new pose becomes
     // visible next frame, keeping this image aligned with its overlays/picks.
     navigation.update(settings_.camera,sceneRegion,ImGui::GetIO().DeltaTime,false,cameraPilot_.piloting());
+    if(const auto clicked=navigation.consumeContextClick();clicked&&!play_.playing()&&!playControlsBlocked&&!sceneRegion.inputBlocked)
+        editor_.requestViewportContextMenu(*clicked,document,settings_.camera);
     cameraPilot_.apply(document,settings_.camera,navigation.active());
     for(auto iterator=pendingDrops_.begin();iterator!=pendingDrops_.end();) {
         if(iterator->documentEpoch!=documentEpoch_) { iterator=pendingDrops_.erase(iterator);continue; }

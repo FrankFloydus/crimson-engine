@@ -5,6 +5,7 @@
 #include "assets/NavigationAgentProfile.h"
 #include "scene/SceneExtraction.h"
 #include "runtime/TraceVisualization.h"
+#include "editor/PlayShortcuts.h"
 #include <optional>
 #include <span>
 #include <string>
@@ -22,6 +23,7 @@ struct GameViewFrame {
     uint32_t pixelWidth{},pixelHeight{};
     bool focused{},closed{},clicked{};
     int attributeDebugCycle{};
+    PlayAction playAction{PlayAction::None};
 };
 // A diagnostic actor box includes the upright capsule and owned model visuals,
 // excluding camera/light/particle markers and independently owned actors.
@@ -58,7 +60,7 @@ inline Aabb attributeDebugActorBounds(const Scene& scene,EntityId target,
 class GameView {
 public:
     GameViewFrame draw(SceneDocument&,Renderer&,bool& open,bool playing,bool focus=false,std::uint64_t textureAndProgramBytes=0,
-                       bool attributeDebug=false);
+                       bool attributeDebug=false,bool paused=false,bool playControlsBlocked=false);
     void setFrameTiming(FrameTiming timing) {frameTiming_=timing;newFrameTiming_=true;}
     void drawCaptureStatus(const profiling::CaptureStatus&) const;
     void drawRoute(const Camera&,std::span<const Vec3> route,

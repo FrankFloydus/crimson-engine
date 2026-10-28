@@ -30,6 +30,10 @@ bool belongsTo(SDL_WindowID eventId,SDL_WindowID ownerId) {
     // SDL window events carry an ID. Zero is reserved for windowless synthetic checks.
     return eventId == 0 || eventId == ownerId;
 }
+bool flyMovementKey(SDL_Scancode key) {
+    return key==SDL_SCANCODE_W || key==SDL_SCANCODE_A || key==SDL_SCANCODE_S || key==SDL_SCANCODE_D;
+}
+constexpr float ContextClickDragDistance=4;
 Vec3 sub(const Vec3& a,const Vec3& b) { return math::subtract(a,b); }
 bool contains(const ViewportRegion& region,float x,float y) { return region.width > 0 && region.height > 0 && std::isfinite(x) && std::isfinite(y) && x >= region.x && y >= region.y && x < region.x+region.width && y < region.y+region.height; }
 std::optional<Vec3> sphereAnchor(const Camera& camera,const ViewportRegion& region,float x,float y) {
@@ -73,7 +77,10 @@ void Navigation::handleEvent(const SDL_Event& event) {
     const auto sourceId = eventWindowId(event);
     // A minimized/unfocused application may skip drawing and update(). Release
     // the existing owner immediately rather than retaining native capture.
-    if(active() && belongsTo(sourceId,ownerWindowId_) && cancelsNavigation(event)) { cancel();return; }
+    if((active() || contextClick_) && belongsTo(sourceId,ownerWindowId_) && cancelsNavigation(event)) { cancel();return; }
+    if(contextClick_ && belongsTo(sourceId,ownerWindowId_) &&
+       (event.type==SDL_EVENT_MOUSE_BUTTON_DOWN || event.type==SDL_EVENT_MOUSE_WHEEL ||
+        (event.type==SDL_EVENT_KEY_DOWN && flyMovementKey(event.key.scancode))))contextClick_.reset();
     if (desktopCoordinates_ && sourceId && (event.type == SDL_EVENT_MOUSE_MOTION ||
         event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP)) {
         auto* sourceWindow = SDL_GetWindowFromID(sourceId);
@@ -101,7 +108,9 @@ void Navigation::releaseCapture() {
 }
 void Navigation::cancel() {
     releaseCapture(); mode_ = Mode::None; anchorPending_ = false; keys_.fill(false); events_.clear();
+    contextClickCandidate_=false;contextClickMotion_=0;contextClick_.reset();
 }
+std::optional<Vec2> Navigation::consumeContextClick() { return std::exchange(contextClick_,std::nullopt); }
 void Navigation::motion(Camera& camera,const ViewportRegion& region,float x,float y,bool preserveRoll) {
     const float dx = x-lastX_, dy = y-lastY_; lastX_ = x; lastY_ = y;
     if (!std::isfinite(dx) || !std::isfinite(dy) || (std::abs(dx) < 1e-6f && std::abs(dy) < 1e-6f)) return;
@@ -121,7 +130,7 @@ void Navigation::update(Camera& camera,const ViewportRegion& region,float dt,boo
     const auto owner = region.windowId ? region.windowId : baseWindowId_;
     if (owner != ownerWindowId_) { cancel(); ownerWindowId_ = owner; }
     auto* window = owner ? SDL_GetWindowFromID(owner) : nullptr;
-    if ((owner && !window) || region.width <= 0 || region.height <= 0 || (active() && region.inputBlocked)) { cancel(); return; }
+    if ((owner && !window) || region.width <= 0 || region.height <= 0 || ((active() || contextClick_) && region.inputBlocked)) { cancel(); return; }
     // Matching cancellation takes precedence over motion already queued in this frame.
     for (const auto& queuedEvent : queued)
         if (belongsTo(eventWindowId(queuedEvent.value),owner) && cancelsNavigation(queuedEvent.value)) { cancel(); return; }
@@ -132,7 +141,10 @@ void Navigation::update(Camera& camera,const ViewportRegion& region,float dt,boo
         if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) {
             const auto key = event.key.scancode;
             if (key >= 0 && key < SDL_SCANCODE_COUNT) keys_[static_cast<std::size_t>(key)] = event.type == SDL_EVENT_KEY_DOWN;
+            if(event.type==SDL_EVENT_KEY_DOWN && flyMovementKey(key)){contextClickCandidate_=false;contextClick_.reset();}
         } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+            contextClick_.reset();
+            if(active())contextClickCandidate_=false;
             if (flying() && event.button.button == SDL_BUTTON_MIDDLE) { flySpeed_ = 25; continue; }
             if (active() || region.inputBlocked || !region.hovered || !contains(region,event.button.x,event.button.y)) continue;
             if (event.button.button != SDL_BUTTON_MIDDLE && event.button.button != SDL_BUTTON_RIGHT) continue;
@@ -143,8 +155,11 @@ void Navigation::update(Camera& camera,const ViewportRegion& region,float dt,boo
             anchorPending_ = false;
             if (flying()) {
                 flyStarted = true;
+                contextClickMotion_=0;
+                contextClickCandidate_=!keys_[SDL_SCANCODE_W] && !keys_[SDL_SCANCODE_A] &&
+                    !keys_[SDL_SCANCODE_S] && !keys_[SDL_SCANCODE_D];
                 if (window) {
-                    if (!SDL_SetWindowRelativeMouseMode(window,true)) { mode_ = Mode::None; captureWindowId_ = 0; continue; }
+                    if (!SDL_SetWindowRelativeMouseMode(window,true)) { mode_ = Mode::None; captureWindowId_ = 0; contextClickCandidate_=false; continue; }
                     relativeActive_ = true;
                     float discardedX{},discardedY{}; SDL_GetRelativeMouseState(&discardedX,&discardedY);
                 }
@@ -155,15 +170,22 @@ void Navigation::update(Camera& camera,const ViewportRegion& region,float dt,boo
                 if (window) captureActive_ = SDL_CaptureMouse(true);
             }
         } else if (event.type == SDL_EVENT_MOUSE_MOTION) {
-            if (flying()) { if (!flyStarted) camera.flyLook(event.motion.xrel,event.motion.yrel,preserveRoll); }
+            if (flying()) {
+                contextClickMotion_+=std::hypot(event.motion.xrel,event.motion.yrel);
+                if(!std::isfinite(contextClickMotion_) || contextClickMotion_>ContextClickDragDistance)contextClickCandidate_=false;
+                if (!flyStarted) camera.flyLook(event.motion.xrel,event.motion.yrel,preserveRoll);
+            }
             else if (active()) motion(camera,region,event.motion.x,event.motion.y,preserveRoll);
         } else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
             const bool owns = flying() ? event.button.button == SDL_BUTTON_RIGHT : active() && event.button.button == SDL_BUTTON_MIDDLE;
             if (owns) {
+                if(flying() && contextClickCandidate_)contextClick_=Vec2{restoreX_,restoreY_};
+                contextClickCandidate_=false;
                 if (!flying()) motion(camera,region,event.button.x,event.button.y,preserveRoll);
                 releaseCapture(); mode_ = Mode::None; anchorPending_ = false;
             }
         } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+            contextClickCandidate_=false;contextClick_.reset();
             const float steps = event.wheel.y * (event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1 : 1);
             if (!std::isfinite(steps)) continue;
             if (flying()) {

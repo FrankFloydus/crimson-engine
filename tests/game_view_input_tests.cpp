@@ -157,6 +157,7 @@ void interactiveImageRetainsFpsControl(bool docked) {
     ImGui::GetIO().ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
     ui.mouse(ui.imagePoint,true);
     require(ui.input.ownsKeyboard(),"Game image did not acquire gameplay input on mouse down.");
+    require(!ui.input.consumeTrace(),"Acquiring the Game image fired an unintended trace.");
     ui.key(SDL_SCANCODE_W,true);ui.key(SDL_SCANCODE_D,true);ui.tick();ui.tick();
     require(ui.input.ownsKeyboard() && ui.input.movement()==Vec2{1,1},"Holding the Game image canceled WASD ownership.");
     ui.mouse(ui.imagePoint,false);ui.tick();
@@ -171,7 +172,7 @@ void interactiveImageRetainsFpsControl(bool docked) {
     require(!ui.input.ownsKeyboard() && ui.input.movement()==Vec2{},"Escape did not release Game and held movement.");
     ui.relativeMotion(30,10);require(ui.input.consumeLookDelta()==Vec2{},"Released Game retained mouse look.");
     ui.mouse(ui.imagePoint,true);ui.tick();ui.mouse(ui.imagePoint,false);
-    require(ui.input.ownsKeyboard() && ui.input.movement()==Vec2{},"Game reacquisition restored a stale held key.");
+    require(ui.input.ownsKeyboard() && ui.input.movement()==Vec2{}&&!ui.input.consumeTrace(),"Game reacquisition restored an action or fired a trace.");
     ui.key(SDL_SCANCODE_S,true);ui.mouse(ui.cameraPoint,true);ui.mouse(ui.cameraPoint,false);
     require(!ui.input.ownsKeyboard() && ui.input.movement()==Vec2{} && !ui.input.consumeJump(),"Camera picker failed to release FPS actions.");
     require(ui.region.inputBlocked,"An open Camera picker did not block gameplay input.");
@@ -186,11 +187,27 @@ void playAcquiresWithoutClick(bool docked) {
     ui.key(SDL_SCANCODE_W,true);ui.relativeMotion(7,4);
     require(ui.input.movement()==Vec2{0,1} && ui.input.consumeLookDelta()==Vec2{7,4},"Automatic Play acquisition required another click for FPS actions.");
 }
+void ownedImageClicksTraceOnce(bool docked) {
+    GameUi ui(true,docked);ui.mouse(ui.imagePoint,true);ui.tick();
+    require(!ui.input.consumeTrace(),"Initial image acquisition fired the LMB action.");
+    ui.mouse(ui.imagePoint,false);ui.mouse(ui.imagePoint,true);
+    require(ui.input.consumeTrace()&&!ui.input.consumeTrace(),"An owned Game-image press did not produce one trace.");
+    ui.tick();ui.mouse(ui.imagePoint,true);ui.tick();
+    require(!ui.input.consumeTrace(),"Held or duplicate Game-image presses repeated the trace.");
+    ui.mouse(ui.imagePoint,false);ui.mouse(ui.imagePoint,false);
+    require(!ui.input.consumeTrace(),"A Game-image release fired the trace action.");
+    ui.mouse(ui.imagePoint,true);ui.key(SDL_SCANCODE_ESCAPE,true);
+    require(!ui.input.ownsKeyboard()&&!ui.input.consumeTrace(),"Escape retained an image-click trace through cancellation.");
+    ui.mouse(ui.imagePoint,false);ui.mouse(ui.imagePoint,true);ui.mouse(ui.imagePoint,false);
+    require(ui.input.ownsKeyboard()&&!ui.input.consumeTrace(),"Reacquiring Game after Escape also fired a trace.");
+    ui.tick(true);ui.mouse(ui.imagePoint,true);
+    require(ui.input.consumeTrace(),"An owned click after automatic Game focus failed to trace.");
+}
 void imageClickReleasesText(bool docked) {
     GameUi ui(true,docked);ui.focusText();
     require(!ui.input.ownsKeyboard(),"Text editor did not block gameplay input.");
     ui.mouse(ui.imagePoint,true);ui.tick();ui.mouse(ui.imagePoint,false);
-    require(ui.input.ownsKeyboard() && ui.input.movement()==Vec2{} && !ui.input.consumeJump(),"Text-to-Game handoff failed to acquire or fabricated FPS actions.");
+    require(ui.input.ownsKeyboard() && ui.input.movement()==Vec2{} && !ui.input.consumeJump()&&!ui.input.consumeTrace(),"Text-to-Game handoff failed to acquire or fabricated FPS actions.");
     ui.key(SDL_SCANCODE_W,true);ui.relativeMotion(9,-3);
     require(ui.input.movement()==Vec2{0,1} && ui.input.consumeLookDelta()==Vec2{9,-3},"Stale text-input capture prevented FPS actions after reacquisition.");
     ui.focusText();
@@ -249,6 +266,7 @@ int main() {
     try {
         for(const bool docked:{false,true}) {
             passiveImageLosesControl(docked);interactiveImageRetainsFpsControl(docked);playAcquiresWithoutClick(docked);imageClickReleasesText(docked);
+            ownedImageClicksTraceOnce(docked);
             imageAcknowledgesAcquisitionOnly(docked);
             imageAcknowledgementRespectsNativeCancellation(docked);trickledShortClickAcquiresOnce(docked);
             attributeDebugOwnsTabOnlyInGame(docked);

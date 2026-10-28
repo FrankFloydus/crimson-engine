@@ -663,6 +663,77 @@ void navigationFlyWheelScaling() {
     region.inputBlocked=true;nav.handleEvent(wheel(1));nav.update(camera,region,.1f);
     require(!nav.active(),"Blocked viewport retained fly wheel ownership.");near(nav.flySpeed(),31.25);
 }
+void navigationContextClicks() {
+    using namespace crimson;
+    Camera camera;Navigation nav(nullptr);auto region=viewport();
+    const Vec2 point{213,147};
+    const auto press=[&] {
+        nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_RIGHT,point[0],point[1]));
+        nav.update(camera,region,0,false);
+        require(nav.flying(),"RMB context acquisition delayed ordinary fly ownership.");
+        require(!nav.consumeContextClick(),"RMB press opened a context menu before release.");
+    };
+    const auto release=[&] {
+        nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_UP,SDL_BUTTON_RIGHT,point[0],point[1]));
+        nav.update(camera,region,0,false);
+        require(!nav.active(),"RMB context release retained relative navigation.");
+    };
+    press();release();
+    require(nav.consumeContextClick()==point,"Stationary RMB did not retain its clicked image point.");
+    require(!nav.consumeContextClick(),"An RMB context click replayed its consumed edge.");
+    press();nav.handleEvent(motion(400,300,1,-1));nav.update(camera,region,0,false);release();
+    require(nav.consumeContextClick()==point,"Small physical click drift lost the original point to relative cursor coordinates.");
+    for(const auto& event:{motion(400,300,8,0),wheel(1),
+            key(SDL_EVENT_KEY_DOWN,SDL_SCANCODE_W),button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_MIDDLE,point[0],point[1]),
+            button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_LEFT,point[0],point[1])}) {
+        nav.cancel();press();nav.handleEvent(event);nav.update(camera,region,0,false);release();
+        require(!nav.consumeContextClick(),"A navigation gesture also opened the RMB context menu.");
+    }
+    nav.cancel();nav.handleEvent(key(SDL_EVENT_KEY_DOWN,SDL_SCANCODE_D));nav.update(camera,region,0,false);
+    press();release();require(!nav.consumeContextClick(),"A movement key held before RMB was treated as a context click.");
+    nav.cancel();
+    nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_RIGHT,point[0],point[1]));
+    nav.handleEvent(motion(400,300,30,0));
+    nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_UP,SDL_BUTTON_RIGHT,point[0],point[1]));nav.update(camera,region,0,false);
+    require(!nav.consumeContextClick(),"A drag completed within the acquisition frame opened the RMB menu.");
+    nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_RIGHT,point[0],point[1]));
+    nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_UP,SDL_BUTTON_RIGHT,point[0],point[1]));nav.update(camera,region,0,false);
+    require(nav.consumeContextClick()==point,"A same-frame RMB click lost its point.");
+    for(const auto& next:{wheel(1),key(SDL_EVENT_KEY_DOWN,SDL_SCANCODE_W)}) {
+        nav.cancel();
+        nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_RIGHT,point[0],point[1]));
+        nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_UP,SDL_BUTTON_RIGHT,point[0],point[1]));
+        nav.handleEvent(next);nav.update(camera,region,0,false);
+        require(!nav.consumeContextClick(),"Later same-frame navigation retained an obsolete context click.");
+    }
+    nav.cancel();
+    constexpr SDL_WindowID foreign=17;
+    press();nav.handleEvent(motion(400,300,30,0,foreign));nav.handleEvent(wheel(1,foreign));
+    nav.handleEvent(key(SDL_EVENT_KEY_DOWN,SDL_SCANCODE_W,foreign));
+    nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_UP,SDL_BUTTON_RIGHT,point[0],point[1],foreign));
+    nav.handleEvent(windowEvent(SDL_EVENT_WINDOW_FOCUS_LOST,foreign));nav.update(camera,region,0,false);
+    require(nav.flying(),"A foreign native window released the RMB context owner.");
+    release();require(nav.consumeContextClick()==point,"Foreign navigation input canceled an owned stationary click.");
+    for(const auto& cancellation:{windowEvent(SDL_EVENT_WINDOW_FOCUS_LOST,0),windowEvent(SDL_EVENT_WINDOW_HIDDEN,0),
+            windowEvent(SDL_EVENT_WINDOW_MINIMIZED,0),windowEvent(SDL_EVENT_WINDOW_CLOSE_REQUESTED,0),
+            windowEvent(SDL_EVENT_WINDOW_DESTROYED,0),key(SDL_EVENT_KEY_DOWN,SDL_SCANCODE_ESCAPE)}) {
+        press();nav.handleEvent(cancellation);nav.update(camera,region,0,false);release();
+        require(!nav.consumeContextClick(),"Canceled RMB navigation published a context click.");
+        press();release();nav.handleEvent(cancellation);
+        require(!nav.consumeContextClick(),"An interrupted owner retained its unconsumed context click.");
+    }
+    press();region.inputBlocked=true;nav.update(camera,region,0,false);region.inputBlocked=false;release();
+    require(!nav.consumeContextClick(),"Blocked RMB navigation published a context click.");
+    press();release();nav.setDesktopCoordinates(true);
+    require(!nav.consumeContextClick(),"A coordinate-space change retained an obsolete context point.");
+    nav.setDesktopCoordinates(false);
+    for(const bool blocked:{false,true}) {
+        region.inputBlocked=blocked;region.hovered=blocked;
+        nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_RIGHT,point[0],point[1]));
+        nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_UP,SDL_BUTTON_RIGHT,point[0],point[1]));nav.update(camera,region,0,false);
+        require(!nav.consumeContextClick(),"An occluded or blocked image opened the RMB menu.");
+    }
+}
 void navigationCancellationAndWheel() {
     for (const bool escape : {false,true}) {
         crimson::Camera camera; crimson::Navigation nav(nullptr); auto region=viewport(); nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_MIDDLE,10,10)); nav.update(camera,region,.01f); const auto before=camera;
@@ -871,6 +942,7 @@ int main() {
     run("navigation latched pan and same-frame pointer edges", navigationPanAndShortEdges);
     run("navigation fly speed, relative start and keyboard gating", navigationFlySpeedAndMovement);
     run("navigation multiplicative fly wheel, fractional input and captured ownership", navigationFlyWheelScaling);
+    run("navigation RMB context clicks retain the clicked point and reject fly/canceled gestures", navigationContextClicks);
     run("navigation cancellation precedes motion and wheel is viewport-scoped", navigationCancellationAndWheel);
     run("navigation ignores foreign native window input and cancellation", navigationForeignWindowEvents);
     run("navigation translates desktop coordinates and releases destroyed window ownership", navigationDesktopCoordinatesAndWindowLifetime);

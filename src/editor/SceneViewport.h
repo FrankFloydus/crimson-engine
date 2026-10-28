@@ -8,6 +8,7 @@
 #include "NavigationVolumeGizmo.h"
 #include "ViewportTransformGesture.h"
 #include "ViewportRotationSnap.h"
+#include "ViewportContextMenu.h"
 #include "runtime/TraceVisualization.h"
 #include "tools/VertexPaintTool.h"
 #include <span>
@@ -45,7 +46,18 @@ public:
     void setAgentProfileQuery(NavigationAgentProfileQuery query) { agentProfiles_=std::move(query); }
     void setDecalPatchQuery(std::function<std::shared_ptr<const DecalPatchData>(EntityId)> query) { decalPatches_=std::move(query); }
     void setDecalFrameQuery(std::function<std::optional<Mat4>(EntityId)> query) { decalFrames_=std::move(query); }
+    void requestContextMenu(Vec2 screen,const SceneDocument& document,const Camera& camera,bool menu=true) {
+        contextClick_=ContextClick{screen,camera,document.documentGeneration(),document.scene().generation(),document.scene().revision(),menu};
+    }
 private:
+    struct ContextClick {Vec2 screen;Camera camera;std::uint64_t document{},generation{},revision{};bool menu{};};
+    std::optional<ContextClick> contextClick_;
+    ViewportContextMenu contextMenu_;
+    Camera contextCamera_;
+    std::uint64_t contextPickSerial_{};
+    bool contextAutoStart_{};
+    EntityId contextEntity_{},contextMarker_{},contextCollision_{};
+    Vec2 contextPointer_{};
     int operation_{1 | 2 | 4}; // ImGuizmo::TRANSLATE, kept out of public headers.
     float rotationSnapDegrees_{DefaultRotationSnapDegrees};
     bool pickCtrl_{false}, pickShift_{false}, waitForRelease_{false};

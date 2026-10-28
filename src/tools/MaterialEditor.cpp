@@ -792,11 +792,13 @@ void MaterialEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManage
                         graphTextureFilter.Draw("Search materials");
                         for(const auto& entry:assets.catalog())if(entry.kind==AssetKind::Material&&graphAssets.validMaterial(entry.id)) {
                             const auto name=assets.displayName(entry.id);if(!graphTextureFilter.PassFilter(name.c_str()))continue;
+                            ImGui::PushID(entry.id.c_str());
                             if(ImGui::Selectable(name.c_str(),entry.id==textureNode->material.id)) {
                                 const auto id=entry.id;finishInteraction();
                                 if(!document_.edit("Assign blend material",[&](auto& asset){if(auto* n=findMaterialNode(asset.graph,texturePickerNode_))n->material.id=id;}))message_=document_.status();
                                 ImGui::CloseCurrentPopup();
                             }
+                            ImGui::PopID();
                         }
                     } else {
                     const auto selectedImage=textureNode->texture.image.id;

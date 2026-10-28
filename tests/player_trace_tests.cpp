@@ -4,6 +4,7 @@
 #include "scene/SceneExtraction.h"
 #include "runtime/AnimationPlayback.h"
 #include "ragdoll_fixture.h"
+#include <SDL3/SDL_mouse.h>
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -13,10 +14,10 @@ namespace {
 using namespace crimson;
 void require(bool condition,const char* message){if(!condition)throw std::runtime_error(message);}
 void near(Vec3 value,Vec3 expected,const char* message){require(math::length(value-expected)<1e-3f,message);}
-void key(GameInput& input,bool down=true,bool repeat=false) {
-    SDL_Event event{};event.type=down?SDL_EVENT_KEY_DOWN:SDL_EVENT_KEY_UP;
-    event.key.windowID=9;event.key.scancode=SDL_SCANCODE_F;event.key.repeat=repeat;
-    require(input.handleEvent(event),"Owned F was not consumed.");
+void click(GameInput& input,bool down=true) {
+    SDL_Event event{};event.type=down?SDL_EVENT_MOUSE_BUTTON_DOWN:SDL_EVENT_MOUSE_BUTTON_UP;
+    event.button.windowID=9;event.button.button=SDL_BUTTON_LEFT;event.button.x=400;event.button.y=300;
+    require(input.handleEvent(event),"Game left-click was not consumed.");
 }
 void fixture(SceneDocument& document) {
     require(document.edit("Trace fixture",[](auto& records,auto& properties){
@@ -43,11 +44,14 @@ void playerCameraTraceAndLifetime() {
     const auto root=std::filesystem::temp_directory_path()/"crimson-player-traces";
     SceneDocument authored(root);fixture(authored);const auto original=authored.scene().records();
     const auto history=authored.history().size();PlaySession play(root);require(play.start(authored),"Could not start trace fixture.");
-    GameInput input;input.setViewport({0,0,800,600,true,false,9},true,false);input.acquire();
+    GameInput input;input.setViewport({0,0,800,600,true,false,9},true,false);
+    click(input);play.advance(0,input,Camera{});
+    require(input.ownsKeyboard()&&play.traceVisualization().records().empty(),"The Game acquisition click also fired a trace.");
+    click(input,false);
     play.advance(0,input,Camera{});const auto camera=resolveGameCamera(play.presentationScene());require(camera.has_value(),"Missing Player camera.");
-    key(input);play.advance(0,input,Camera{});
+    click(input);play.advance(0,input,Camera{});
     require(play.tickCount()==0,"The test trace required a physics tick.");
-    auto records=play.traceVisualization().records();require(records.size()==1,"F did not record exactly one trace.");
+    auto records=play.traceVisualization().records();require(records.size()==1,"Left-click did not record exactly one trace.");
     require(records[0].segments.size()==2 && records[0].contacts.size()==1,"Hit did not split the line or mark its contact.");
     const auto& clear=records[0].segments[0];const auto& blocked=records[0].segments[1];
     require(!clear.afterHit && blocked.afterHit,"Trace colors changed before the impact.");
@@ -56,8 +60,8 @@ void playerCameraTraceAndLifetime() {
     near(blocked.start,clear.end,"Green and red segments did not meet at the hit.");
     near(blocked.end,camera->position+camera->forward()*10,"Trace did not retain the full configured length.");
     require(!play.document().dirty() && play.document().history().size()==0,"Trace visualization changed runtime scene/history.");
-    key(input,true,true);play.advance(0,input,Camera{});
-    require(play.traceVisualization().records().size()==1,"F key repeat generated another trace.");
+    click(input);play.advance(0,input,Camera{});
+    require(play.traceVisualization().records().size()==1,"Holding the left button generated another trace.");
     // Expiration advances on render frames, independently of fixed simulation.
     for(int i=0;i<49;++i)play.advance(.01,input,Camera{});
     require(play.traceVisualization().records().size()==1,"Default duration expired before half a second.");
@@ -66,7 +70,7 @@ void playerCameraTraceAndLifetime() {
     require(play.document().edit("Select only Character layers",[](auto& values,auto&){
         for(auto& value:values)if(value.id==2)value.playerInput->traceTest.collisionMask=CharacterCollisionLayer;
     }),"Could not change trace mask.");
-    key(input,false);key(input);play.advance(0,input,Camera{});
+    click(input,false);click(input);play.advance(0,input,Camera{});
     records=play.traceVisualization().records();require(records.size()==1&&records[0].segments.size()==2,"The Character-only mask failed to detect another actor.");
     require(records[0].segments[0].end[2]<-7,"A trace mask selected an excluded target.");
     play.stop();require(play.traceVisualization().records().empty(),"Stop retained trace geometry.");
@@ -79,7 +83,7 @@ void currentLookMaskAndOptionalDrawing() {
     SceneDocument authored(root);fixture(authored);PlaySession play(root);require(play.start(authored),"Could not start look fixture.");
     GameInput input;input.setViewport({0,0,800,600,true,false,9},true,false);input.acquire();play.advance(0,input,Camera{});
     SDL_Event motion{};motion.type=SDL_EVENT_MOUSE_MOTION;motion.motion.windowID=9;motion.motion.xrel=900;
-    require(input.handleEvent(motion),"Mouse look was rejected.");key(input);play.advance(0,input,Camera{});
+    require(input.handleEvent(motion),"Mouse look was rejected.");click(input);play.advance(0,input,Camera{});
     auto records=play.traceVisualization().records();require(records.size()==1 && records[0].contacts.size()==1,"Same-frame camera look missed the side target.");
     require(records[0].segments[0].end[0]>3.99f && std::abs(records[0].segments[0].end[2])<1e-3,
         "Trace used last frame's view instead of current mouse look.");
@@ -91,10 +95,10 @@ void currentLookMaskAndOptionalDrawing() {
     require(play.document().edit("Hide test traces",[](auto& values,auto&){
         for(auto& value:values)if(value.id==2)value.playerInput->traceTest.duration=0;
     }),"Could not change trace duration.");
-    key(input,false);key(input);play.advance(0,input,Camera{});
+    click(input,false);click(input);play.advance(0,input,Camera{});
     require(play.traceVisualization().records().size()==count,"Duration zero recorded visible geometry.");
-    key(input,false);key(input);input.cancel();play.advance(0,input,Camera{});
-    require(play.traceVisualization().records().size()==count,"A canceled queued F press fired a trace.");
+    click(input,false);click(input);input.cancel();play.advance(0,input,Camera{});
+    require(play.traceVisualization().records().size()==count,"A canceled queued left-click fired a trace.");
     play.advance(0,input,Camera{},false);require(play.traceVisualization().records().empty(),"Suspension retained temporary traces.");
     play.stop();require(!play.trace(query).valid,"An inactive Play session queried a destroyed physics world.");
 }
@@ -126,18 +130,21 @@ struct RagdollTraceRig {
             [this](const auto& id)->std::shared_ptr<const AnimationAsset>{return animation&&id==animation->id?animation:nullptr;});
     }
 };
-void ragdollFixture(SceneDocument& document,const RagdollTraceRig& rig,float impulse,bool side=false) {
+void ragdollFixture(SceneDocument& document,const RagdollTraceRig& rig,float impulse,bool side=false,float upwardImpulse=0) {
     fixture(document);
     require(document.edit("Inactive trace ragdoll",[&](auto& records,auto&){
         std::erase_if(records,[](const auto& record){return record.id==4||record.id==6||record.id==7;});
-        for(auto& record:records)if(record.id==2)record.playerInput->traceTest.hitImpulse=impulse;
+        for(auto& record:records)if(record.id==2) {
+            record.playerInput->traceTest.hitImpulse=impulse;
+            record.playerInput->traceTest.upwardImpulse=upwardImpulse;
+        }
         EntityRecord visual;visual.id=4;visual.name="Inactive enemy";visual.model=AssetRef<ModelAsset>{rig.model->id};
         visual.local=math::translation(side?Vec3{5,0,0}:Vec3{0,0,-5});visual.modelRagdoll={AssetRef<RagdollAsset>{rig.definition->id},false};
         if(rig.animation)visual.modelAnimation.asset.id=rig.animation->id;records.push_back(visual);
     }),"Could not author an inactive ragdoll trace fixture.");
 }
 void ownInput(GameInput& input){input.setViewport({0,0,800,600,true,false,9},true,false);input.acquire();}
-void fire(PlaySession& play,GameInput& input){key(input,false);key(input);play.advance(0,input,Camera{});}
+void fire(PlaySession& play,GameInput& input){click(input,false);click(input);play.advance(0,input,Camera{});}
 void tick(PlaySession& play,int count){for(int i=0;i<count;++i)play.advance(PlaySession::FixedStep,Vec2{},Camera{});}
 ExtractedModel ragdollPresentation(PlaySession& play) {
     auto scene=extractScene(play.presentationScene());play.prepareRagdollPresentation(scene);
@@ -148,16 +155,18 @@ Vec3 worldBone(const ExtractedModel& model,std::size_t node) {
     require(bool(model.physicsPose),"The activated model has no physical presentation pose.");
     const auto& bone=model.physicsPose->worldTransforms.at(node);return math::transformPoint(model.world,{bone[12],bone[13],bone[14]});
 }
-Vec3 impulseResponse(float impulse,int repeats=1,bool side=false) {
-    ragdoll_test::Project project;RagdollTraceRig rig;SceneDocument authored(project.root);ragdollFixture(authored,rig,impulse,side);
+Vec3 impulseResponse(float impulse,int repeats=1,bool side=false,float upwardImpulse=0) {
+    ragdoll_test::Project project;RagdollTraceRig rig;SceneDocument authored(project.root);ragdollFixture(authored,rig,impulse,side,upwardImpulse);
     const auto original=authored.scene().records();const auto history=authored.history().size();
     PlaySession play(project.root);rig.configure(play);require(play.start(authored),"Could not start ragdoll trace fixture.");
     GameInput input;ownInput(input);play.advance(0,input,Camera{});require(!play.ragdollActive(4),"Start Simulated=false activated before a trace.");
     if(side){SDL_Event motion{};motion.type=SDL_EVENT_MOUSE_MOTION;motion.motion.windowID=9;motion.motion.xrel=900;require(input.handleEvent(motion),"Side-look input was rejected.");}
     for(int i=0;i<repeats;++i)fire(play,input);
-    require(play.ragdollActive(4),"F did not activate an assigned inactive ragdoll.");
+    require(play.ragdollActive(4),"Left-click did not activate an assigned inactive ragdoll.");
     require(play.tickCount()==0,"Ragdoll hit activation required a physics tick.");
     const auto visuals=play.traceVisualization().records();require(visuals.size()==std::size_t(repeats)&&visuals.back().contacts.size()==1,"A ragdoll hit did not create its contact visualization.");
+    click(input);play.advance(0,input,Camera{});
+    require(play.traceVisualization().records().size()==std::size_t(repeats),"Holding the left button applied another ragdoll impulse.");
     const auto camera=resolveGameCamera(play.presentationScene());require(camera.has_value(),"Ragdoll test lost its eye camera.");
     PhysicsTrace query;query.ray={camera->position,camera->forward()};query.maxDistance=10;
     const std::array<EntityId,1> ignored{2};const auto hit=play.trace(query,PhysicsQueryFilter{AllCollisionLayers,ignored});
@@ -165,8 +174,9 @@ Vec3 impulseResponse(float impulse,int repeats=1,bool side=false) {
     const auto initial=ragdollPresentation(play);const auto hitStart=worldBone(initial,2),otherStart=worldBone(initial,1);
     tick(play,12);const auto final=ragdollPresentation(play);const auto displacement=worldBone(final,2)-hitStart;
     near(worldBone(final,1),otherStart,"The trace kicked another physical body instead of just the selected bone.");
-    if(impulse==0)near(displacement,{},"A zero hit impulse imparted motion.");
-    else require(math::dot(displacement,camera->forward())>.1f,"The hit impulse did not move the selected body along the trace ray.");
+    if(impulse==0&&upwardImpulse==0)near(displacement,{},"Zero hit and upward impulses imparted motion.");
+    if(impulse>0)require(math::dot(displacement,camera->forward())>.1f,"The hit impulse did not move the selected body along the trace ray.");
+    if(upwardImpulse>0)require(displacement[1]>.1f,"The upward impulse did not launch the selected body along world Y.");
     require(!play.document().dirty()&&play.document().history().size()==0,"A trace impulse changed runtime scene/history.");
     require(play.resetRagdoll(4)&&!play.ragdollActive(4),"Reset retained the hit ragdoll.");
     play.advance(0,input,Camera{});require(!ragdollPresentation(play).physicsPose,"Reset retained a simulated render pose.");
@@ -180,9 +190,21 @@ void ragdollImpulseMagnitudeDirectionAndRepeat() {
     const auto weak=impulseResponse(4),strong=impulseResponse(12),repeat=impulseResponse(4,2),side=impulseResponse(4,1,true);
     require(weak[2]<-.1f&&std::abs(weak[0])<.001f,"Forward trace impulse used an unrelated direction.");
     require(strong[2]<weak[2]*2.5f,"Configured impulse magnitude did not increase the selected body's response.");
-    require(repeat[2]<weak[2]*1.7f,"A repeat F hit did not apply another impulse to the active rig.");
+    require(repeat[2]<weak[2]*1.7f,"A repeat left-click did not apply another impulse to the active rig.");
     require(side[0]>.1f&&std::abs(side[2])<.001f,"The impulse ignored same-frame Player look direction.");
     impulseResponse(0);
+}
+void ragdollUpwardImpulseMagnitudeDirectionAndRepeat() {
+    const auto upward=impulseResponse(0,1,false,6),stronger=impulseResponse(0,1,false,18);
+    const auto repeated=impulseResponse(0,2,false,6),combined=impulseResponse(4,1,false,6);
+    const auto side=impulseResponse(4,1,true,6),forward=impulseResponse(4);
+    require(upward[1]>.4f&&std::abs(upward[0])<.001f&&std::abs(upward[2])<.001f,
+        "Upward-only impulse failed to launch vertically when Hit Impulse was zero.");
+    require(stronger[1]>upward[1]*2.5f,"Configured upward impulse did not increase the struck body's launch.");
+    require(repeated[1]>upward[1]*1.7f,"A later click did not add upward impulse to the already active ragdoll.");
+    near(combined,{forward[0],upward[1],forward[2]},"Forward and upward trace impulses did not combine independently.");
+    near(side,{static_cast<float>(math::length(Vec3{forward[0],0,forward[2]})),upward[1],0},
+        "Turning the Player rotated the upward impulse away from world Y.");
 }
 void ragdollCurrentPoseHit() {
     ragdoll_test::Project project;RagdollTraceRig rig(true);SceneDocument authored(project.root);ragdollFixture(authored,rig,0);
@@ -193,7 +215,7 @@ void ragdollCurrentPoseHit() {
     const auto ticks=play.tickCount();fire(play,input);require(play.ragdollActive(4)&&play.tickCount()==ticks,"Current-pose hit did not activate immediately between physics ticks.");
     const auto after=ragdollPresentation(play);require(bool(after.physicsPose),"Current-pose activation published no physical pose.");
     for(std::size_t node=0;node<expected.worldTransforms.size();++node)for(std::size_t element=0;element<16;++element)
-        require(std::abs(after.physicsPose->worldTransforms[node][element]-expected.worldTransforms[node][element])<.002f,"F activation snapped the hit rig from its current animation to bind pose.");
+        require(std::abs(after.physicsPose->worldTransforms[node][element]-expected.worldTransforms[node][element])<.002f,"Left-click activation snapped the hit rig from its current animation to bind pose.");
     const auto contact=play.traceVisualization().records().back();require(contact.contacts.size()==1&&std::abs(contact.segments[0].end[0])<.001f,"The current animation body's ray contact was missed.");
 }
 void ragdollOcclusionMaskAndSelfIgnore() {
@@ -238,7 +260,7 @@ void ragdollReplacesEnemyCapsuleWithFallback() {
         fire(play,input);const auto& visual=play.traceVisualization().records().back();
         if(scenario==0) {
             require(play.ragdollActive(4)&&play.tickCount()==0,"A coarse enemy capsule blocked immediate child-ragdoll activation.");
-            require(visual.contacts.size()==1&&std::abs(visual.segments[0].end[2]+4.7f)<.001f,"F used the enemy capsule contact instead of the posed child bone.");
+            require(visual.contacts.size()==1&&std::abs(visual.segments[0].end[2]+4.7f)<.001f,"Left-click used the enemy capsule contact instead of the posed child bone.");
             const auto active=play.trace(query,PhysicsQueryFilter{EnemyCollisionLayer});
             require(active.hits.size()==1&&active.hits[0].entity==4&&active.hits[0].owner==20&&active.hits[0].ragdollBodyIndex==1,
                 "The child ragdoll did not retain its Enemy owner, query mask or exact hit-body index.");
@@ -250,5 +272,5 @@ void ragdollReplacesEnemyCapsuleWithFallback() {
     }
 }
 }
-int main(){try{playerCameraTraceAndLifetime();currentLookMaskAndOptionalDrawing();ragdollImpulseMagnitudeDirectionAndRepeat();ragdollCurrentPoseHit();ragdollOcclusionMaskAndSelfIgnore();ragdollReplacesEnemyCapsuleWithFallback();std::cout<<"Player camera traces, posed ragdoll hit impulses, occlusion and isolation checks passed.\n";return 0;}
+int main(){try{playerCameraTraceAndLifetime();currentLookMaskAndOptionalDrawing();ragdollImpulseMagnitudeDirectionAndRepeat();ragdollUpwardImpulseMagnitudeDirectionAndRepeat();ragdollCurrentPoseHit();ragdollOcclusionMaskAndSelfIgnore();ragdollReplacesEnemyCapsuleWithFallback();std::cout<<"Player left-click camera traces, forward/upward ragdoll impulses, occlusion and isolation checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

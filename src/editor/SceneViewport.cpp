@@ -1,6 +1,7 @@
 #include "SceneViewport.h"
 #include "DecalAuthoring.h"
 #include "tools/RenderDebugControls.h"
+#include "tools/ViewportContextActions.h"
 #include "ViewportAssetDrop.h"
 #include "ViewportSelection.h"
 #include "ViewportSelectionUi.h"
@@ -18,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <utility>
 
 namespace crimson {
 namespace {
@@ -129,6 +131,8 @@ void SceneViewport::select(SceneDocument& document, EntityId id, bool toggle, bo
     if(selectViewportHit(document,id,toggle,append))++serial_;
 }
 void SceneViewport::cancel(SceneDocument& document, Renderer& renderer) {
+    contextClick_.reset();contextMenu_.cancel();contextAutoStart_=false;
+    contextEntity_=contextMarker_=contextCollision_=NoEntity;
     waitForRelease_ = waitForRelease_ || transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || vertexPaint_.active();
     vertexPaint_.cancel(document,renderer);
     transformDrag_.cancel(document);
@@ -219,7 +223,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
     const auto cameraView = camera.viewMatrix();
     const bool changedContext=previousSelection_ != document.selection().ids || previousView_ != cameraView ||
         (!transformDrag_.active() && !colliderDrag_.active() && !volumeDrag_.active() && selectionGeneration_ != document.scene().generation());
-    if (changedContext || ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    if (changedContext || (ImGui::IsMouseClicked(ImGuiMouseButton_Left)&&!contextMenu_.active())) {
         // A new click supersedes the prior asynchronous intent before its
         // readback can clear selection or let a newly appeared gizmo claim it.
         // Paint owns its own frozen-view surface request. A normal selection
@@ -274,6 +278,93 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             const auto view = camera.viewMatrix();
             // ImGuizmo expects homogeneous clip depth. Renderer uses its backend convention.
             const auto projection = camera.projectionMatrix(size.x/size.y,ClipDepth::NegativeOneToOne);
+            // A read-only authored camera suppresses Navigation's relative fly
+            // owner, but still exposes the ordinary Edit context menu.
+            if(!allowCameraNavigation&&imageHovered&&!blockKeys&&ImGui::IsMouseReleased(ImGuiMouseButton_Right)&&
+                ImGui::GetIO().MouseDragMaxDistanceSqr[ImGuiMouseButton_Right]<=16.f) {
+                const auto down=ImGui::GetIO().MouseClickedPos[ImGuiMouseButton_Right];
+                requestContextMenu({down.x,down.y},document,camera);
+            }
+            const ViewportContextMenu::Stamp contextStamp{document.documentGeneration(),document.scene().generation(),document.scene().revision(),view,projection,{size.x,size.y}};
+            const bool contextBlocked=document.transient() || keyboardBlocked || navigationActive || cameraGestureActive ||
+                document.transactionActive() || interacting() || ImGui::GetIO().AppFocusLost || ImGui::GetDragDropPayload()!=nullptr;
+            if(contextMenu_.active()&&(!contextMenu_.matches(contextStamp)||contextBlocked||ImGui::IsKeyPressed(ImGuiKey_Escape,false))) {
+                contextMenu_.cancel();renderer.cancelPicking();contextAutoStart_=false;
+            }
+            if(contextClick_) {
+                const auto click=*contextClick_;contextClick_.reset();
+                if(!contextBlocked && !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) &&
+                    click.document==contextStamp.docGeneration && click.generation==contextStamp.generation && click.revision==contextStamp.revision &&
+                    click.camera.viewMatrix()==view && click.screen[0]>=origin.x && click.screen[0]<origin.x+size.x &&
+                    click.screen[1]>=origin.y && click.screen[1]<origin.y+size.y) {
+                    if(vertexPaint_.surfaceHeld())vertexPaint_.cancel(document,renderer);
+                    renderer.cancelPicking();pickIntent_=false;++serial_;
+                    const ViewportContextMenu::Pixel pixel{
+                        static_cast<std::uint32_t>(std::clamp((click.screen[0]-origin.x)/size.x*renderer.width(),0.f,float(renderer.width()-1))),
+                        static_cast<std::uint32_t>(std::clamp((click.screen[1]-origin.y)/size.y*renderer.height(),0.f,float(renderer.height()-1)))};
+                    contextMenu_.begin(contextStamp,pixel);contextCamera_=click.camera;contextAutoStart_=!click.menu;
+                    contextEntity_=contextMarker_=contextCollision_=NoEntity;
+                    contextPointer_=click.screen;
+                    if(click.menu) {
+                        const Vec4 rectangle{origin.x,origin.y,size.x,size.y};
+                        const auto matrix=projection*view;
+                        if(const auto ray=math::rayFromScreen(click.screen[0],click.screen[1],matrix,rectangle,ClipDepth::NegativeOneToOne))
+                            contextCollision_=pickCollisionShape(document.scene(),*ray,camera.farPlane,collisionMeshes_,agentProfiles_,showCollisions).value_or(NoEntity);
+                    }
+                    if(click.menu) {
+                        ImGui::SetNextWindowPos({click.screen[0],click.screen[1]});
+                        ImGui::OpenPopup("Scene context");
+                    }
+                }
+            }
+            if(contextMenu_.active()&&pendingPick&&contextMenu_.resolve(*pendingPick)&&contextMenu_.completed()) {
+                renderer.cancelPicking();
+                if(!contextAutoStart_) {
+                    contextEntity_=contextMarker_?contextMarker_:contextMenu_.entity()?contextMenu_.entity():contextCollision_;
+                    if(contextEntity_&&document.scene().contains(contextEntity_)) {
+                        if(document.selection().ids.size()!=1||document.selection().primary!=contextEntity_)
+                            select(document,contextEntity_,false,false);
+                    } else contextEntity_=NoEntity;
+                }
+            }
+            if(contextMenu_.needsPick())contextPickSerial_=++serial_;
+            if(contextMenu_.active()&&!contextMenu_.completed()) {
+                if(!renderer.requestPick(contextMenu_.request(contextPickSerial_)))contextMenu_.cancel();
+            }
+            const auto startAtContextPoint=[&] {
+                frame.playAction=PlayAction::StartHere;
+                frame.playStartPoint=PlayStartPoint{*contextMenu_.position(),contextCamera_};
+                contextMenu_.cancel();contextAutoStart_=false;renderer.cancelPicking();
+            };
+            if(contextAutoStart_&&contextMenu_.completed()) {
+                if(contextMenu_.position())startAtContextPoint();
+                else {contextMenu_.cancel();contextAutoStart_=false;}
+            }
+            if(ImGui::BeginPopup("Scene context")) {
+                if(!contextMenu_.active())ImGui::CloseCurrentPopup();
+                const auto player=document.scene().find(document.scene().properties().playerCharacter);
+                const bool enabled=contextMenu_.position().has_value()&&player&&player->controller&&player->movement&&player->movement->enabled&&player->playerInput&&player->playerInput->enabled;
+                const bool objectActions=contextMenu_.active()&&contextEntity_&&document.scene().contains(contextEntity_);
+                const auto action=drawViewportContextActions(enabled,objectActions);
+                if(action!=ViewportContextAction::None&&action!=ViewportContextAction::PlayFromHere&&objectActions&&
+                    (document.selection().ids.size()!=1||document.selection().primary!=contextEntity_))
+                    select(document,contextEntity_,false,false);
+                switch(action) {
+                case ViewportContextAction::PlayFromHere:startAtContextPoint();break;
+                case ViewportContextAction::Duplicate:
+                    document.duplicateSelection();contextMenu_.cancel();renderer.cancelPicking();break;
+                case ViewportContextAction::Delete:
+                    document.eraseSelection();contextMenu_.cancel();renderer.cancelPicking();break;
+                case ViewportContextAction::Focus:
+                    frame.cameraAction=EditorCameraAction::FocusSelection;frame.cameraEntity=contextEntity_;
+                    contextMenu_.cancel();renderer.cancelPicking();break;
+                case ViewportContextAction::None:break;
+                }
+                ImGui::EndPopup();
+            }
+            if(contextMenu_.active()&&!contextAutoStart_&&!ImGui::IsPopupOpen("Scene context")) {
+                contextMenu_.cancel();renderer.cancelPicking();
+            }
             const bool materialContextChanged=materialDrop_.active() &&
                 (pickSize_!=Vec2{size.x,size.y} || pickProjection_!=projection || pickView_!=view ||
                  intentGeneration_!=document.scene().generation() || intentRevision_!=document.scene().revision());
@@ -347,7 +438,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                     decalDrop_.cancel();decalDropCanceled_=true;renderer.cancelPicking();++serial_;
                 }
             frame.decalPreview=frame.decalPlacement?frame.decalPlacement:decalDrop_.preview();
-            frame.surfacePickActive=decalDrop_.active();
+            frame.surfacePickActive=decalDrop_.active()||contextMenu_.active();
             if (pendingPick && pendingPick->mode==PickMode::Selection && !materialDrop_.active() && !decalDrop_.active() &&
                 pickSize_ == Vec2{size.x,size.y} && pickProjection_ == projection && pickView_ == view &&
                 pendingPick->generation == document.scene().generation() && pendingPick->revision == document.scene().revision() &&
@@ -371,7 +462,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             if(vertexPaint_.enabled()&&paintPressed&&!blockKeys&&!keyboardBlocked)ImGui::SetWindowFocus();
             vertexPaint_.update(document,renderer,pendingPick,serial_,vp,renderer.width(),renderer.height(),paintPointer,imageHovered,
                 (editorFocus||paintPressed)&&!ImGui::GetIO().AppFocusLost,
-                blockKeys||keyboardBlocked||materialDrop_.active()||decalDrop_.active()||ImGui::GetDragDropPayload()!=nullptr,
+                blockKeys||keyboardBlocked||contextMenu_.active()||frame.playStartPoint.has_value()||materialDrop_.active()||decalDrop_.active()||ImGui::GetDragDropPayload()!=nullptr,
                 paintPressed,ImGui::IsMouseDown(ImGuiMouseButton_Left),ImGui::IsKeyPressed(ImGuiKey_Escape,false));
             frame.surfacePickActive|=vertexPaint_.active();
             draw->PushClipRect(origin,ImVec2(origin.x+size.x,origin.y+size.y),true);
@@ -461,6 +552,8 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             draw->ChannelsSetCurrent(0);
             // Resolve markers after applying this frame's gizmo delta, so their
             // heading and the light submitted later in the frame agree exactly.
+            const bool contextMarkerPick=contextMenu_.active()&&!contextAutoStart_;
+            const auto markerPointer=contextMarkerPick?ImVec2(contextPointer_[0],contextPointer_[1]):ImGui::GetIO().MousePos;
             EntityId iconHit{}; float iconDistance = 15.0f;
             for (const auto& record : document.scene().records()) {
                 if(!document.scene().isVisible(record.id))continue;
@@ -473,7 +566,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 const ImVec2 center=screen?ImVec2((*screen)[0],(*screen)[1]):ImVec2{};
                 const auto color = WireColor;
                 float distance = centerVisible && viewportEntityHasCenterMarker(record)?
-                    std::hypot(center.x-ImGui::GetIO().MousePos.x,center.y-ImGui::GetIO().MousePos.y):1e9f;
+                    std::hypot(center.x-markerPointer.x,center.y-markerPointer.y):1e9f;
                 if(record.point && selected(document,record.id))pointLightRange(*draw,position,record.point->radius,vp,viewport,color);
                 if(record.spot && selected(document,record.id))spotLightRange(*draw,*world,*record.spot,vp,viewport,color);
                 if(record.navigationVolume) {
@@ -481,7 +574,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                         if(const auto line=projectClippedSegment(math::transformPoint(*world,a),math::transformPoint(*world,b),vp,viewport)) {
                             const ImVec2 start{(*line)[0][0],(*line)[0][1]},end{(*line)[1][0],(*line)[1][1]};
                             draw->AddLine(start,end,WireColor,selected(document,record.id)?1.5f:1.f);
-                            distance=std::min(distance,segmentDistance(ImGui::GetIO().MousePos,start,end));
+                            distance=std::min(distance,segmentDistance(markerPointer,start,end));
                         }
                     });
                 }
@@ -490,7 +583,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                         if(const auto line=projectClippedSegment(math::transformPoint(*world,a),math::transformPoint(*world,b),vp,viewport)) {
                             const ImVec2 from{(*line)[0][0],(*line)[0][1]},to{(*line)[1][0],(*line)[1][1]};
                             if(selected(document,record.id))draw->AddLine(from,to,WireColor,1.5f);
-                            distance=std::min(distance,segmentDistance(ImGui::GetIO().MousePos,from,to));
+                            distance=std::min(distance,segmentDistance(markerPointer,from,to));
                         }
                     });
                 }
@@ -498,13 +591,13 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                     if(!showCollisions)continue;
                     const auto& rgba=record.controller ? record.controller->collisionColor : record.collider->collisionColor;
                     const auto collisionColor=ImGui::ColorConvertFloat4ToU32({rgba[0],rgba[1],rgba[2],rgba[3]});
-                    distance=std::min(distance,gameplayMarker(*draw,record,*world,vp,viewport,collisionColor,ImGui::GetIO().MousePos,agentProfiles_));
+                    distance=std::min(distance,gameplayMarker(*draw,record,*world,vp,viewport,collisionColor,markerPointer,agentProfiles_));
                 }
-                else if(record.camera)distance=std::min(distance,gameplayMarker(*draw,record,*world,vp,viewport,color,ImGui::GetIO().MousePos));
+                else if(record.camera)distance=std::min(distance,gameplayMarker(*draw,record,*world,vp,viewport,color,markerPointer));
                 else if(!centerVisible)continue;
-                else if (record.directional) distance=directionalMarker(*draw,camera,*world,vp,viewport,center,color,ImGui::GetIO().MousePos);
+                else if (record.directional) distance=directionalMarker(*draw,camera,*world,vp,viewport,center,color,markerPointer);
                 else if (record.spot) {
-                    distance=directionalMarker(*draw,camera,*world,vp,viewport,center,color,ImGui::GetIO().MousePos);
+                    distance=directionalMarker(*draw,camera,*world,vp,viewport,center,color,markerPointer);
                     draw->AddCircle(center,8,color,12,1.5f);
                 }
                 else if (record.point) draw->AddCircle(center,7,color,12,2);
@@ -547,12 +640,16 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                         (a.uv[1]<=1e-5f&&b.uv[1]<=1e-5f)||(a.uv[1]>=1-1e-5f&&b.uv[1]>=1-1e-5f);
                     if(boundary)if(const auto line=projectClippedSegment(a.position,b.position,vp,viewport)) {
                         const ImVec2 from{(*line)[0][0],(*line)[0][1]},to{(*line)[1][0],(*line)[1][1]};
-                        const auto distance=segmentDistance(ImGui::GetIO().MousePos,from,to);
-                        const bool hovered=distance<7&&imageHovered&&!decalDrop_.active()&&!materialDrop_.active();
+                        const auto distance=segmentDistance(markerPointer,from,to);
+                        const bool hovered=distance<7&&(imageHovered||contextMarkerPick)&&!decalDrop_.active()&&!materialDrop_.active();
                         if(hovered&&distance<iconDistance){iconHit=record.id;iconDistance=distance;}
                         if(decalSelected||hovered)draw->AddLine(from,to,WireColor,1.5f);
                     }
                 }
+            }
+            if(contextMarkerPick&&iconHit) {
+                contextMarker_=contextEntity_=iconHit;
+                if(document.selection().ids.size()!=1||document.selection().primary!=iconHit)select(document,iconHit,false,false);
             }
             draw->ChannelsMerge();
             vertexPaint_.drawCursor(*draw,frame.viewport,paintPointer,renderer.width(),renderer.height());
@@ -574,11 +671,14 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                     pickIntent_=renderer.requestPick({intentGeneration_,intentRevision_,intentSerial_,pickX_,pickY_,0,PickMode::Selection});
                 }
             }
-            frame.viewport.inputBlocked |= vertexPaint_.active() || (vertexPaint_.enabled()&&imageHovered&&ImGui::IsMouseDown(ImGuiMouseButton_Left)) || transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || materialDrop_.active() || decalDrop_.active() || frame.materialAssignment.has_value() || frame.decalPlacement.has_value() ||
+            frame.viewport.inputBlocked |= contextMenu_.active() || frame.playStartPoint.has_value() || vertexPaint_.active() || (vertexPaint_.enabled()&&imageHovered&&ImGui::IsMouseDown(ImGuiMouseButton_Left)) || transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || materialDrop_.active() || decalDrop_.active() || frame.materialAssignment.has_value() || frame.decalPlacement.has_value() ||
                 (overGizmo && !blockKeys) || (document.transactionActive() && !cameraGestureActive) || ImGui::GetDragDropPayload() != nullptr;
         }
     }
     ImGui::End();
+    if(contextMenu_.active()&&(frame.viewport.width<=0||frame.viewport.height<=0)) {
+        contextMenu_.cancel();renderer.cancelPicking();contextAutoStart_=false;
+    }
     if((vertexPaint_.surfaceHeld() || transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active()) && (frame.viewport.width<=0 || frame.viewport.height<=0))cancel(document,renderer);
     if(materialDrop_.active() && (frame.viewport.width<=0 || frame.viewport.height<=0)) {
         materialDrop_.cancel();renderer.cancelPicking();++serial_;

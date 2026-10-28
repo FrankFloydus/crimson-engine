@@ -4,6 +4,7 @@
 #include <crimson/renderer/forward/ForwardTypes.hpp>
 #include "scene/MaterialSlotAssignment.h"
 #include "editor/PlayShortcuts.h"
+#include "runtime/PlayStartPoint.h"
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -24,7 +25,7 @@ struct DecalSurfacePlacement {
     PickResult hit;
 };
 
-enum class EditorCameraAction { None, EditorCamera, SelectCamera, TogglePilot, CreateCamera, RecallBookmark };
+enum class EditorCameraAction { None, EditorCamera, SelectCamera, TogglePilot, CreateCamera, RecallBookmark, FocusSelection };
 
 struct EditorFrame {
     ViewportRegion viewport;
@@ -35,6 +36,7 @@ struct EditorFrame {
     std::uint64_t cameraEntity{};
     std::optional<Camera> bookmarkCamera;
     PlayAction playAction{PlayAction::None};
+    std::optional<PlayStartPoint> playStartPoint;
     bool materialChanged{false};
     bool environmentChanged{false};
     std::string modelDropId;

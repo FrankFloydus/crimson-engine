@@ -3,6 +3,7 @@
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_video.h>
 #include <array>
+#include <optional>
 #include <vector>
 
 namespace crimson {
@@ -22,6 +23,9 @@ public:
     bool active() const { return mode_ != Mode::None; }
     bool flying() const { return mode_ == Mode::Fly; }
     float flySpeed() const { return flySpeed_; }
+    // A stationary RMB release retains the original image point, independent
+    // of native relative-mode cursor warps. Uses the current coordinate space.
+    std::optional<Vec2> consumeContextClick();
 private:
     enum class Mode { None, Orbit, Pan, Fly };
     struct Event { SDL_Event value{}; SDL_Keymod modifiers{}; };
@@ -33,6 +37,9 @@ private:
     Mode mode_{Mode::None};
     bool desktopCoordinates_{false}, captureActive_{false}, relativeActive_{false}, anchorPending_{false};
     float lastX_{}, lastY_{}, restoreX_{}, restoreY_{}, flySpeed_{25.0f};
+    bool contextClickCandidate_{};
+    float contextClickMotion_{};
+    std::optional<Vec2> contextClick_;
     Vec3 pivot_{};
     Vec3 anchor_{};
 };
