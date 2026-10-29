@@ -111,10 +111,10 @@ std::vector<std::string> modelImportCards(const ModelAsset& model) {
 }
 void requireFolder(AssetLibrary& library,std::span<const std::string> ids,const std::string& folder) {
     auto& catalog=library.browserCatalog();
-    const std::string destination=folder.empty()?BrowserCatalog::ContentFolder:folder;
+    const std::string destination=folder.empty()?BrowserCatalog::RootFolder:folder;
     for(const auto& id:ids) {
         require(isAssetUuid(id)&&catalog.contains(id)&&catalog.parent(id)==destination,"Imported card has the wrong folder or non-UUID identity: "+id);
-        const auto physical=resolveAssetPath(catalog.folderPath(BrowserCatalog::ContentFolder).parent_path(),id);
+        const auto physical=resolveAssetPath(catalog.folderPath(BrowserCatalog::RootFolder).parent_path(),id);
         const auto parent=physical.filename()=="manifest.json"?physical.parent_path().parent_path():physical.parent_path();
         require(parent==catalog.folderPath(destination),"Imported file is outside its displayed physical folder: "+id);
     }
@@ -136,8 +136,8 @@ void synchronousImportDestinations() {
         const auto contents=readBytes(file);ensureEngineMaterialAssets(p.root);
         require(readBytes(file)==contents&&loadMaterialAsset(p.root,id).id==id,"Engine material packaging changed an existing protected file.");
     }
-    const auto destination=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Destination");
-    const auto kept=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Existing"),other=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Other");
+    const auto destination=library.browserCatalog().createFolder(BrowserCatalog::RootFolder,"Destination");
+    const auto kept=library.browserCatalog().createFolder(BrowserCatalog::RootFolder,"Existing"),other=library.browserCatalog().createFolder(BrowserCatalog::RootFolder,"Other");
     const auto imported=library.importFiles({fixture.glb,fixture.image,p.root/"unsupported.xyz"},destination);
     require(imported==2,"A failed file prevented successful synchronous batch imports: "+library.status());
     require(library.status().find("unsupported.xyz")!=std::string::npos,"Mixed synchronous import lost its per-file diagnostic.");
@@ -184,7 +184,7 @@ void synchronousImportDestinations() {
 }
 void asynchronousImportDestinations() {
     Project p;const auto fixture=model_test::writeModelFixtures(p.root/"source");ResourceManager resources;AssetLibrary library(p.root,&resources);AsyncImports imports(p.root,resources);
-    const auto first=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"First"),second=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Second");
+    const auto first=library.browserCatalog().createFolder(BrowserCatalog::RootFolder,"First"),second=library.browserCatalog().createFolder(BrowserCatalog::RootFolder,"Second");
     std::string selectedFolder=first;imports.enqueue({fixture.glb},selectedFolder);selectedFolder=second;
     imports.enqueue({fixture.gltf,fixture.image,p.root/"unsupported.xyz"},selectedFolder);selectedFolder.clear();
     pumpImports(imports,resources,library);
@@ -210,7 +210,7 @@ void asynchronousImportDestinations() {
         "Asynchronous reimport moved or renamed a reused model, image or native material.");
     const auto deletedFixture=model_test::writeModelFixtures(p.root/"deleted-source");auto source=readJson(deletedFixture.gltf);
     source["asset"]["generator"]="Deleted destination fixture";model_test::writeJson(deletedFixture.gltf,source);
-    const auto deleted=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Deleted while pending");imports.enqueue({deletedFixture.gltf},deleted);
+    const auto deleted=library.browserCatalog().createFolder(BrowserCatalog::RootFolder,"Deleted while pending");imports.enqueue({deletedFixture.gltf},deleted);
     library.browserCatalog().erase(std::array{deleted});pumpImports(imports,resources,library);
     require(library.status().find("Imported 1")!=std::string::npos&&library.status().find("imported into Content")!=std::string::npos,
         "Deleting a captured destination should retain a successful root import with a diagnostic.");
@@ -225,8 +225,8 @@ void queuedExternalImports() {
     const auto unicode=p.root/"source"/pathFromUtf8("Muro \xc3\xa8.png");fs::copy_file(fixture.image,unicode);
     const auto sourceModel=readBytes(fixture.glb),sourceImage=readBytes(unicode);
     ResourceManager resources;AssetLibrary library(p.root,&resources);
-    auto destination=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Dropped files");
-    const auto expectedFolder=destination,other=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Later navigation");
+    auto destination=library.browserCatalog().createFolder(BrowserCatalog::RootFolder,"Dropped files");
+    const auto expectedFolder=destination,other=library.browserCatalog().createFolder(BrowserCatalog::RootFolder,"Later navigation");
     auto paths=std::vector<fs::path>{fixture.glb,unicode,p.root/"unsupported.xyz",fixture.gltf.parent_path()};
     const auto before=library.catalog().size();library.queueImportFiles(paths,destination);
     paths.clear();destination=other;
@@ -269,7 +269,7 @@ void actualAsyncCatalog() {
     require(countKind(library,AssetKind::Model)==1&&countKind(library,AssetKind::Texture)==3,"Mixed-batch duplicate GLBs must publish one model and one set of embedded images.");
     require(library.status().find("reused 1")!=std::string::npos&&library.status().find("Unsupported")!=std::string::npos,"Batch results must distinguish reused imports and independent failures: "+library.status());
     const auto id=library.selectedId();const auto before=library.catalog().size();
-    const auto kept=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Kept"),incoming=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Incoming");
+    const auto kept=library.browserCatalog().createFolder(BrowserCatalog::RootFolder,"Kept"),incoming=library.browserCatalog().createFolder(BrowserCatalog::RootFolder,"Incoming");
     library.browserCatalog().move(std::array{id},kept);library.browserCatalog().rename(id,"Keep this alias");
     const auto materialCount=countKind(library,AssetKind::Material);const auto imageIds=library.assets();
     imports.enqueue({fixture.glb,other},incoming);pumpImports(imports,resources,library);
@@ -362,7 +362,7 @@ void startupMaterialCatalog() {
 void externalDirectoryNotifications() {
     Project p;ResourceManager resources;AssetLibrary library(p.root,&resources);
     const auto hasFolder=[&](const char* name) {
-        const auto items=library.browserCatalog().items(BrowserCatalog::ContentFolder);
+        const auto items=library.browserCatalog().items(BrowserCatalog::RootFolder);
         return std::any_of(items.begin(),items.end(),[&](const auto& item){return item.folder&&item.name==name;});
     };
     require(!hasFolder("External"),"External directory fixture was already present.");

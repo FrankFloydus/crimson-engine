@@ -97,7 +97,7 @@ GameplayEffectAsset deserializeGameplayEffectAsset(std::string_view text,const s
 }
 std::filesystem::path gameplayEffectAssetPath(const std::filesystem::path& root,const std::string& id) {
     if(!isAssetUuid(id))throw std::runtime_error("Gameplay Effect reference must be a UUID.");auto file=resolveAssetPath(root,id);
-    if(file.extension()!=".crimson-effect")throw std::runtime_error("Gameplay Effect reference has an incompatible asset kind.");return file;
+    if(assetPathExtension(file)!=".crimson-effect")throw std::runtime_error("Gameplay Effect reference has an incompatible asset kind.");return file;
 }
 GameplayEffectAsset loadGameplayEffectAsset(const std::filesystem::path& root,const std::string& id) {
     const auto starter=engineGameplayEffect(id);
@@ -117,7 +117,7 @@ void saveGameplayEffectAsset(const std::filesystem::path& root,const GameplayEff
         writeFileAtomically(gameplayEffectAssetPath(root,asset.id),contents);return;
     }
     const auto entries=storedAssetPaths(root);const auto existing=std::find_if(entries.begin(),entries.end(),[&](const auto& entry){return entry.id==asset.id;});
-    const auto file=existing==entries.end()?checkedContentPath(root,root/"Content"/"Gameplay"/fromUtf8(asset.id+".crimson-effect")):gameplayEffectAssetPath(root,asset.id);
+    const auto file=existing==entries.end()?checkedContentPath(root,root/fromUtf8(asset.id+".crimson-effect")):gameplayEffectAssetPath(root,asset.id);
     (void)checkedContentPath(root,file);if(existing==entries.end()&&std::filesystem::exists(file))throw std::runtime_error("An unregistered Gameplay Effect destination already exists.");
     const std::array<StoredAssetPath,1> registration{{{asset.id,file}}};
     const std::array<AssetFileChange,2> changes{{{utf8(file.lexically_relative(root)),contents},{".crimson/asset-locations.json",prepareAssetPathRegistration(root,registration)}}};

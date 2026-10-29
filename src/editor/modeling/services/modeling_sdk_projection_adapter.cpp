@@ -12410,6 +12410,15 @@ private:
         ++duplicate_index;
       }
     }
+    for (std::size_t copy = 0; copy < copies_per_source; ++copy) {
+      std::vector<EngineEntityClone> clones;
+      for (std::size_t source_index = 0; source_index < sources.size(); ++source_index)
+        clones.push_back({source_projections[source_index].identity.uuid,
+                          result.duplicates[source_index * copies_per_source + copy].entity});
+      if (!scene_.remap_engine_entity_references(clones)) return rollback("Duplicated entity references could not be remapped.");
+    }
+    for (const auto &record : result.duplicates)
+      object_map_.remember_scene_entity(record.modeling_object_id, scene_, record.entity);
     Result<OperationResult> selected =
         session_.apply_object_selection(selection, SelectionEdit::Replace);
     if (!selected.ok()) {
@@ -12594,6 +12603,10 @@ private:
       active_native_object_id_ = native_id;
     }
 
+    std::vector<EngineEntityClone> engine_clones;
+    for (std::size_t index = 0; index < source_identities.size(); ++index)
+      engine_clones.push_back({source_identities[index].uuid, result.duplicates[index].entity});
+    if (!scene_.remap_engine_entity_references(engine_clones)) return rollback("Clipboard entity references could not be remapped.");
     std::unordered_map<EntityId, EntityId> pasted_entities;
     for (std::size_t index = 0; index < source_identities.size(); ++index) {
       pasted_entities.emplace(source_identities[index].id,

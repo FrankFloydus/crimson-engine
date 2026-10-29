@@ -81,6 +81,7 @@ public:
     [[nodiscard]] std::uint64_t transform_space_revision(ViewportPaneId pane) const;
 
     [[nodiscard]] QuaderShadingMode shading_mode(ViewportPaneId pane) const;
+    [[nodiscard]] bool rendered_presentation_available() const;
     QuaderApiVoidResult set_shading_mode(ViewportPaneId pane,
                                          QuaderShadingMode mode);
 

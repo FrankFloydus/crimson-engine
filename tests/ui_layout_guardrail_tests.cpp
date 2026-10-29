@@ -1138,10 +1138,10 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_source,
                   "new QtToolSettingsPanel(main_window_.get())");
   expect_contains(ui_source,
-                  "viewport_panel_->set_settings_panel(tool_settings_panel_)");
-  expect_contains(ui_source,
+                  "UIPanelId::ToolSettings, *tool_settings_panel_");
+  expect_missing(ui_source,
                   "viewport_panel_->refresh_settings_overlay(*editor_)");
-  expect_missing(ui_source, "UIPanelId::ToolSettings");
+  expect_contains(ui_source, "UIPanelId::ToolSettings");
   expect_contains(ui_source,
                   "tool_settings_panel_->numeric_interaction_active()");
   expect_contains(ui_source,
@@ -2651,7 +2651,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel, "const QRect pane_bounds = pane_content_rect(pane_state)");
   const std::string pane_actions = source_slice(
       panel, "void QtViewportPanel::set_control_actions(",
-      "void QtViewportPanel::set_settings_panel(");
+      "void QtViewportPanel::set_viewport_settings(");
   expect_contains(pane_actions, "new QAction(pane_state.toolbar)");
   expect_missing(pane_actions, "source->isChecked()");
   expect_contains(pane_actions, "workspace_->selected_tool(pane_state.id)");

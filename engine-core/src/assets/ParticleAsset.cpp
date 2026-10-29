@@ -27,11 +27,7 @@ std::string utf8(const std::filesystem::path& value) {
     return {reinterpret_cast<const char*>(text.data()),text.size()};
 }
 void validateId(const std::string& id) {
-    if(isAssetUuid(id))return;
-    const auto relative=fromUtf8(id);
-    if (id.empty() || relative.has_root_path() || relative.parent_path()!=std::filesystem::path("assets/particles") ||
-        relative.extension()!=".crimson-particle" || utf8(relative.filename()).find(':')!=std::string::npos)
-        throw std::runtime_error("Particle asset must be stored directly under assets/particles with a .crimson-particle extension.");
+    if(!isAssetUuid(id))throw std::runtime_error("Particle files require a managed UUID.");
 }
 std::string hex(uint64_t value) {
     char buffer[17]{};
@@ -259,7 +255,7 @@ void validateParticleAsset(const ParticleEffectAsset& asset) {
     const auto& emitter=asset.emitter;
     const auto material=fromUtf8(emitter.material.id);
     if(!emitter.material.empty()&&!isAssetUuid(emitter.material.id)&&canonicalAssetId(emitter.material.id)!=DefaultParticleMaterialId&&
-        (material.has_root_path()||material.parent_path()!=std::filesystem::path("assets/materials")||material.extension()!=".crimson-material"||emitter.material.id.find(':')!=std::string::npos))
+        (material.has_root_path()||material.parent_path()!=std::filesystem::path("assets/materials")||assetPathExtension(material)!=".crimson-material"||emitter.material.id.find(':')!=std::string::npos))
         throw std::runtime_error("Particle material must reference a managed material or the protected particle default.");
     if(!math::finite(emitter.opacity)||emitter.opacity<0||emitter.opacity>1)throw std::runtime_error("Particle opacity must be finite and between 0 and 1.");
     if (asset.name.empty() || asset.name.size()>1024 || !emitter.id || emitter.name.empty() || emitter.name.size()>1024)
@@ -350,20 +346,13 @@ std::filesystem::path particleAssetPath(const std::filesystem::path& root,const 
     validateId(id);
     if(isAssetUuid(id)) {
         for(const auto& entry:storedAssetPaths(root))if(entry.id==canonicalAssetId(id)) {
-            if(entry.file.extension()!=".crimson-particle")throw std::runtime_error("Asset identity does not reference a particle file.");
+            if(assetPathExtension(entry.file)!=".crimson-particle")throw std::runtime_error("Asset identity does not reference a particle file.");
             return entry.file;
         }
-        try{const auto file=resolveAssetPath(root,id);if(file.extension()==".crimson-particle")return file;}catch(const std::exception&){/* New UUID has no location until its first save. */}
-        return resolveAssetPath(root,"assets/particles")/(id+".crimson-particle");
+        try{const auto file=resolveAssetPath(root,id);if(assetPathExtension(file)==".crimson-particle")return file;}catch(const std::exception&){/* New UUID has no location until its first save. */}
+        return root/(id+".crimson-particle");
     }
-    if(contentStorageReady(root))return resolveAssetPath(root,id);
-    const auto resolvedRoot=std::filesystem::weakly_canonical(std::filesystem::absolute(root));
-    const auto directory=std::filesystem::weakly_canonical(resolvedRoot/"assets/particles");
-    const auto result=std::filesystem::weakly_canonical(resolvedRoot/fromUtf8(id));
-    const auto relative=result.lexically_relative(resolvedRoot);
-    if (result.parent_path()!=directory || relative.empty() || relative.is_absolute() || *relative.begin()=="..")
-        throw std::runtime_error("Particle asset path escapes the managed project directory.");
-    return result;
+    throw std::runtime_error("Particle files require a managed UUID.");
 }
 std::string serializeParticleAsset(const ParticleEffectAsset& asset) {
     validateParticleAsset(asset); validateId(asset.id);
@@ -524,21 +513,12 @@ ParticleEffectAsset saveParticleAssetAs(const std::filesystem::path& root,const 
 std::vector<ParticleAssetEntry> scanParticleAssets(const std::filesystem::path& root,std::vector<std::string>* diagnostics) {
     std::vector<ParticleAssetEntry> entries;
     if(contentStorageReady(root)) {
-        for(const auto& entry:storedAssetPaths(root))if(entry.file.extension()==".crimson-particle"&&std::filesystem::is_regular_file(entry.file)) {
+        for(const auto& entry:storedAssetPaths(root))if(assetPathExtension(entry.file)==".crimson-particle"&&std::filesystem::is_regular_file(entry.file)) {
             try{auto asset=loadParticleAsset(root,entry.id);entries.push_back({std::move(asset.id),std::move(asset.name)});}
             catch(const std::exception& error){if(diagnostics)diagnostics->push_back("Particle asset "+entry.id+": "+error.what());}
         }
         std::sort(entries.begin(),entries.end(),[](const auto& a,const auto& b){return a.name!=b.name?a.name<b.name:a.id<b.id;});return entries;
     }
-    const auto directory=root/"assets/particles";
-    if (!std::filesystem::exists(directory)) return entries;
-    for (const auto& file:std::filesystem::directory_iterator(directory)) {
-        if (!file.is_regular_file() || file.path().extension()!=".crimson-particle") continue;
-        const auto id=utf8(file.path().lexically_relative(root));
-        try { auto asset=loadParticleAsset(root,id); entries.push_back({std::move(asset.id),std::move(asset.name)}); }
-        catch (const std::exception& error) { if (diagnostics) diagnostics->push_back("Particle asset "+id+": "+error.what()); }
-    }
-    std::sort(entries.begin(),entries.end(),[](const auto& a,const auto& b){return a.name!=b.name?a.name<b.name:a.id<b.id;});
     return entries;
 }
 

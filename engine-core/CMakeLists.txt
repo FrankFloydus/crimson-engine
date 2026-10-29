@@ -47,7 +47,7 @@ target_link_libraries(crimson-decals PUBLIC crimson-math)
 
 add_library(crimson-storage STATIC
     src/assets/AtomicFile.cpp src/assets/AssetTransaction.cpp
-    src/assets/ContentStorage.cpp src/assets/QuaderSceneBundle.cpp src/resources/AssetId.cpp)
+    src/assets/ContentStorage.cpp  src/resources/AssetId.cpp)
 crimson_engine_configure_library(crimson-storage)
 target_link_libraries(crimson-storage PUBLIC nlohmann_json::nlohmann_json PRIVATE stduuid Ole32)
 target_link_libraries(crimson-decals PRIVATE crimson-storage)
@@ -145,22 +145,6 @@ crimson_engine_configure_library(crimson-editor-domain)
 target_link_libraries(crimson-editor-domain PUBLIC crimson-scene crimson-materials crimson-particles)
 target_link_libraries(crimson-editor-domain PRIVATE Shell32 Ole32)
 
-# The reader ABI comes from the modeler built in this source tree, not from a
-# second Quader checkout or a historical copied DLL payload.
-set(CRIMSON_ENGINE_QUADER_READER_HEADER "${PROJECT_SOURCE_DIR}/src/io/bridge/quader_bridge_reader.hpp")
-if(NOT EXISTS "${CRIMSON_ENGINE_QUADER_READER_HEADER}" OR NOT TARGET quader_bridge_reader)
-    message(FATAL_ERROR "Engine integration requires the paired Quader bridge reader target and ABI header.")
-endif()
-configure_file("${CRIMSON_ENGINE_QUADER_READER_HEADER}"
-    "${CRIMSON_ENGINE_GENERATED_DIR}/quader_bridge_reader.hpp" COPYONLY)
-add_library(crimson-quader STATIC
-    src/quader/QuaderPaintMigration.cpp src/quader/QuaderReader.cpp src/quader/QuaderImport.cpp
-    src/quader/QuaderBridge.cpp src/quader/SaveNotificationWatcher.cpp src/editor/QuaderSceneIntegration.cpp)
-crimson_engine_configure_library(crimson-quader)
-target_include_directories(crimson-quader PRIVATE "${CRIMSON_ENGINE_GENERATED_DIR}")
-target_link_libraries(crimson-quader PUBLIC crimson-scene crimson-materials crimson-resources crimson-assets
-    PRIVATE crimson-storage nlohmann_json::nlohmann_json bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng)
-
 add_library(crimson-decal-resources STATIC
     src/editor/DecalResources.cpp src/editor/MeshPaintResources.cpp src/editor/VertexPaintSubdivisionOverlay.cpp)
 crimson_engine_configure_library(crimson-decal-resources)
@@ -170,11 +154,14 @@ target_link_libraries(crimson-decal-resources PUBLIC crimson-decals crimson-scen
 add_library(crimson-engine-core INTERFACE)
 add_library(CrimsonEngine::Core ALIAS crimson-engine-core)
 target_link_libraries(crimson-engine-core INTERFACE crimson-runtime crimson-assets
-    crimson-editor-domain crimson-quader)
+    crimson-editor-domain)
 
 add_library(crimson-engine-host STATIC
     src/integration/LevelSession.cpp
-    src/integration/LevelProjectState.cpp
+    src/integration/modeling_world_snapshot.cpp
+    src/integration/native_scene_materials.cpp
+    src/integration/native_geometry_sources.cpp
+    src/integration/native_scene_projection.cpp
     src/integration/LevelNavigationPreview.cpp
     src/input/Navigation.cpp
     src/crimson-renderer/Environment.cpp src/crimson-renderer/Diagnostics.cpp
@@ -184,8 +171,9 @@ add_library(crimson-engine-host STATIC
     src/editor/DecalPreview.cpp src/editor/AssetPreviews.cpp src/editor/AssetPreviewCache.cpp)
 add_library(CrimsonEngine::Host ALIAS crimson-engine-host)
 crimson_engine_configure_library(crimson-engine-host)
+target_include_directories(crimson-engine-host PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(crimson-engine-host PUBLIC CrimsonEngine::Core crimson-decal-resources
-    Crimson::Renderer PRIVATE lodepng Crimson::HostShaders)
+    Crimson::Renderer PRIVATE lodepng Crimson::HostShaders quader_document)
 target_compile_definitions(crimson-engine-host PRIVATE
     "CRIMSON_ENGINE_SHADER_SOURCE_DIR=\"${CRIMSON_SHADER_SOURCE_DIR}\""
     "CRIMSON_ENGINE_SHADER_INCLUDE_DIR=\"${CRIMSON_SHADER_INCLUDE_DIR}\"")
@@ -193,6 +181,9 @@ target_compile_definitions(crimson-engine-host PRIVATE
 include(cmake/EngineProfiling.cmake)
 add_library(crimson-engine-widgets STATIC
     src/integration/AssetDocuments.cpp
+    src/integration/project_asset_mutations.cpp
+    src/integration/native_scene_authoring.cpp
+    src/integration/native_asset_retention.cpp
     src/integration/settings/LevelPreferences.cpp
     src/integration/profiling/LevelProfiling.cpp
     src/integration/browser/QtAssetBrowser.cpp src/integration/browser/LevelAssetBrowser.cpp
@@ -217,7 +208,6 @@ function(crimson_engine_attach_runtime target)
     if(NOT TARGET ${target})
         message(FATAL_ERROR "Unknown Engine runtime host: ${target}")
     endif()
-    add_dependencies(${target} quader_bridge_reader)
     add_custom_command(TARGET ${target} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target}>/shader-tools"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:bgfx::shaderc>"
@@ -228,18 +218,11 @@ function(crimson_engine_attach_runtime target)
             -P "${CRIMSON_ENGINE_SOURCE_ROOT}/scripts/Stage-ShaderSources.cmake"
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${CRIMSON_SHADER_INCLUDE_DIR}"
             "$<TARGET_FILE_DIR:${target}>/shader-tools/include"
-        COMMAND ${CMAKE_COMMAND}
-            "-DENGINE_READER_FILE=$<TARGET_FILE:quader_bridge_reader>"
-            "-DENGINE_READER_DEPENDENCIES=$<TARGET_RUNTIME_DLLS:quader_bridge_reader>"
-            "-DENGINE_READER_HEADER=${CRIMSON_ENGINE_QUADER_READER_HEADER}"
-            "-DENGINE_READER_DESTINATION=$<TARGET_FILE_DIR:${target}>/quader-reader"
-            -P "${CRIMSON_ENGINE_SOURCE_ROOT}/cmake/StageEngineReader.cmake"
         VERBATIM)
 endfunction()
 
 # Source-root variables used by the root's runtime attachment function.
 set(CRIMSON_ENGINE_SOURCE_ROOT "${CRIMSON_ENGINE_SOURCE_ROOT}" PARENT_SCOPE)
-set(CRIMSON_ENGINE_QUADER_READER_HEADER "${CRIMSON_ENGINE_QUADER_READER_HEADER}" PARENT_SCOPE)
 
 option(CRIMSON_ENGINE_BUILD_TESTS "Build retained Engine domain regression checks" "${QUADER_BUILD_TESTS}")
 if(CRIMSON_ENGINE_BUILD_TESTS)

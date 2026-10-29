@@ -125,7 +125,7 @@ struct TextureStreamer::Impl {
             return;
         }
         const auto source=entry.source;const auto id=entry.id; const auto role=entry.role;
-        const auto folder=resolveAssetPath(root,"assets/cache/texture-mips");
+        const auto folder=resolveAssetPath(root,".crimson/cache/texture-mips");
         auto config=options(entry); config.forceReload=forceReload;
         entry.descriptor=manager.request<streaming::TextureMipCache>(AssetRef<streaming::TextureMipCache>{id},
             [source,id,role,folder](std::stop_token token) {

@@ -6,14 +6,19 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_application_style.hpp"
 
+#include "ui/qt_application_theme.hpp"
+#include "ui/qt_dock_title_presentation.hpp"
+#include "ui/qt_semantic_axis_colors.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 
 #include <QAbstractSpinBox>
 #include <QApplication>
-#include <QMainWindow>
+#include <QCheckBox>
+#include <QDockWidget>
+#include <QFontInfo>
+#include <QFontMetricsF>
 #include <QMenu>
 #include <QPainter>
-#include <QPainterPath>
 #include <QProxyStyle>
 #include <QPushButton>
 #include <QStyleOption>
@@ -21,8 +26,10 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QVariant>
+#include <QVariantAnimation>
 
 #include <algorithm>
+#include <cmath>
 
 namespace quader {
 namespace {
@@ -83,6 +90,64 @@ bool focused(const QStyleOption &option) {
   return enabled(option) && option.state.testFlag(QStyle::State_HasFocus);
 }
 
+bool keyboard_focused(const QStyleOption &option) {
+  return focused(option) &&
+         option.state.testFlag(QStyle::State_KeyboardFocusChange);
+}
+
+qreal switch_position(Qt::CheckState state) {
+  return state == Qt::PartiallyChecked ? 0.5 : state == Qt::Checked ? 1.0 : 0.0;
+}
+
+void animate_switch(QVariantAnimation &animation, const QWidget &widget,
+                    qreal target) {
+  const qreal start = animation.currentValue().toReal();
+  animation.stop();
+  animation.setStartValue(start);
+  animation.setEndValue(target);
+  if (widget.isVisible() && widget.isEnabled()) {
+    animation.start();
+  } else {
+    animation.setCurrentTime(animation.duration());
+  }
+}
+
+qreal animated_switch_position(const QStyleOption &option,
+                                const QWidget *widget) {
+  const qreal target = option.state.testFlag(QStyle::State_NoChange) ? 0.5
+                      : option.state.testFlag(QStyle::State_On) ? 1.0 : 0.0;
+  auto *checkbox = const_cast<QCheckBox *>(qobject_cast<const QCheckBox *>(widget));
+  if (checkbox == nullptr) {
+    return target;
+  }
+  constexpr auto kAnimationName = "quaderCheckSwitchAnimation";
+  auto *animation = checkbox->findChild<QVariantAnimation *>(
+      QString::fromLatin1(kAnimationName), Qt::FindDirectChildrenOnly);
+  if (animation == nullptr) {
+    animation = new QVariantAnimation(checkbox);
+    animation->setObjectName(QString::fromLatin1(kAnimationName));
+    animation->setDuration(180);
+    animation->setEasingCurve(QEasingCurve::OutCubic);
+    animation->setStartValue(target);
+    animation->setEndValue(target);
+    QObject::connect(animation, &QVariantAnimation::valueChanged, checkbox,
+                     [checkbox](const QVariant &) { checkbox->update(); });
+    QObject::connect(checkbox, &QCheckBox::checkStateChanged, animation,
+                     [animation, checkbox](Qt::CheckState state) {
+                       animate_switch(*animation, *checkbox, switch_position(state));
+                     });
+  }
+  if (animation->endValue().toReal() != target) {
+    // Retained owners can synchronize check state while signals are blocked.
+    animate_switch(*animation, *checkbox, target);
+  }
+  if (!enabled(option) && animation->state() == QAbstractAnimation::Running) {
+    animation->stop();
+    animation->setCurrentTime(animation->duration());
+  }
+  return animation->currentValue().toReal();
+}
+
 QColor surface_color(const QStyleOption &option, bool field) {
   // Raised editors stay distinct from the section surface. Spin boxes and
   // their frameless editors share the same inherited control color.
@@ -110,68 +175,24 @@ void rounded_surface(QPainter &painter, const QRect &rect, const QColor &fill,
   painter.setBrush(fill);
   const qreal usable_radius =
       std::min(radius, std::min(bounds.width(), bounds.height()) * 0.5);
-  painter.drawRoundedRect(bounds, usable_radius, usable_radius);
-  painter.restore();
-}
-
-void draw_attached_tab(QPainter &painter, const QRectF &rect,
-                       const QColor &fill, const QColor &border,
-                       const QtUiScaleMetrics &metrics,
-                       Qt::LayoutDirection direction, bool double_slanted) {
-  if (rect.isEmpty()) {
-    return;
-  }
-  painter.save();
-  painter.setRenderHint(QPainter::Antialiasing);
-  if (direction == Qt::RightToLeft) {
-    painter.translate(rect.left() + rect.right(), 0.0);
-    painter.scale(-1.0, 1.0);
-  }
-  const qreal edge = hairline(painter);
-  const QRectF bounds = rect.adjusted(edge * 0.5, edge * 0.5,
-                                       -edge * 0.5, 0.0);
-  const qreal shoulder = std::min(metrics.px(14.0), bounds.width() * 0.3);
-  const qreal radius = std::min({metrics.px(6.0), bounds.height() * 0.3,
-                                shoulder * 0.5});
-  const qreal slope = (shoulder - radius) / bounds.height();
-  QPainterPath outline;
-  outline.moveTo(bounds.bottomLeft());
-  if (double_slanted) {
-    outline.quadTo(QPointF(bounds.left() + radius, bounds.bottom()),
-                    QPointF(bounds.left() + radius + slope * radius,
-                            bounds.bottom() - radius));
-    outline.lineTo(bounds.left() + shoulder - slope * radius,
-                     bounds.top() + radius);
-    outline.quadTo(QPointF(bounds.left() + shoulder, bounds.top()),
-                    QPointF(bounds.left() + shoulder + radius, bounds.top()));
+  if (usable_radius > 0.0) {
+    painter.drawRoundedRect(bounds, usable_radius, usable_radius);
   } else {
-    outline.lineTo(bounds.left(), bounds.top() + radius);
-    outline.quadTo(bounds.topLeft(),
-                    QPointF(bounds.left() + radius, bounds.top()));
+    painter.drawRect(bounds);
   }
-  outline.lineTo(bounds.right() - shoulder - radius, bounds.top());
-  outline.quadTo(QPointF(bounds.right() - shoulder, bounds.top()),
-                  QPointF(bounds.right() - shoulder + slope * radius,
-                          bounds.top() + radius));
-  outline.lineTo(bounds.right() - radius - slope * radius,
-                   bounds.bottom() - radius);
-  outline.quadTo(QPointF(bounds.right() - radius, bounds.bottom()),
-                  bounds.bottomRight());
-  QPainterPath surface(outline);
-  surface.closeSubpath();
-  painter.fillPath(surface, fill);
-  // Leave the lower edge open so the tab joins the panel rim.
-  painter.setPen(QPen(border, edge));
-  painter.drawPath(outline);
   painter.restore();
 }
 
 void draw_surface(QPainter &painter, const QStyleOption &option,
                   const QtUiScaleMetrics &metrics, bool field,
-                  bool default_button = false) {
+                  bool default_button = false,
+                  const QWidget *editor = nullptr) {
+  const bool square = editor != nullptr &&
+                      editor->property(kQtSquareEditorSurfaceProperty).toBool();
   QColor fill = surface_color(option, field);
-  QColor border = field ? color(option, QPalette::Midlight)
-                         : blend(fill, color(option, QPalette::Dark), 0.4);
+  QColor border = square ? color(option, QPalette::Mid)
+                         : field ? color(option, QPalette::Midlight)
+                                 : blend(fill, color(option, QPalette::Dark), 0.4);
   if (default_button && enabled(option)) {
     // Inactive text is dimmer and its accent lighter. Keep the native label
     // readable even at the brightest enabled hover surface in either group.
@@ -189,20 +210,169 @@ void draw_surface(QPainter &painter, const QStyleOption &option,
     border = color(option, QPalette::Light);
   }
   rounded_surface(painter, option.rect, fill, border,
-                  metrics.px(4.0));
+                  square ? 0.0 : metrics.px(4.0));
+  if (field && square) {
+    const QVariant axis_property = editor->property(kQtEditorAxisProperty);
+    bool valid_axis = false;
+    const int axis_value = axis_property.toInt(&valid_axis);
+    using quader_editor_core::ViewAxis;
+    if (valid_axis && axis_value >= static_cast<int>(ViewAxis::X) &&
+        axis_value <= static_cast<int>(ViewAxis::Z)) {
+      QColor axis_color =
+          qt_semantic_axis_color(static_cast<ViewAxis>(axis_value));
+      if (!enabled(option)) {
+        axis_color = blend(fill, axis_color, 0.45);
+      }
+      const qreal inset = hairline(painter);
+      const QRectF interior =
+          QRectF(option.rect).adjusted(inset, inset, -inset, -inset);
+      const qreal strip_width = std::min(metrics.px(2.0), interior.width());
+      if (strip_width > 0.0 && interior.height() > 0.0) {
+        const qreal strip_left = option.direction == Qt::RightToLeft
+                                     ? interior.right() - strip_width
+                                     : interior.left();
+        painter.fillRect(QRectF(strip_left, interior.top(), strip_width,
+                                interior.height()), axis_color);
+      }
+    }
+  }
 }
 
-void draw_indicator(QPainter &painter, const QStyleOption &option,
-                    const QtUiScaleMetrics &metrics, bool radio) {
+void draw_check_switch(QPainter &painter, const QStyleOption &option,
+                       const QtUiScaleMetrics &metrics, const QWidget *widget) {
+  const bool checked = option.state.testFlag(QStyle::State_On);
+  const bool partial = option.state.testFlag(QStyle::State_NoChange);
+  const qreal position = animated_switch_position(option, widget);
+  const qreal width = metrics.px(static_cast<double>(kQtCheckSwitchWidth));
+  const qreal height = metrics.px(static_cast<double>(kQtCheckSwitchHeight));
+  const qreal fit = std::min({1.0, option.rect.width() / width,
+                             option.rect.height() / height});
+  if (fit <= 0.0) {
+    return;
+  }
+  const QPointF center = QRectF(option.rect).center();
+  const qreal edge = hairline(painter);
+  const QRectF track(
+      std::round((center.x() - width * fit * 0.5) / edge) * edge,
+      std::round((center.y() - height * fit * 0.5) / edge) * edge,
+      width * fit, height * fit);
+  const QPointF track_center = track.center();
+  const bool muted_track = partial || (checked && !enabled(option));
+  QColor fill = muted_track ? color(option, QPalette::Highlight)
+                            : blend(color(option, QPalette::Button),
+                                    color(option, QPalette::Accent), position);
+  if (enabled(option) && option.state.testFlag(QStyle::State_Sunken)) {
+    fill = blend(fill, color(option, QPalette::Shadow), 0.24);
+  } else if (hovered(option)) {
+    fill = blend(fill, color(option, QPalette::WindowText), 0.08);
+  }
+  QColor border = checked ? (enabled(option) ? fill
+                                            : color(option, QPalette::Accent))
+                          : color(option, QPalette::Midlight);
+  if (keyboard_focused(option)) {
+    border = color(option, checked ? QPalette::Text : QPalette::Accent);
+  } else if (hovered(option) && !checked) {
+    border = color(option, QPalette::Light);
+  }
+  const QRectF outline = track.adjusted(edge * 0.5, edge * 0.5,
+                                       -edge * 0.5, -edge * 0.5);
+  const qreal inset = metrics.px(1.0) * fit;
+  const qreal diameter = std::max(0.0, track.height() - inset * 2.0);
+  const qreal travel = std::max(0.0, track.width() - inset * 2.0 - diameter);
+  const qreal thumb_position = option.direction == Qt::RightToLeft
+                                   ? 1.0 - position : position;
+  const qreal thumb_left = track.left() + inset + travel * thumb_position;
+  const QRectF thumb(thumb_left, track_center.y() - diameter * 0.5,
+                     diameter, diameter);
+  painter.save();
+  painter.setRenderHint(QPainter::Antialiasing);
+  painter.setPen(QPen(border, edge));
+  painter.setBrush(fill);
+  painter.drawRoundedRect(outline, outline.height() * 0.5,
+                          outline.height() * 0.5);
+  painter.setPen(Qt::NoPen);
+  painter.setBrush(color(option, QPalette::Text));
+  painter.drawEllipse(thumb);
+  if (partial) {
+    QPen dash(color(option, QPalette::Base),
+               std::max(edge, metrics.px(1.0) * fit));
+    dash.setCapStyle(Qt::RoundCap);
+    painter.setPen(dash);
+    painter.drawLine(QPointF(thumb.left() + diameter * 0.3, track_center.y()),
+                      QPointF(thumb.right() - diameter * 0.3, track_center.y()));
+  }
+  painter.restore();
+}
+
+void draw_slider(QPainter &painter, const QStyleOptionSlider &option,
+                 const QStyle &style, const QtUiScaleMetrics &metrics,
+                 const QWidget *widget) {
+  const QRect handle = style.subControlRect(
+      QStyle::CC_Slider, &option, QStyle::SC_SliderHandle, widget);
+  if (handle.isEmpty()) {
+    return;
+  }
+  // Native geometry owns travel, inversion and hit areas. Normalized endpoint
+  // queries keep the full rail visible even when the actual range is fixed.
+  QStyleOptionSlider endpoint(option);
+  endpoint.minimum = 0;
+  endpoint.maximum = 1;
+  endpoint.sliderPosition = 0;
+  const QPointF start = QRectF(style.subControlRect(
+      QStyle::CC_Slider, &endpoint, QStyle::SC_SliderHandle, widget)).center();
+  endpoint.sliderPosition = 1;
+  const QPointF end = QRectF(style.subControlRect(
+      QStyle::CC_Slider, &endpoint, QStyle::SC_SliderHandle, widget)).center();
+  const QPointF center = QRectF(handle).center();
+  painter.save();
+  painter.setRenderHint(QPainter::Antialiasing);
+  if (option.subControls.testFlag(QStyle::SC_SliderGroove)) {
+    QPen rail(color(option, QPalette::Midlight), metrics.px(2.0));
+    rail.setCapStyle(Qt::RoundCap);
+    painter.setPen(rail);
+    painter.drawLine(start, end);
+    if (option.maximum > option.minimum && start != center) {
+      rail.setColor(color(option, QPalette::Accent));
+      painter.setPen(rail);
+      painter.drawLine(start, center);
+    }
+  }
+  if (option.subControls.testFlag(QStyle::SC_SliderHandle)) {
+    const qreal diameter = std::min({metrics.px(8.0),
+                                    static_cast<qreal>(handle.width()),
+                                    static_cast<qreal>(handle.height())});
+    const QRectF dot(center.x() - diameter * 0.5,
+                      center.y() - diameter * 0.5, diameter, diameter);
+    QColor fill = color(option, QPalette::Text);
+    const bool active = option.activeSubControls.testFlag(QStyle::SC_SliderHandle);
+    if (enabled(option) && active &&
+        option.state.testFlag(QStyle::State_Sunken)) {
+      fill = blend(fill, color(option, QPalette::WindowText), 0.25);
+    } else if (active && hovered(option)) {
+      fill = blend(fill, color(option, QPalette::HighlightedText), 0.5);
+    }
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(fill);
+    painter.drawEllipse(dot);
+    if (focused(option)) {
+      const qreal inset = metrics.px(2.0);
+      painter.setPen(QPen(color(option, QPalette::Accent), hairline(painter)));
+      painter.setBrush(Qt::NoBrush);
+      painter.drawEllipse(dot.adjusted(-inset, -inset, inset, inset));
+    }
+  }
+  painter.restore();
+}
+
+void draw_radio_indicator(QPainter &painter, const QStyleOption &option) {
   const bool checked = option.state.testFlag(QStyle::State_On);
   const bool partial = option.state.testFlag(QStyle::State_NoChange);
   QColor border = color(option, QPalette::Midlight);
-  if (focused(option) || hovered(option) || checked || partial) {
+  if (keyboard_focused(option) || hovered(option) || checked || partial) {
     border = color(option, QPalette::Accent);
   }
   const QColor fill = surface_color(option, !checked && !partial);
-  rounded_surface(painter, option.rect, fill, border,
-                  radio ? option.rect.height() * 0.5 : metrics.px(3.0));
+  rounded_surface(painter, option.rect, fill, border, option.rect.height() * 0.5);
   if (!checked && !partial) {
     return;
   }
@@ -210,33 +380,12 @@ void draw_indicator(QPainter &painter, const QStyleOption &option,
   painter.setRenderHint(QPainter::Antialiasing);
   const QRectF bounds(option.rect);
   const QColor mark = color(option, QPalette::Accent);
-  if (radio) {
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(mark);
-    painter.drawEllipse(bounds.adjusted(bounds.width() * 0.29,
-                                        bounds.height() * 0.29,
-                                        -bounds.width() * 0.29,
-                                        -bounds.height() * 0.29));
-  } else {
-    QPen pen(mark, std::max<qreal>(hairline(painter), metrics.px(1.6)));
-    pen.setCapStyle(Qt::RoundCap);
-    pen.setJoinStyle(Qt::RoundJoin);
-    painter.setPen(pen);
-    painter.setBrush(Qt::NoBrush);
-    QPainterPath path;
-    if (partial) {
-      path.moveTo(bounds.left() + bounds.width() * 0.27, bounds.center().y());
-      path.lineTo(bounds.right() - bounds.width() * 0.27, bounds.center().y());
-    } else {
-      path.moveTo(bounds.left() + bounds.width() * 0.24,
-                   bounds.top() + bounds.height() * 0.51);
-      path.lineTo(bounds.left() + bounds.width() * 0.43,
-                   bounds.top() + bounds.height() * 0.70);
-      path.lineTo(bounds.left() + bounds.width() * 0.77,
-                   bounds.top() + bounds.height() * 0.32);
-    }
-    painter.drawPath(path);
-  }
+  painter.setPen(Qt::NoPen);
+  painter.setBrush(mark);
+  painter.drawEllipse(bounds.adjusted(bounds.width() * 0.29,
+                                      bounds.height() * 0.29,
+                                      -bounds.width() * 0.29,
+                                      -bounds.height() * 0.29));
   painter.restore();
 }
 
@@ -249,6 +398,43 @@ void draw_arrow(QStyle::PrimitiveElement element, const QStyleOption &option,
   arrow.rect = QRect(0, 0, extent, extent);
   arrow.rect.moveCenter(rect.center());
   style.drawPrimitive(element, &arrow, &painter, widget);
+}
+
+qreal centered_text_offset(const QFont &source_font, const QRect &rect,
+                           QStringView text) {
+  QString visible;
+  visible.reserve(text.size());
+  for (qsizetype index = 0; index < text.size(); ++index) {
+    if (text[index] != QLatin1Char('&')) {
+      visible += text[index];
+    } else if (index + 1 < text.size() &&
+               text[index + 1] == QLatin1Char('&')) {
+      visible += QLatin1Char('&');
+      ++index;
+    }
+  }
+  if (visible.isEmpty()) {
+    return 0.0;
+  }
+  QFont font(source_font);
+  font.setPointSizeF(QFontInfo(source_font).pointSizeF());
+  const QFontMetricsF metrics(font);
+  const QRectF row(rect);
+  const QRectF line = metrics.boundingRect(
+      row, Qt::AlignVCenter | Qt::TextSingleLine | Qt::TextShowMnemonic,
+      text.toString());
+  const QRectF ink = metrics.tightBoundingRect(visible);
+  const qreal baseline = line.top() + metrics.ascent();
+  return row.center().y() - (baseline + ink.center().y());
+}
+
+qreal centered_menu_text_offset(const QStyleOptionMenuItem &option,
+                                QStringView text) {
+  QFont font(option.font);
+  if (option.menuItemType == QStyleOptionMenuItem::DefaultItem) {
+    font.setBold(true);
+  }
+  return centered_text_offset(font, option.rect, text);
 }
 
 } // namespace
@@ -274,6 +460,11 @@ bool qt_draw_application_primitive(
     return false;
   }
   switch (element) {
+  case QStyle::PE_IndicatorDockWidgetResizeHandle:
+    painter->fillRect(option->rect,
+                      color(*option, hovered(*option) ? QPalette::Light
+                                                     : QPalette::Mid));
+    return true;
   case QStyle::PE_PanelButtonCommand:
   case QStyle::PE_PanelButtonTool: {
     const auto *button = qstyleoption_cast<const QStyleOptionButton *>(option);
@@ -282,8 +473,7 @@ bool qt_draw_application_primitive(
         tool_button != nullptr &&
         qobject_cast<const QToolBar *>(widget->parentWidget()) != nullptr;
     QStyleOption face = menu_glyph_option(*option, widget);
-    if (tool_button != nullptr && tool_button->isCheckable() &&
-        !face.state.testFlag(QStyle::State_KeyboardFocusChange)) {
+    if (!face.state.testFlag(QStyle::State_KeyboardFocusChange)) {
       face.state.setFlag(QStyle::State_HasFocus, false);
     }
     const bool flat = option->state.testFlag(QStyle::State_AutoRaise) ||
@@ -307,19 +497,22 @@ bool qt_draw_application_primitive(
   case QStyle::PE_FrameLineEdit: {
     const auto *frame = qstyleoption_cast<const QStyleOptionFrame *>(option);
     if (frame != nullptr && frame->lineWidth == 0) {
-      if (element == QStyle::PE_PanelLineEdit) {
+      if (element == QStyle::PE_PanelLineEdit &&
+          (widget == nullptr ||
+           !widget->property(kQtParentPaintedEditorSurfaceProperty).toBool())) {
         painter->fillRect(option->rect, surface_color(*option, true));
       }
       return true;
     }
-    draw_surface(*painter, *option, metrics, true);
+    draw_surface(*painter, *option, metrics, true, false, widget);
     return true;
   }
   case QStyle::PE_IndicatorCheckBox:
-    draw_indicator(*painter, menu_glyph_option(*option, widget), metrics, false);
+  case QStyle::PE_IndicatorItemViewItemCheck:
+    draw_check_switch(*painter, menu_glyph_option(*option, widget), metrics, widget);
     return true;
   case QStyle::PE_IndicatorRadioButton:
-    draw_indicator(*painter, menu_glyph_option(*option, widget), metrics, true);
+    draw_radio_indicator(*painter, menu_glyph_option(*option, widget));
     return true;
   case QStyle::PE_IndicatorTabClose: {
     const QWidget *tab_bar = qobject_cast<const QTabBar *>(widget);
@@ -361,6 +554,10 @@ bool qt_draw_application_primitive(
     // because their outer accent border is already present at rest.
     const auto *push_button = qobject_cast<const QPushButton *>(widget);
     const auto *tool_button = qobject_cast<const QToolButton *>(widget);
+    if (qobject_cast<const QAbstractButton *>(widget) != nullptr &&
+        !option->state.testFlag(QStyle::State_KeyboardFocusChange)) {
+      return true;
+    }
     if ((push_button != nullptr && !push_button->isFlat() &&
          !push_button->isDefault()) ||
         (tool_button != nullptr && !tool_button->autoRaise())) {
@@ -394,7 +591,11 @@ bool qt_draw_application_control(
     QStyle::ControlElement element, const QStyleOption *option,
     QPainter *painter, const QStyle &style, const QtUiScaleMetrics &metrics,
     const QWidget *widget) {
-  if (painter == nullptr || !qt_application_style_active(option)) {
+  if (painter == nullptr || option == nullptr) {
+    return false;
+  }
+  const bool themed = qt_application_style_active(option);
+  if (!themed && element != QStyle::CE_DockWidgetTitle) {
     return false;
   }
   switch (element) {
@@ -403,12 +604,26 @@ bool qt_draw_application_control(
     if (dock == nullptr) {
       return false;
     }
+    const auto *dock_widget = qobject_cast<const QDockWidget *>(widget);
+    const QIcon icon = dock_widget != nullptr
+                           ? qt_dock_title_panel_icon(
+                                 *dock_widget, dock->palette, color_group(*dock))
+                           : QIcon{};
+    const auto *proxy = qobject_cast<const QProxyStyle *>(&style);
+    if (!themed && (icon.isNull() || proxy == nullptr)) {
+      return false;
+    }
     // Keep Qt's title allocation, including button space and RTL placement.
     // Styling the title subcontrol with QSS bypasses its foreground/font rules.
     QRect text_rect = style.subElementRect(
         QStyle::SE_DockWidgetTitleBarText, dock, widget);
     QRect bounds = dock->rect;
     painter->save();
+    if (!themed) {
+      QStyleOptionDockWidget native_title(*dock);
+      native_title.title.clear();
+      proxy->QProxyStyle::drawControl(element, &native_title, painter, widget);
+    }
     if (dock->verticalTitleBar) {
       painter->translate(bounds.left(), bounds.bottom() + 1);
       painter->rotate(-90);
@@ -419,34 +634,40 @@ bool qt_draw_application_control(
     }
     // QDockWidget seeds its painter with a platform title font that does not
     // follow our application scale controller. Use the scaled widget font.
-    QFont title_font = widget != nullptr ? widget->font() : painter->font();
-    title_font.setWeight(QFont::DemiBold);
+    QFont title_font = themed && widget != nullptr ? widget->font() : painter->font();
+    if (themed) {
+      title_font.setWeight(QFont::DemiBold);
+    }
     const QFontMetrics title_metrics(title_font);
     QRect logical_text = QStyle::visualRect(dock->direction, bounds, text_rect);
     const int inset = metrics.px(2);
-    const int shoulder_space = metrics.px(16);
-    logical_text.adjust(inset, 0, -shoulder_space, 0);
+    logical_text.adjust(inset, 0, -inset, 0);
+    if (themed) {
+      painter->fillRect(bounds, color(*dock, QPalette::AlternateBase));
+      const qreal edge = hairline(*painter);
+      painter->fillRect(QRectF(bounds.left(), bounds.bottom() + 1 - edge,
+                               bounds.width(), edge),
+                         color(*dock, QPalette::Mid));
+    }
+    if (!icon.isNull()) {
+      const int extent = std::max(0, std::min(
+          {metrics.px(16), logical_text.height(), logical_text.width()}));
+      const QRect logical_icon(logical_text.left(),
+          logical_text.top() + (logical_text.height() - extent) / 2,
+          extent, extent);
+      icon.paint(painter, QStyle::visualRect(dock->direction, bounds, logical_icon),
+                 Qt::AlignCenter, QIcon::Normal);
+      logical_text.setLeft(logical_text.left() + extent + metrics.px(6));
+    }
     const QString title = title_metrics.elidedText(
         dock->title, Qt::ElideRight, std::max(0, logical_text.width()));
-    const int tab_width = std::clamp(
-        logical_text.left() - bounds.left() +
-            title_metrics.horizontalAdvance(title) + shoulder_space,
-        0, bounds.width());
-    const QRect tab = QStyle::visualRect(
-        dock->direction, bounds,
-        QRect(bounds.topLeft(), QSize(tab_width, bounds.height())));
-    painter->fillRect(bounds, color(*dock, QPalette::Window));
-    draw_attached_tab(*painter, QRectF(tab), color(*dock, QPalette::Button),
-                      color(*dock, QPalette::Midlight), metrics,
-                      dock->direction, false);
-    const qreal edge = hairline(*painter);
-    painter->fillRect(QRectF(bounds.left(), bounds.bottom() + 1 - edge,
-                             bounds.width(), edge),
-                       color(*dock, QPalette::Button));
     text_rect = QStyle::visualRect(dock->direction, bounds, logical_text);
     painter->setFont(title_font);
-    painter->setPen(color(*dock, QPalette::Text));
+    painter->setPen(color(*dock, themed ? QPalette::Text : QPalette::WindowText));
     painter->setClipRect(text_rect, Qt::IntersectClip);
+    if (!icon.isNull()) {
+      painter->translate(0.0, centered_text_offset(title_font, text_rect, title));
+    }
     painter->drawText(text_rect,
                      QStyle::visualAlignment(dock->direction,
                                              Qt::AlignLeft | Qt::AlignVCenter) |
@@ -491,19 +712,76 @@ bool qt_draw_application_control(
     // transparent native highlight leaves our rounded selection intact while
     // retaining selected icon modes and native foreground state handling.
     QStyleOptionMenuItem label(*item);
+    if (label.menuHasCheckableItems) {
+      label.maxIconWidth = std::max(
+          label.maxIconWidth, metrics.px(kQtCheckSwitchWidth + 12));
+    }
+    const bool exclusive = item->checkType == QStyleOptionMenuItem::Exclusive;
+    if (exclusive) {
+      // Fusion derives its radio dot from the icon column. Keep a small choice
+      // marker independent of the wider column required by boolean switches.
+      label.checkType = item->icon.isNull() ? QStyleOptionMenuItem::NotCheckable
+                                          : QStyleOptionMenuItem::NonExclusive;
+    }
     label.palette.setCurrentColorGroup(color_group(*item));
     label.palette.setColor(QPalette::Highlight, QColor(0, 0, 0, 0));
     const qsizetype tab = label.text.indexOf(QLatin1Char('\t'));
+    if (tab >= 0) {
+      label.text.truncate(tab);
+    }
+    QStyleOptionMenuItem chrome(label);
+    chrome.text.clear();
+    proxy->QProxyStyle::drawControl(element, &chrome, painter, widget);
+
+    // Keep native horizontal text layout and glyph geometry. Center only the
+    // visible text ink; the font line box contains unused descent and leading.
+    QStyleOptionMenuItem text(label);
+    text.icon = QIcon{};
+    text.checkType = QStyleOptionMenuItem::NotCheckable;
+    text.checked = false;
+    if (text.menuItemType == QStyleOptionMenuItem::SubMenu) {
+      text.menuItemType = QStyleOptionMenuItem::Normal;
+    }
+    const auto draw_centered_text = [&](const QStyleOptionMenuItem &text_option,
+                                        QStringView visible_text) {
+      painter->save();
+      painter->setClipRect(item->rect, Qt::IntersectClip);
+      painter->translate(0.0,
+                          centered_menu_text_offset(text_option, visible_text));
+      proxy->QProxyStyle::drawControl(element, &text_option, painter, widget);
+      painter->restore();
+    };
+    draw_centered_text(text, text.text);
+    if (exclusive && item->icon.isNull() &&
+        (item->checked || item->state.testFlag(QStyle::State_On) ||
+         item->state.testFlag(QStyle::State_Sunken))) {
+      const int extent = metrics.px(5);
+      QRect column(item->rect.topLeft(),
+                   QSize(std::max(label.maxIconWidth, metrics.px(26)),
+                         item->rect.height()));
+      column.translate(metrics.px(4), 0);
+      const QRect visual_column =
+          QStyle::visualRect(item->direction, item->rect, column);
+      const QPointF center(QRectF(visual_column).center().x(),
+                            QRectF(item->rect).center().y());
+      const QRectF marker(center.x() - extent * 0.5,
+                           center.y() - extent * 0.5, extent, extent);
+      painter->save();
+      painter->setRenderHint(QPainter::Antialiasing);
+      painter->setPen(Qt::NoPen);
+      painter->setBrush(color(*item, item->state.testFlag(QStyle::State_Selected)
+                                        ? QPalette::HighlightedText
+                                        : QPalette::WindowText));
+      painter->drawEllipse(marker);
+      painter->restore();
+    }
     if (tab < 0) {
-      proxy->QProxyStyle::drawControl(element, &label, painter, widget);
       return true;
     }
-    label.text.truncate(tab);
-    proxy->QProxyStyle::drawControl(element, &label, painter, widget);
 
     // A separate native pass tints only the shortcut column, without copying
     // Fusion's private column constants or drawing icons and checks twice.
-    QStyleOptionMenuItem shortcut(label);
+    QStyleOptionMenuItem shortcut(text);
     shortcut.text = item->text.mid(tab);
     shortcut.icon = QIcon{};
     shortcut.checkType = QStyleOptionMenuItem::NotCheckable;
@@ -512,7 +790,22 @@ bool qt_draw_application_control(
     const QColor muted = color(*item, QPalette::PlaceholderText);
     shortcut.palette.setColor(QPalette::Text, muted);
     shortcut.palette.setColor(QPalette::HighlightedText, muted);
-    proxy->QProxyStyle::drawControl(element, &shortcut, painter, widget);
+    draw_centered_text(shortcut, QStringView(item->text).mid(tab + 1));
+    return true;
+  }
+  case QStyle::CE_PushButtonLabel: {
+    const auto *button = qstyleoption_cast<const QStyleOptionButton *>(option);
+    const auto *proxy = qobject_cast<const QProxyStyle *>(&style);
+    if (button == nullptr || enabled(*button) || proxy == nullptr ||
+        widget == nullptr ||
+        !widget->property(kQtMutedDisabledButtonTextProperty).toBool()) {
+      return false;
+    }
+    QStyleOptionButton label(*button);
+    label.palette.setCurrentColorGroup(QPalette::Disabled);
+    label.palette.setColor(QPalette::Disabled, QPalette::ButtonText,
+                            qt_muted_disabled_button_text_color(button->palette, true));
+    proxy->QProxyStyle::drawControl(element, &label, painter, widget);
     return true;
   }
   case QStyle::CE_PushButton: {
@@ -551,89 +844,43 @@ bool qt_draw_application_control(
     if (tab == nullptr || tab->shape > QTabBar::RoundedEast) {
       return false;
     }
-    const bool selected = option->state.testFlag(QStyle::State_Selected);
-    const bool connected_surface =
-        tab->shape == QTabBar::RoundedNorth && widget != nullptr &&
-        widget->property(kQtConnectedTabSurfaceProperty).toBool();
-    const bool dock_tab = qobject_cast<const QTabBar *>(widget) != nullptr &&
-                          qobject_cast<const QMainWindow *>(
-                              widget->parentWidget()) != nullptr &&
-                          !widget->property(kQtConnectedTabSurfaceProperty)
-                               .toBool();
-    if (dock_tab) {
-      painter->save();
-      painter->fillRect(tab->rect, color(*tab, QPalette::Window));
-      QRectF bounds(tab->rect);
-      // Use the same open-bottom profile in each native dock-tab position.
-      switch (tab->shape) {
-      case QTabBar::RoundedSouth:
-        painter->translate(bounds.left(), bounds.top() + bounds.height());
-        painter->scale(1.0, -1.0);
-        bounds.moveTopLeft(QPointF{});
-        break;
-      case QTabBar::RoundedWest:
-        painter->translate(bounds.left(), bounds.top() + bounds.height());
-        painter->rotate(-90.0);
-        bounds = QRectF(0, 0, bounds.height(), bounds.width());
-        break;
-      case QTabBar::RoundedEast:
-        painter->translate(bounds.left() + bounds.width(), bounds.top());
-        painter->rotate(90.0);
-        bounds = QRectF(0, 0, bounds.height(), bounds.width());
-        break;
-      default:
-        break;
-      }
-      draw_attached_tab(*painter, bounds,
-                      selected || hovered(*tab)
-                          ? color(*tab, QPalette::Button)
-                          : color(*tab, QPalette::AlternateBase),
-                      color(*tab, selected ? QPalette::Midlight : QPalette::Mid),
-                      metrics, tab->direction, false);
-      painter->restore();
-      return true;
+    const bool selected = tab->state.testFlag(QStyle::State_Selected);
+    painter->save();
+    QRectF bounds(tab->rect);
+    // Normalize each native tab position to a horizontal strip. Qt still owns
+    // label rotation, close-button geometry, hit testing and navigation.
+    switch (tab->shape) {
+    case QTabBar::RoundedSouth:
+      painter->translate(bounds.left(), bounds.top() + bounds.height());
+      painter->scale(1.0, -1.0);
+      bounds.moveTopLeft(QPointF{});
+      break;
+    case QTabBar::RoundedWest:
+      painter->translate(bounds.left(), bounds.top() + bounds.height());
+      painter->rotate(-90.0);
+      bounds = QRectF(0, 0, bounds.height(), bounds.width());
+      break;
+    case QTabBar::RoundedEast:
+      painter->translate(bounds.left() + bounds.width(), bounds.top());
+      painter->rotate(90.0);
+      bounds = QRectF(0, 0, bounds.height(), bounds.width());
+      break;
+    default:
+      break;
     }
-    const QColor fill =
-        selected && connected_surface
-            ? color(*option, QPalette::AlternateBase)
-            : selected || hovered(*option)
-                  ? surface_color(*option, false)
-                  : color(*option, QPalette::Window);
-    QRect surface = option->rect;
-    if (selected && connected_surface) {
-      // Native tab geometry may reserve a base overlap. Fill through that
-      // space so the selected tab joins the shared content surface below.
-      surface.setBottom(widget->rect().bottom());
-    }
-    if (connected_surface) {
-      painter->fillRect(surface, color(*tab, QPalette::Window));
-      draw_attached_tab(*painter, QRectF(surface), fill,
-                        color(*tab, selected || hovered(*tab)
-                                        ? QPalette::Midlight : QPalette::Mid),
-                        metrics, tab->direction, true);
-      return true;
-    }
-    painter->fillRect(surface, fill);
-    if (selected && !connected_surface) {
-      const QRectF bounds(option->rect);
-      const qreal width = std::max(hairline(*painter), metrics.px(2.0));
-      QRectF stripe;
-      switch (tab->shape) {
-      case QTabBar::RoundedSouth:
-        stripe = {bounds.left(), bounds.top(), bounds.width(), width};
-        break;
-      case QTabBar::RoundedWest:
-        stripe = {bounds.right() - width, bounds.top(), width, bounds.height()};
-        break;
-      case QTabBar::RoundedEast:
-        stripe = {bounds.left(), bounds.top(), width, bounds.height()};
-        break;
-      default:
-        stripe = {bounds.left(), bounds.bottom() - width, bounds.width(), width};
-        break;
-      }
-      painter->fillRect(stripe, color(*option, QPalette::Accent));
-    }
+    painter->fillRect(bounds, color(*tab, selected ? QPalette::AlternateBase
+                                      : hovered(*tab) ? QPalette::Button
+                                                      : QPalette::Window));
+    const qreal edge = hairline(*painter);
+    const qreal divider = tab->direction == Qt::RightToLeft
+                              ? bounds.left() : bounds.right() - edge;
+    painter->fillRect(QRectF(divider, bounds.top(), edge, bounds.height()),
+                      color(*tab, QPalette::Mid));
+    const qreal indicator = selected ? metrics.px(2.0) : edge;
+    painter->fillRect(QRectF(bounds.left(), bounds.bottom() - indicator,
+                             bounds.width(), indicator),
+                      color(*tab, selected ? QPalette::Accent : QPalette::Mid));
+    painter->restore();
     return true;
   }
   case QStyle::CE_ScrollBarSlider: {
@@ -664,6 +911,24 @@ bool qt_draw_application_complex_control(
     const QWidget *widget) {
   if (painter == nullptr || !qt_application_style_active(option)) {
     return false;
+  }
+  if (control == QStyle::CC_Slider) {
+    const auto *slider = qstyleoption_cast<const QStyleOptionSlider *>(option);
+    if (slider == nullptr ||
+        !(slider->subControls &
+          (QStyle::SC_SliderGroove | QStyle::SC_SliderHandle))) {
+      return false;
+    }
+    if (slider->subControls.testFlag(QStyle::SC_SliderTickmarks)) {
+      // A tick-only request bypasses this painter and delegates to Fusion.
+      QStyleOptionSlider ticks(*slider);
+      ticks.subControls = QStyle::SC_SliderTickmarks;
+      ticks.activeSubControls = QStyle::SC_None;
+      ticks.state.setFlag(QStyle::State_HasFocus, false);
+      style.drawComplexControl(control, &ticks, painter, widget);
+    }
+    draw_slider(*painter, *slider, style, metrics, widget);
+    return true;
   }
   if (control == QStyle::CC_ScrollBar) {
     const auto *scroll = qstyleoption_cast<const QStyleOptionSlider *>(option);
@@ -711,7 +976,7 @@ bool qt_draw_application_complex_control(
       return false;
     }
     if (combo->frame && combo->subControls.testFlag(QStyle::SC_ComboBoxFrame)) {
-      draw_surface(*painter, *combo, metrics, combo->editable);
+      draw_surface(*painter, *combo, metrics, combo->editable, false, widget);
     }
     if (combo->subControls.testFlag(QStyle::SC_ComboBoxArrow)) {
       const QRect arrow = style.subControlRect(control, option,
@@ -729,7 +994,7 @@ bool qt_draw_application_complex_control(
     return false;
   }
   if (spin->frame && spin->subControls.testFlag(QStyle::SC_SpinBoxFrame)) {
-    draw_surface(*painter, *spin, metrics, true);
+    draw_surface(*painter, *spin, metrics, true, false, widget);
   }
   if (spin->buttonSymbols == QAbstractSpinBox::NoButtons) {
     return true;

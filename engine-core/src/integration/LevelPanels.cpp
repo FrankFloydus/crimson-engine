@@ -1,5 +1,12 @@
 #include "LevelPanels.h"
 #include "LevelSession.h"
+#include "native_scene_authoring.hpp"
+#include "native_scene_projection.hpp"
+#include "api/quader_editor_api.hpp"
+#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
+#include "ui/qt_viewport_panel.hpp"
+#include "ui/inspector_panel.hpp"
 #include "LevelViewportTools.h"
 #include "LevelDocumentPreviews.h"
 #include "browser/LevelAssetBrowser.h"
@@ -18,12 +25,13 @@
 #include "runtime/PlaySession.h"
 #include "scene/SceneExtraction.h"
 #include "scene/SceneOutlinerRows.h"
-#include "tools/ScenePanels.h"
+#include "tools/scene_inspector_context.h"
 #include "ui/qt_vulkan_composition_widget.hpp"
 #include "ui/qt_relative_pointer_input.hpp"
 #include "ui/qt_dock_title_presentation.hpp"
 #include "ui/qt_panel_section_header.hpp"
 #include "ui/qt_material_preview_surface.hpp"
+#include "ui/ui_panel.hpp"
 #include "core/scene_environment_catalog.hpp"
 #include "render/render_host.hpp"
 #include <nlohmann/json.hpp>
@@ -71,6 +79,7 @@
 #include <limits>
 #include <numbers>
 #include <unordered_map>
+#include <tuple>
 
 namespace crimson::integration {
 namespace {
@@ -111,13 +120,6 @@ PhysicalKeyCode scan(const QKeyEvent& event){
 }
 char32_t logicalKey(const QKeyEvent& event){switch(event.key()){case Qt::Key_Escape:return LogicalKeyCode::Escape;case Qt::Key_Tab:return LogicalKeyCode::Tab;case Qt::Key_F1:return LogicalKeyCode::F1;case Qt::Key_F5:return LogicalKeyCode::F5;case Qt::Key_F6:return LogicalKeyCode::F6;case Qt::Key_F7:return LogicalKeyCode::F7;default:break;}const auto text=event.text().toUcs4();return text.isEmpty()?LogicalKeyCode::Unknown:char32_t(text.front());}
 MouseButton button(Qt::MouseButton value){switch(value){case Qt::LeftButton:return MouseButton::Left;case Qt::RightButton:return MouseButton::Right;case Qt::MiddleButton:return MouseButton::Middle;case Qt::BackButton:return MouseButton::Back;case Qt::ForwardButton:return MouseButton::Forward;default:return MouseButton::None;}}
-class LevelTree final:public QTreeWidget {
-public:
-    using QTreeWidget::QTreeWidget;
-    std::function<void(EntityId)> reparent;
-protected:
-    void dropEvent(QDropEvent* event)override{if(reparent){auto* target=itemAt(event->position().toPoint());reparent(target?target->data(0,Qt::UserRole).toULongLong():NoEntity);event->acceptProposedAction();}}
-};
 class EngineCommandFilter final:public QObject {
 public:
     std::function<bool(QObject*,QEvent*)> callback;
@@ -180,178 +182,106 @@ private:
     std::uint32_t id_{};bool game_{},captured_{};QPoint restore_;QPointF last_;std::optional<QPointF> suppress_;
 };
 }
+
 struct LevelPanels::Impl {
-    QMainWindow& main;quader::RenderHost& host;std::function<void()> request;
-    LevelSession* session{};QMenu* menu{};QToolBar* toolbar{};
-    std::function<void(const std::filesystem::path&)> openProject;
-    QDockWidget *sceneDock{},*gameDock{},*treeDock{},*inspectorDock{},*assetsDock{};
-    LevelViewport *scene{},*game{};LevelTree* tree{};QtInspector* inspector{};QWidget* assets{};
-    std::unique_ptr<LevelAssetBrowser> browser;
-    std::unique_ptr<LevelPreferences> preferences;
-    QLineEdit* search{};QComboBox* filter{};SceneOutlinerProjection outliner;
-    std::unique_ptr<AssetDocuments> documents;
-    std::unique_ptr<LevelDocumentPreviews> documentPreviews;
-    std::unique_ptr<LevelVertexPaint> vertexPaint;
-    LevelViewportTools* viewportTools{};
-    CameraPilot pilot;
-    std::unique_ptr<CameraBookmarks> bookmarks;
-    QMenu *cameraMenu{},*bookmarkMenu{};
-    QPointer<QMenu> contextMenu;
-    QPoint contextPosition;
-    bool autoPlayContext{};
+    QMainWindow& main;quader::RenderHost& host;quader::QuaderEditorApi& editor;quader::ProjectSession& project;
+    std::function<void()> request,beforePlay;std::function<void(quader::SceneDocument&)> observeNativeAssets;
+    LevelSession* session{};std::unique_ptr<NativeSceneAuthoring> authoring;
+    QMenu* menu{};QMenu* ownedCreateMenu{};QToolBar* toolbar{};QDockWidget* gameDock{};LevelViewport* game{};QtInspector* inspector{};
+    std::unique_ptr<LevelAssetBrowser> browser;std::unique_ptr<LevelPreferences> preferences;
+    std::unique_ptr<AssetDocuments> documents;std::unique_ptr<LevelDocumentPreviews> documentPreviews;
     QPointer<quader::QtMaterialPreviewSurface> materialPreview;
-    QPointer<QWidget> materialPreviewContainer;
-    QPointer<QMainWindow> materialPreviewWindow;
-    QPointer<QStackedWidget> previewPages;
-    QPointer<MaterialImageView> previewImage;
+    QPointer<QWidget> materialPreviewContainer;QPointer<QMainWindow> materialPreviewWindow;
+    QPointer<QStackedWidget> previewPages;QPointer<MaterialImageView> previewImage;
     QPointer<QAction> previewTwoD,previewThreeD;
-    QPointer<QComboBox> previewMeshes;
-    QPointer<QComboBox> previewBlendLayer,previewBlendChannel;
+    QPointer<QComboBox> previewMeshes,previewBlendLayer,previewBlendChannel;
     std::shared_ptr<const MaterialAsset> preview_material;
-    MaterialPreviewMode previewMode{MaterialPreviewMode::ThreeD};
-    MaterialDocument* previewDocument{};
-    std::string previewAsset;
-    std::uint64_t previewRevision{};
-    std::optional<MaterialGraphPreviewTarget> preview_target;
+    MaterialPreviewMode previewMode{MaterialPreviewMode::ThreeD};MaterialDocument* previewDocument{};
+    std::string previewAsset;std::uint64_t previewRevision{};std::optional<MaterialGraphPreviewTarget> preview_target;
     QAction *playAction{},*pauseAction{},*stepAction{},*stopAction{};QLabel* status{};
-    Navigation navigation;Camera camera;
-    std::uint64_t shownRevision{UINT64_MAX},shownCatalog{UINT64_MAX};EntityId shownSelection{UINT64_MAX};
-    std::uint64_t shownGeneration{};
-    std::filesystem::path modelingManifest;std::string modelingProject,modelingScene;
-    bool updating{},preparing{},wasPlaying{},navigationVisible{};
-    struct FrameKey {
-        std::uint64_t epoch{},document{},generation{},revision{},pose{};
-        Mat4 view,projection;std::vector<EntityId> selection;EntityId primary{};
-        std::uint32_t sceneWidth{},sceneHeight{},gameWidth{},gameHeight{};
-        bool sceneVisible{},gameVisible{},playing{},paused{},paintEnabled{},paintHeld{},subdivisions{},grid{};
-        AntiAliasing antiAliasing{};ViewportAppearance appearance;std::uint16_t shadowResolution{};
-        bool operator==(const FrameKey&)const=default;
-    };
+    std::string commandStatus;
+    std::pair<std::string,std::string> pendingRagdoll;
+    EngineCommandFilter commands;bool preparing{},wasPlaying{},gameFocusPending{},viewportSelectionPending{};quader::SceneSession* presentedNative{};
     std::uint64_t updateEpoch{};
-    std::optional<FrameKey> preparedKey;
-    EngineCommandFilter commands;
-    Impl(QMainWindow& window,quader::RenderHost& render,std::function<void()> wake):main(window),host(render),request(std::move(wake)){
-        menu=main.menuBar()->addMenu("Engine");toolbar=new QToolBar("Engine Play",&main);toolbar->setObjectName("enginePlayToolbar");main.addToolBar(toolbar);
+    using PreparedKey=std::tuple<std::uint64_t,std::uint64_t,std::uint64_t,std::uint64_t,std::uint32_t,std::uint32_t,std::uint32_t,std::uint32_t,bool,bool,bool,Mat4,Mat4>;
+    std::optional<PreparedKey> preparedKey;
+    std::vector<QPointer<QAction>> createActions;
+
+    Impl(QMainWindow& window,quader::RenderHost& render,quader::QuaderEditorApi& api,quader::ProjectSession& owner,std::function<void()> wake)
+        :main(window),host(render),editor(api),project(owner),request(std::move(wake)){
+        menu=main.menuBar()->addMenu("Game");menu->setObjectName("gameMenu");
+        toolbar=new QToolBar("Play",&main);toolbar->setObjectName("enginePlayToolbar");main.addToolBar(toolbar);
         playAction=toolbar->addAction("Play");pauseAction=toolbar->addAction("Pause");stepAction=toolbar->addAction("Step");stopAction=toolbar->addAction("Stop");
-        QObject::connect(playAction,&QAction::triggered,toolbar,[this]{settleTools();inspector->finish();if(session&&session->play())focusGame();refresh();});
+        playAction->setObjectName("engineActionPlay");pauseAction->setObjectName("engineActionPause");stepAction->setObjectName("engineActionStep");stopAction->setObjectName("engineActionStop");
+        for(auto* action:{playAction,pauseAction,stepAction,stopAction})menu->addAction(action);
+        QObject::connect(playAction,&QAction::triggered,toolbar,[this]{launchPlay();});
         QObject::connect(pauseAction,&QAction::triggered,toolbar,[this]{if(session&&session->setPaused(!session->paused())&&!session->paused())focusGame();refresh();});
         QObject::connect(stepAction,&QAction::triggered,toolbar,[this]{if(session)session->step();refresh();});
-        QObject::connect(stopAction,&QAction::triggered,toolbar,[this]{detachTools();inspector->detach();if(session)session->stop();invalidate();});
-        const auto action=[this](const char* title,const std::function<void()>& command){auto* value=menu->addAction(title);QObject::connect(value,&QAction::triggered,menu,command);return value;};
-        action("Open Engine Project…",[this]{if(!openProject)return;const auto folder=QFileDialog::getExistingDirectory(&main,"Open Engine Project",session?QString::fromStdWString(session->projectRoot().wstring()):QString{});if(!folder.isEmpty())openProject(std::filesystem::path(folder.toStdWString()));});
-        action("New Level",[this]{if(session&&confirm())session->newLevel(true);invalidate();});
-        action("Open Level…",[this]{if(!session||!confirm())return;QStringList names;std::vector<std::string> ids;for(const auto& value:session->assets().catalog())if(value.kind==AssetKind::Scene){names.push_back(QString::fromStdString(value.name));ids.push_back(value.id);}bool accepted{};const auto selected=QInputDialog::getItem(&main,"Open Level","Level",names,0,false,&accepted);if(accepted)session->openLevel(ids.at(static_cast<std::size_t>(names.indexOf(selected))),true);invalidate();});
-        action("Save Level",[this]{save(false);});action("Save Level As…",[this]{save(true);});
-        action("Import Files…",[this]{if(!session)return;const auto files=QFileDialog::getOpenFileNames(&main,"Import Engine Assets");std::vector<std::filesystem::path> paths;for(const auto& file:files)paths.emplace_back(file.toStdWString());session->assets().queueImportFiles(paths);invalidate();});
-        action("Link Current Modeling Scene",[this]{if(session)session->linkModelingScene(modelingManifest,modelingProject,modelingScene);invalidate();});
-        menu->addSeparator();auto* add=menu->addMenu("Add");
-        const auto create=[this,add](const char* title,std::function<EntityId(SceneDocument&)> command){auto* value=add->addAction(title);QObject::connect(value,&QAction::triggered,add,[this,command]{if(session&&!session->playing()){const auto id=command(session->document());session->document().select({id});invalidate();}});};
-        create("Entity",[](auto& doc){return doc.createEmpty();});create("Player",[](auto& doc){return doc.createPlayer();});create("Point Light",[](auto& doc){return doc.createPointLight();});create("Spot Light",[](auto& doc){return doc.createSpotLight();});create("Directional Light",[](auto& doc){return doc.createDirectionalLight();});create("Environment",[](auto& doc){return doc.createEnvironment();});create("Camera",[](auto& doc){return doc.createCamera();});create("Collider",[](auto& doc){return doc.createCollider();});create("Navigation Volume",[](auto& doc){return doc.createNavigationVolume();});create("Box",[](auto& doc){return doc.createBox();});create("Sphere",[](auto& doc){return doc.createSphere();});
-        menu->addSeparator();action("Undo Level",[this]{if(session){inspector->finish();if(!documents||!documents->undoActive())session->undo();}invalidate();});action("Redo Level",[this]{if(session){inspector->finish();if(!documents||!documents->redoActive())session->redo();}invalidate();});
-        action("Collision Layers…",[this]{if(documents)documents->openCollisionLayers();});
-        cameraMenu=menu->addMenu("Camera");QObject::connect(cameraMenu,&QMenu::aboutToShow,cameraMenu,[this]{populateCameras();});
-        bookmarkMenu=menu->addMenu("Camera Bookmarks");QObject::connect(bookmarkMenu,&QMenu::aboutToShow,bookmarkMenu,[this]{populateBookmarks();});
-        auto* outlinerContent=new QWidget;auto* outlinerLayout=new QVBoxLayout(outlinerContent);outlinerLayout->setContentsMargins(4,4,4,4);
-        auto* searchRow=new QHBoxLayout;search=new QLineEdit;search->setPlaceholderText("Search entities");filter=new QComboBox;
-        for(const auto value:SceneOutlinerFilters)filter->addItem(sceneOutlinerFilterName(value),int(value));
-        searchRow->addWidget(search,1);searchRow->addWidget(filter);outlinerLayout->addLayout(searchRow);
-        tree=new LevelTree;tree->setHeaderHidden(true);tree->setSelectionMode(QAbstractItemView::ExtendedSelection);tree->setDragDropMode(QAbstractItemView::InternalMove);outlinerLayout->addWidget(tree);
-        inspector=new QtInspector;browser=std::make_unique<LevelAssetBrowser>(main,request);assets=browser->widget();preferences=std::make_unique<LevelPreferences>(main,request);
-        scene=new LevelViewport(host,false);game=new LevelViewport(host,true);
-        viewportTools=new LevelViewportTools(*scene,request);
-        viewportTools->beforeInteraction=[this]{inspector->finish();if(session)session->cancelViewportRequest();};
-        vertexPaint=std::make_unique<LevelVertexPaint>(main,request);
-        viewportTools->additionalEvent=[this](QEvent& event){return vertexPaint&&vertexPaint->event(event,*scene);};
-        viewportTools->additionalPaint=[this](QPainter& painter){if(vertexPaint)vertexPaint->paint(painter);};
-        auto* paintAction=action("Vertex Paint",[this]{if(!session||session->playing())return;settleTools();session->cancelViewportRequest();vertexPaint->setEnabled(!vertexPaint->enabled());if(request)request();});paintAction->setCheckable(true);
-        QObject::connect(menu,&QMenu::aboutToShow,menu,[this,paintAction]{paintAction->setEnabled(session&&!session->playing());paintAction->setChecked(vertexPaint->enabled());});
-        sceneDock=dock("EngineScene","Engine Scene",scene,Qt::RightDockWidgetArea);gameDock=dock("EngineGame","Game",game,Qt::RightDockWidgetArea);
-        treeDock=dock("EngineOutliner","Level Outliner",outlinerContent,Qt::LeftDockWidgetArea);inspectorDock=dock("EngineInspector","Level Inspector",inspector,Qt::RightDockWidgetArea);assetsDock=dock("EngineAssets","Engine Assets",assets,Qt::BottomDockWidgetArea);
-        main.tabifyDockWidget(sceneDock,gameDock);sceneDock->raise();gameDock->hide();
-        status=new QLabel(toolbar);status->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);status->setMinimumWidth(0);status->setMaximumWidth(520);toolbar->addWidget(status);
-        QObject::connect(tree,&QTreeWidget::itemSelectionChanged,tree,[this]{if(updating||!session)return;settleTools();inspector->finish();std::vector<EntityId> ids;for(auto* item:tree->selectedItems())ids.push_back(item->data(0,Qt::UserRole).toULongLong());session->editingDocument().select(std::move(ids));refreshInspector();});
-        QObject::connect(search,&QLineEdit::textChanged,tree,[this]{shownRevision=UINT64_MAX;refresh();});QObject::connect(filter,&QComboBox::currentIndexChanged,tree,[this]{shownRevision=UINT64_MAX;refresh();});
-        tree->reparent=[this](EntityId parent){if(session&&!session->playing()){inspector->finish();session->document().reparentSelection(parent);invalidate();}};
-        tree->setContextMenuPolicy(Qt::CustomContextMenu);QObject::connect(tree,&QWidget::customContextMenuRequested,tree,[this](QPoint point){if(!session||session->playing())return;QMenu context;auto* duplicate=context.addAction("Duplicate");auto* erase=context.addAction("Delete");context.addSeparator();auto* group=context.addAction("Group");auto* ungroup=context.addAction("Ungroup");auto* chosen=context.exec(tree->viewport()->mapToGlobal(point));inspector->finish();if(chosen==duplicate)session->document().duplicateSelection();else if(chosen==erase)session->document().eraseSelection();else if(chosen==group)session->document().groupSelection();else if(chosen==ungroup)session->document().ungroupSelection();invalidate();});
-        browser->setPrepareCommand([this]{if(!session||session->playing()||QApplication::activeModalWidget())return false;settleTools();inspector->finish();if(documents&&!documents->finishActive())return false;return !session->document().transactionActive();});
-        browser->setNavigateScene([this](const std::string& id,EntityId entity){if(!session||!confirm()||!session->openLevel(id,true))return;if(session->document().scene().contains(entity))session->document().select({entity});sceneDock->show();sceneDock->raise();scene->setFocus(Qt::OtherFocusReason);invalidate();});
-        vertexPaint->setThumbnailProvider(qtThumbnail);
-        action("Preferences…",[this]{preferences->open();});auto* navigationAction=action("Show Navigation",[this]{if(session){session->setNavigationVisible(!navigationVisible);navigationVisible=!navigationVisible;if(request)request();}});navigationAction->setCheckable(true);QObject::connect(menu,&QMenu::aboutToShow,menu,[this,navigationAction]{navigationAction->setChecked(navigationVisible);});
-        scene->dispatch=[this](const InputEvent& event){
-            navigation.handleEvent(event);if(!session)return;
-            if(event.type==InputEventType::SurfaceFocusLost||(event.type==InputEventType::KeyDown&&event.physical==PhysicalKeyCode::Escape))session->cancelViewportRequest();
-            if(event.type==InputEventType::MouseButtonDown&&event.button==MouseButton::Left&&!navigation.active()&&!vertexPaint->enabled()){
-                inspector->finish();
-                const auto pixels=scene->pixels();const Vec2 size{float(pixels.width()),float(pixels.height())};
-                const Vec2 pixel{event.position[0]*size[0]/std::max(1,scene->width()),event.position[1]*size[1]/std::max(1,scene->height())};
-                const auto flags=QApplication::keyboardModifiers();session->selectViewport(pixel,camera,size,flags.testFlag(Qt::ControlModifier),flags.testFlag(Qt::ShiftModifier));
-            }
-        };scene->changed=request;game->changed=request;
-        navigation.setMouseCapture([this](InputSurfaceId id,bool enabled){return id==scene->inputId()&&scene->capture(enabled);});
-        game->dispatch=[this](const InputEvent& event){if(session){if(event.type==InputEventType::MouseButtonDown)session->gameInput().setViewport(game->region(),session->playing()&&!session->paused(),!game->hasFocus()||QApplication::activeModalWidget());session->gameInput().handleEvent(event);}};
-        scene->dropped=[this](const std::vector<std::string>& ids,QPointF position){if(!session||session->playing())return;settleTools();inspector->finish();const auto pixels=scene->pixels();const Vec2 size{float(pixels.width()),float(pixels.height())};
-            const Vec2 pixel{float(position.x())*size[0]/std::max(1,scene->width()),float(position.y())*size[1]/std::max(1,scene->height())};session->dropAssets(ids,pixel,camera,size);if(request)request();};
-        game->composition->set_render_callback([this](const auto& target){return session&&host.render_engine_viewport(true,target);});scene->composition->set_render_callback([this](const auto& target){return session&&host.render_engine_viewport(false,target);});
-        commands.callback=[this](QObject*,QEvent* event){
-            if(!ownsInput()||!session||QApplication::activeModalWidget()||QApplication::activePopupWidget())return false;
-            if(preferences&&preferences->ownsInput())return false;
-            if(event->type()!=QEvent::ShortcutOverride&&event->type()!=QEvent::KeyPress)return false;
-            const auto& key=*static_cast<QKeyEvent*>(event);auto* focus=QApplication::focusWidget();
-            const bool text=qobject_cast<QLineEdit*>(focus)||qobject_cast<QAbstractSpinBox*>(focus);
-            const bool saveKey=key.matches(QKeySequence::Save),saveAs=key.matches(QKeySequence::SaveAs),undo=key.matches(QKeySequence::Undo),redo=key.matches(QKeySequence::Redo);
-            if(text&&!saveKey&&!saveAs)return false;
-            const bool start=!text&&key.key()==Qt::Key_P&&key.modifiers()==Qt::NoModifier;
-            const bool stop=!text&&key.key()==Qt::Key_Escape&&key.modifiers()==Qt::ShiftModifier;
-            const bool pause=!text&&key.key()==Qt::Key_F6,step=!text&&key.key()==Qt::Key_F7;
-            const bool erase=!text&&key.key()==Qt::Key_Delete&&key.modifiers()==Qt::NoModifier;
-            const bool focusSelection=!text&&key.key()==Qt::Key_F&&key.modifiers()==Qt::NoModifier&&scene->hasFocus();
-            const bool playHere=!text&&key.key()==Qt::Key_F5&&key.modifiers()==Qt::ShiftModifier&&scene->hasFocus();
-            if(!saveKey&&!saveAs&&!undo&&!redo&&!start&&!stop&&!pause&&!step&&!erase&&!focusSelection&&!playHere)return false;
-            if(event->type()==QEvent::ShortcutOverride){event->accept();return true;}
-            if(key.isAutoRepeat())return true;
-            settleTools();
-            if(saveKey||saveAs)save(saveAs);
-            else if(undo){inspector->finish();if(!documents||!documents->undoActive())session->editingDocument().undo();invalidate();}
-            else if(redo){inspector->finish();if(!documents||!documents->redoActive())session->editingDocument().redo();invalidate();}
-            else if(stop)stopAction->trigger();
-            else if(focusSelection)this->focusSelection();
-            else if(playHere)requestContext(scene->mapFromGlobal(QCursor::pos()),true);
-            else if(!navigation.active()){if(start)playAction->trigger();else if(pause)pauseAction->trigger();else if(step)stepAction->trigger();else if(erase){inspector->finish();if(browser->ownsInput())browser->requestDeletion(session->assets().browserSelection().ids());else session->editingDocument().eraseSelection();invalidate();}}
-            return true;
-        };
-        QApplication::instance()->installEventFilter(&commands);
-        camera.position={6,4,8};camera.target={0,1,0};refresh();
-    }
-    ~Impl(){QApplication::instance()->removeEventFilter(&commands);bind(nullptr);navigation.cancel();if(contextMenu)delete contextMenu;vertexPaint.reset();browser.reset();preferences.reset();game->composition->set_prepare_callback({});scene->composition->set_prepare_callback({});delete menu;delete toolbar;delete sceneDock;delete gameDock;delete treeDock;delete inspectorDock;delete assetsDock;}
-    void settleTools(){if(viewportTools)viewportTools->finish();if(vertexPaint)vertexPaint->finishForCommand();if(session)pilot.finishGesture(session->editingDocument(),camera);}
-    void detachTools(){settleTools();if(viewportTools)viewportTools->bind(nullptr,nullptr,nullptr);if(vertexPaint)vertexPaint->bind(nullptr,nullptr,nullptr);if(session)pilot.useEditorCamera(session->editingDocument(),camera);pilot=CameraPilot{};if(contextMenu)contextMenu->close();}
-    void focusSelection(){if(!session)return;settleTools();if(pilot.selectedCamera()&&!pilot.piloting())pilot.useEditorCamera(session->editingDocument(),camera);session->focusSelection(camera,float(std::max(1,scene->width()))/float(std::max(1,scene->height())),pilot.selectedCamera()!=NoEntity);if(pilot.piloting())pilot.apply(session->editingDocument(),camera,false);if(request)request();}
-    void populateCameras(){cameraMenu->clear();if(!session)return;auto& document=session->editingDocument();
-        auto* editor=cameraMenu->addAction("Editor Camera");editor->setCheckable(true);editor->setChecked(!pilot.selectedCamera());QObject::connect(editor,&QAction::triggered,cameraMenu,[this]{settleTools();pilot.useEditorCamera(session->editingDocument(),camera);if(request)request();});
-        auto* pilotAction=cameraMenu->addAction("Pilot Camera");pilotAction->setCheckable(true);pilotAction->setChecked(pilot.piloting());pilotAction->setEnabled(pilot.selectedCamera()&&!session->playing());QObject::connect(pilotAction,&QAction::triggered,cameraMenu,[this](bool enabled){settleTools();if(!pilot.setPiloting(session->editingDocument(),camera,enabled))status->setText(QString::fromStdString(pilot.status()));if(request)request();});
-        auto* capture=cameraMenu->addAction("Create Camera from View");capture->setEnabled(!session->playing());QObject::connect(capture,&QAction::triggered,cameraMenu,[this]{settleTools();inspector->finish();auto& document=session->document();const auto id=document.createCamera(camera,float(std::max(1,scene->width()))/float(std::max(1,scene->height())));if(id)document.select({id});invalidate();});
-        cameraMenu->addSeparator();for(const auto& record:document.scene().records())if(record.camera){const auto id=record.id,generation=document.documentGeneration();auto* select=cameraMenu->addAction(QString::fromStdString(record.name));select->setCheckable(true);select->setChecked(pilot.selectedCamera()==id);QObject::connect(select,&QAction::triggered,cameraMenu,[this,id,generation]{if(!session||session->editingDocument().documentGeneration()!=generation)return;settleTools();inspector->finish();pilot.selectCamera(session->editingDocument(),id,camera);if(request)request();});}
-    }
-    void bookmarkFailure(){if(bookmarks&&!bookmarks->status().empty())main.statusBar()->showMessage(QString::fromStdString(bookmarks->status()),10000);}
-    void populateBookmarks(){bookmarkMenu->clear();if(!session||!bookmarks)return;const auto key=session->document().assetId();
-        auto* add=bookmarkMenu->addAction("Add Bookmark…");add->setEnabled(!key.empty());add->setToolTip("Save the level before adding a camera bookmark.");QObject::connect(add,&QAction::triggered,bookmarkMenu,[this,key]{if(!session||session->document().assetId()!=key)return;settleTools();pilot.useEditorCamera(session->editingDocument(),camera);bool accepted{};const auto name=QInputDialog::getText(&main,"Camera Bookmark","Name",QLineEdit::Normal,{},&accepted);if(accepted&&!bookmarks->add(key,name.toStdString(),camera))bookmarkFailure();});
-        auto* reload=bookmarkMenu->addAction("Reload Bookmarks");QObject::connect(reload,&QAction::triggered,bookmarkMenu,[this]{if(bookmarks&&!bookmarks->reload())bookmarkFailure();});
-        bookmarkMenu->addSeparator();for(const auto& value:bookmarks->views(key)){const auto id=value.id;auto* entry=bookmarkMenu->addMenu(QString::fromStdString(value.name));auto* recall=entry->addAction("Recall");QObject::connect(recall,&QAction::triggered,entry,[this,key,id]{if(!session||session->document().assetId()!=key)return;if(const auto view=bookmarks->recall(key,id)){settleTools();navigation.cancel();pilot.useEditorCamera(session->editingDocument(),camera);camera=*view;if(request)request();}});
-            auto* update=entry->addAction("Update from View");QObject::connect(update,&QAction::triggered,entry,[this,key,id]{if(session&&session->document().assetId()==key){settleTools();pilot.useEditorCamera(session->editingDocument(),camera);if(!bookmarks->update(key,id,camera))bookmarkFailure();}});
-            auto* rename=entry->addAction("Rename…");const auto oldName=value.name;QObject::connect(rename,&QAction::triggered,entry,[this,key,id,oldName]{if(!session||session->document().assetId()!=key)return;bool accepted{};const auto name=QInputDialog::getText(&main,"Rename Bookmark","Name",QLineEdit::Normal,QString::fromStdString(oldName),&accepted);if(accepted&&!bookmarks->rename(key,id,name.toStdString()))bookmarkFailure();});
-            auto* remove=entry->addAction("Delete");QObject::connect(remove,&QAction::triggered,entry,[this,key,id]{if(session&&session->document().assetId()==key&&!bookmarks->remove(key,id))bookmarkFailure();});
+        QObject::connect(stopAction,&QAction::triggered,toolbar,[this]{if(session)session->stop();gameFocusPending=false;commandStatus.clear();if(authoring)authoring->synchronize();refresh();if(request)request();});
+        inspector=new QtInspector;inspector->setComponentsOnly(true);inspector->setObjectName("sceneEngineComponents");
+        browser=std::make_unique<LevelAssetBrowser>(main,request,false);preferences=std::make_unique<LevelPreferences>(main,request);
+        browser->setPrepareCommand([this]{return session&&!session->playing()&&!QApplication::activeModalWidget()&&settleTools()&&(!documents||documents->finishActive());});
+        game=new LevelViewport(host,true);gameDock=new QDockWidget("Game",&main);gameDock->setObjectName("GameViewport");gameDock->setWidget(game);
+        quader::install_palette_aware_dock_title_presentation(*gameDock);main.addDockWidget(Qt::RightDockWidgetArea,gameDock);gameDock->hide();menu->addAction(gameDock->toggleViewAction());
+        auto* settings=menu->addAction("Preferences…");QObject::connect(settings,&QAction::triggered,menu,[this]{preferences->open();});
+        status=new QLabel(toolbar);status->setObjectName("enginePlayStatus");status->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);status->setMaximumWidth(520);toolbar->addWidget(status);
+        game->changed=request;game->dispatch=[this](const InputEvent& event){if(session){if(event.type==InputEventType::MouseButtonDown)session->gameInput().setViewport(game->region(),session->playing()&&!session->paused(),!game->hasFocus()||QApplication::activeModalWidget());session->gameInput().handleEvent(event);}};
+        game->composition->set_render_callback([this](const auto& target){return session&&host.render_engine_viewport(true,target);});
+        auto* create=main.menuBar()->findChild<QMenu*>("menu_create");
+        if(!create){
+            ownedCreateMenu=new QMenu("Create",&main);ownedCreateMenu->setObjectName("menu_create");create=ownedCreateMenu;
+            const auto* object=main.menuBar()->findChild<QMenu*>("menu_object");
+            main.menuBar()->insertMenu(object?object->menuAction():menu->menuAction(),create);
         }
+        if(create){
+            if(!create->actions().empty())createActions.push_back(create->addSeparator());
+            const auto add=[this,create](const char* label,std::function<void(SceneDocument&)> command){auto* action=create->addAction(label);createActions.push_back(action);QObject::connect(action,&QAction::triggered,create,[this,command]{if(session&&!session->playing()&&settleTools()){if(authoring)authoring->synchronize();command(session->document());if(authoring)authoring->synchronize();refresh();if(request)request();}});};
+            add("Point Light",[](auto& scene){scene.createPointLight();});add("Directional Light",[](auto& scene){scene.createDirectionalLight();});add("Spot Light",[](auto& scene){scene.createSpotLight();});
+            add("Player",[](auto& scene){scene.createPlayer();});add("Enemy",[](auto& scene){scene.createEnemy();});add("Camera",[](auto& scene){scene.createCamera();});
+            add("Environment",[](auto& scene){scene.createEnvironment();});add("Collider",[](auto& scene){scene.createCollider();});add("Navigation Volume",[](auto& scene){scene.createNavigationVolume();});
+        }
+        commands.callback=[this](QObject* object,QEvent* event){
+            if(!session)return false;
+            if(event->type()==QEvent::Show){if(auto* widget=qobject_cast<QWidget*>(object);nativePane(widget))widget->setAcceptDrops(true);}
+            if(event->type()==QEvent::DragEnter||event->type()==QEvent::DragMove||event->type()==QEvent::Drop)return nativeDrop(object,event);
+            if(event->type()==QEvent::MouseButtonPress){auto* mouse=static_cast<QMouseEvent*>(event);auto* widget=qobject_cast<QWidget*>(object);if(mouse->button()==Qt::LeftButton&&!session->playing()&&authoring&&authoring->session()&&nativePane(widget)&&editor.mode().current()==quader::QuaderEditorMode::Object&&editor.viewports().selected_tool(nativePaneId(widget))==quader::ViewportToolId::Select){if(settleTools()){auto& native=*authoring->session();const auto pane=nativePaneId(widget);const auto camera=viewCamera(native,pane);const auto size=native.viewport_workspace().camera(pane).viewport_size();const auto point=localPoint(widget,mouse->position(),pane);viewportSelectionPending=session->selectViewport({float(point.x()),float(point.y())},camera,{size.x,size.y},mouse->modifiers().testFlag(Qt::ControlModifier),mouse->modifiers().testFlag(Qt::ShiftModifier));}}return false;}
+            if(!ownsInput()||QApplication::activeModalWidget()||QApplication::activePopupWidget())return false;
+            if(event->type()!=QEvent::ShortcutOverride&&event->type()!=QEvent::KeyPress)return false;
+            const auto& key=*static_cast<QKeyEvent*>(event);if(key.key()!=Qt::Key_Escape||key.modifiers()!=Qt::ShiftModifier)return false;
+            if(event->type()==QEvent::KeyPress&&!key.isAutoRepeat())stopAction->trigger();event->accept();return true;
+        };
+        QApplication::instance()->installEventFilter(&commands);refresh();
     }
-    void requestContext(QPointF local,bool playImmediately=false){if(!session||session->playing()||vertexPaint->enabled())return;settleTools();inspector->finish();const auto pixels=scene->pixels();const Vec2 size{float(pixels.width()),float(pixels.height())};const Vec2 pixel{float(local.x())*size[0]/std::max(1,scene->width()),float(local.y())*size[1]/std::max(1,scene->height())};contextPosition=scene->mapToGlobal(local.toPoint());autoPlayContext=playImmediately;session->requestViewportContext(pixel,camera,size);if(request)request();}
-    void processContext(){if(!session)return;const auto result=session->takeViewportContext();if(!result)return;const auto current=[this,result]{return session&&!session->playing()&&session->document().documentGeneration()==result->document&&session->document().scene().generation()==result->generation&&session->document().scene().revision()==result->revision;};
-        if(autoPlayContext){autoPlayContext=false;if(result->position&&current()){detachTools();inspector->finish();if(session->playFromHere(*result->position,result->camera))focusGame();}return;}
-        if(contextMenu)delete contextMenu;contextMenu=new QMenu(scene);auto* popup=contextMenu.data();auto* start=popup->addAction("Play From Here");start->setEnabled(result->position.has_value()&&session->document().scene().properties().playerCharacter!=NoEntity);QObject::connect(start,&QAction::triggered,popup,[this,result,current]{if(current()&&result->position){detachTools();inspector->finish();if(session->playFromHere(*result->position,result->camera))focusGame();}});
-        if(result->entity){popup->addSeparator();for(const auto* name:{"Duplicate","Delete","Focus"}){auto* action=popup->addAction(name);QObject::connect(action,&QAction::triggered,popup,[this,result,current,name]{if(!current()||session->document().transactionActive())return;settleTools();inspector->finish();session->document().select({result->entity});if(std::string_view(name)=="Duplicate")session->document().duplicateSelection();else if(std::string_view(name)=="Delete")session->document().eraseSelection();else focusSelection();invalidate();});}}
-        popup->popup(contextPosition);
+    ~Impl(){QApplication::instance()->removeEventFilter(&commands);bind(nullptr);for(const auto& action:createActions)if(action)delete action;delete ownedCreateMenu;delete inspector;delete menu;delete toolbar;delete gameDock;}
+    bool settleTools(){commandStatus.clear();if(!inspector->finish()){commandStatus=session&&!session->document().status().empty()?session->document().status():"Finish the active component edit before starting another command.";return false;}if(authoring&&!authoring->finish()){commandStatus=session&&!session->document().status().empty()?session->document().status():"The scene edit could not be accepted.";return false;}const auto result=editor.tools().activate("select");if(!result.ok())commandStatus=result.error_message();return result.ok();}
+    void launchPlay(){
+        if(!session)return;
+        try {
+            if(!settleTools()){refresh();if(request)request();return;}
+            if(authoring)authoring->synchronize();
+            if(beforePlay)beforePlay();
+            if(session->play()||session->playPending()){
+                gameDock->show();gameDock->raise();gameFocusPending=true;
+                if(session->playing())focusGame();
+            }else commandStatus=session->status().empty()?"Cannot enter Play.":session->status();
+        }catch(const std::exception& error){commandStatus=error.what();}
+        refresh();if(request)request();
     }
-    bool ownsInput()const{if((browser&&browser->ownsInput())||(preferences&&preferences->ownsInput()))return true;if(vertexPaint&&vertexPaint->ownsInput())return true;auto* focus=QApplication::focusWidget();if(!focus)return false;for(auto* widget:std::array<QWidget*,6>{sceneDock,gameDock,treeDock,inspectorDock,assetsDock,toolbar})if(widget&&(widget==focus||widget->isAncestorOf(focus)))return true;return false;}
+    bool ownsInput()const{if((browser&&browser->ownsInput())||(preferences&&preferences->ownsInput()))return true;auto* focus=QApplication::focusWidget();return focus&&((gameDock&&(gameDock==focus||gameDock->isAncestorOf(focus)))||(inspector&&(inspector==focus||inspector->isAncestorOf(focus))));}
     void focusGame(){if(!session||!session->playing()||session->paused())return;gameDock->show();gameDock->raise();gameDock->window()->activateWindow();game->setFocus(Qt::OtherFocusReason);session->gameInput().setViewport(game->region(),resolveGameCamera(session->presentationScene()).has_value(),false);session->gameInput().acquire();}
-    QDockWidget* dock(const char* key,const char* title,QWidget* content,Qt::DockWidgetArea area){auto* result=new QDockWidget(title,&main);result->setObjectName(key);result->setWidget(content);quader::install_palette_aware_dock_title_presentation(*result);main.addDockWidget(area,result);menu->addAction(result->toggleViewAction());return result;}
+    static QWidget* nativePane(QWidget* widget){for(auto* current=widget;current;current=current->parentWidget())if(current->objectName().startsWith("viewportPane_"))return current;return nullptr;}
+    static quader::ViewportPaneId nativePaneId(QWidget* widget){const auto* pane=nativePane(widget);const auto name=pane?pane->objectName():QString{};if(name.endsWith("top"))return quader::ViewportPaneId::Top;if(name.endsWith("front"))return quader::ViewportPaneId::Front;if(name.endsWith("side"))return quader::ViewportPaneId::Side;return quader::ViewportPaneId::Perspective;}
+    QPointF localPoint(QWidget* widget,QPointF point,quader::ViewportPaneId pane)const{if(!widget)return point;const auto suffix=QString::fromLatin1(pane==quader::ViewportPaneId::Top?"top":pane==quader::ViewportPaneId::Front?"front":pane==quader::ViewportPaneId::Side?"side":"perspective");if(auto* surface=main.findChild<QWidget*>("viewportSurfaceContainer_"+suffix))return QPointF(surface->mapFromGlobal(widget->mapToGlobal(point.toPoint())));return point;}
+    static Camera viewCamera(const quader::SceneSession& native,quader::ViewportPaneId pane){const auto& source=native.viewport_workspace().camera(pane);const auto pose=source.pose();const auto& state=source.state();Camera camera;camera.position={pose.eye.x,pose.eye.y,pose.eye.z};camera.target={pose.target.x,pose.target.y,pose.target.z};camera.up={pose.up.x,pose.up.y,pose.up.z};camera.fov=state.fov_degrees;camera.fovAxis=CameraFovAxis::Vertical;camera.nearPlane=state.near_plane;camera.farPlane=state.far_plane;camera.projection=state.projection==quader::ViewportProjection::Orthographic?CameraProjection::Orthographic:CameraProjection::Perspective;camera.orthographicHeight=state.orthographic_size;return camera;}
+    bool nativeDrop(QObject* object,QEvent* event){
+        auto* widget=qobject_cast<QWidget*>(object);if(!nativePane(widget)||session->playing()||!authoring||!authoring->session())return false;
+        auto* drop=static_cast<QDropEvent*>(event);if(!drop->mimeData()->hasFormat(QtAssetMime))return false;
+        if(event->type()!=QEvent::Drop){drop->acceptProposedAction();return true;}
+        if(!settleTools())return true;
+        try{std::vector<std::string> ids;for(const auto& item:nlohmann::json::parse(drop->mimeData()->data(QtAssetMime).toStdString()))if(!item.value("folder",false))ids.push_back(item.at("id").get<std::string>());
+            auto& native=*authoring->session();const auto pane=nativePaneId(widget);(void)editor.viewports().focus_pane(pane);const auto size=native.viewport_workspace().camera(pane).viewport_size();const auto point=localPoint(widget,drop->position(),pane);session->dropAssets(ids,{float(point.x()),float(point.y())},viewCamera(native,pane),{size.x,size.y});drop->acceptProposedAction();if(request)request();
+        }catch(const std::exception& error){main.statusBar()->showMessage(QString::fromUtf8(error.what()),10000);}return true;
+    }
     void releaseMaterialPreview(){previewDocument=nullptr;preview_target.reset();preview_material.reset();if(materialPreview){materialPreview->set_record_callback({});materialPreview->set_surface_changed_callback({});materialPreview->shutdown();}delete materialPreviewContainer.data();materialPreviewContainer=nullptr;materialPreview=nullptr;materialPreviewWindow=nullptr;previewPages=nullptr;previewImage=nullptr;previewTwoD=nullptr;previewThreeD=nullptr;previewMeshes=nullptr;previewBlendLayer=nullptr;previewBlendChannel=nullptr;previewAsset.clear();previewRevision=0;previewMode=MaterialPreviewMode::ThreeD;if(session)session->clearMaterialPreview();}
     void bindMaterialPreview(MaterialDocument* document,QMainWindow* window){
         // Losing focus retains the previously composed texture, but relinquishes
@@ -423,17 +353,9 @@ struct LevelPanels::Impl {
         }
         previewPages->setCurrentIndex(0);(void)materialPreview->render_frame();
     }
-    void bind(LevelSession* value){if(session==value)return;detachTools();inspector->detach();releaseMaterialPreview();documentPreviews.reset();documents.reset();if(browser)browser->bind(nullptr);bookmarks.reset();if(session)session->gameInput().setMouseCapture({});session=value;navigation.cancel();if(browser)browser->bind(session);inspector->setQuaderBridge(session?&session->modelingBridge():nullptr);inspector->setCollisionLayerNames(defaultCollisionLayerNames());if(session){bookmarks=std::make_unique<CameraBookmarks>(session->projectRoot());documents=std::make_unique<AssetDocuments>(main,*session,request);documentPreviews=std::make_unique<LevelDocumentPreviews>(*documents,*session,host,request);documents->setActiveMaterialChanged([this](MaterialDocument* document,QMainWindow* window){bindMaterialPreview(document,window);});session->gameInput().setMouseCapture([this](InputSurfaceId id,bool enabled){return id==game->inputId()&&game->capture(enabled);});vertexPaint->setQueries([this](const SceneDocument& document,EntityId id){return session->vertexPaintTargets(document,id);},[this](const SceneDocument& document){return session->vertexPaintSurfaces(document);});if(session->editorCamera())camera=*session->editorCamera();}invalidate();}
-    void invalidate(){shownRevision=UINT64_MAX;shownCatalog=UINT64_MAX;shownSelection=UINT64_MAX;preparedKey.reset();refresh();if(request)request();}
-    bool save(bool saveAs){if(!session)return true;settleTools();inspector->finish();session->document().setPreviewCamera(pilot.freeCamera().value_or(camera));std::string name;if(saveAs||session->document().assetId().empty()){bool accepted{};const auto value=QInputDialog::getText(&main,"Save Level","Name",QLineEdit::Normal,QString::fromStdString(session->document().displayName()),&accepted);if(!accepted||value.trimmed().isEmpty())return false;name=value.toStdString();}const auto result=session->save(name,saveAs);refresh();if(!result)QMessageBox::warning(&main,"Save Level",QString::fromStdString(session->status()));return result;}
-    bool confirm(){settleTools();if(session&&session->playing()){detachTools();inspector->detach();session->stop();}if(documents&&!documents->confirmClose())return false;if(!session||!session->document().dirty())return true;const auto& document=session->document();if(document.assetId().empty()&&document.scene().records().empty()&&document.history().size()==0)return true;const auto result=QMessageBox::question(&main,"Unsaved Level","Save changes to the level?",QMessageBox::Save|QMessageBox::Discard|QMessageBox::Cancel,QMessageBox::Save);if(result==QMessageBox::Discard)return true;return result==QMessageBox::Save&&save(false);}
-    void openAsset(const std::string& id){if(!session)return;const auto found=std::find_if(session->assets().catalog().begin(),session->assets().catalog().end(),[&](const auto& asset){return asset.id==id;});if(found==session->assets().catalog().end())return;if(found->kind==AssetKind::Scene){if(confirm())session->openLevel(id,true);}else if(documents)documents->open(found->kind,id);}
     void processBrowserActions(){if(!session||!browser)return;const auto actions=browser->takeActions();
-        if(actions.newScene&&confirm()){session->newLevel(true);invalidate();}
-        if(!actions.openScene.empty())openAsset(actions.openScene);
-        if(!actions.deleteScene.empty())browser->requestDeletion({actions.deleteScene});
         for(const auto& id:{actions.openMaterial,actions.openParticle,actions.openAnimation,actions.openRagdoll,actions.openDecal,actions.openNavigationAgentProfile,actions.openGameplayEffect})if(!id.empty())openAsset(id);
-        if(session->playing())return;
+        if(session->playing()){pendingRagdoll={};return;}
         const auto openCreated=[this](AssetKind kind,const std::string& id,const std::string& folder){if(id.empty())return;if(!folder.empty()){const std::array<std::string,1> ids{id};session->assets().browserCatalog().move(ids,folder,true);}browser->reveal(id);if(documents)documents->open(kind,id);};
         try {
             if(actions.createMaterial||actions.createBlendMaterial){settleTools();inspector->finish();const auto asset=actions.createBlendMaterial?session->assets().createBlendMaterial():session->assets().createMaterial();if(asset)openCreated(AssetKind::Material,asset->id,actions.materialFolder);}
@@ -441,75 +363,61 @@ struct LevelPanels::Impl {
             if(actions.createDecal){settleTools();inspector->finish();if(const auto asset=session->assets().createDecal())openCreated(AssetKind::Decal,asset->id,actions.decalFolder);}
             if(actions.createNavigationAgentProfile){settleTools();inspector->finish();if(const auto asset=session->assets().createNavigationAgentProfile())openCreated(AssetKind::NavigationAgentProfile,asset->id,actions.navigationAgentProfileFolder);}
             if(actions.createGameplayEffect){settleTools();inspector->finish();if(const auto asset=session->assets().createGameplayEffect())openCreated(AssetKind::GameplayEffect,asset->id,actions.gameplayEffectFolder);}
-            if(!actions.createRagdollModel.empty()){settleTools();inspector->finish();if(const auto asset=session->assets().createRagdoll(actions.createRagdollModel,{},actions.ragdollFolder))openCreated(AssetKind::Ragdoll,asset->id,{});}
+            if(!actions.createRagdollModel.empty()){if(!settleTools())return;pendingRagdoll={actions.createRagdollModel,actions.ragdollFolder};}
+            if(!pendingRagdoll.first.empty()){
+                auto& assets=session->assets();const auto model=assets.findModel(pendingRagdoll.first);
+                if(!model&&assets.modelLoading(pendingRagdoll.first)){main.statusBar()->showMessage("Preparing Ragdoll source…");if(request)request();}
+                else {
+                    const auto pending=std::exchange(pendingRagdoll,{});
+                    if(!model)throw std::runtime_error(assets.modelDiagnostic(pending.first).empty()?"Ragdoll source model is unavailable.":assets.modelDiagnostic(pending.first));
+                    if(!settleTools())return;
+                    if(const auto asset=assets.createRagdoll(pending.first,{},pending.second)){main.statusBar()->clearMessage();openCreated(AssetKind::Ragdoll,asset->id,{});}
+                }
+            }
         }catch(const std::exception& error){main.statusBar()->showMessage(QString::fromUtf8(error.what()),10000);}
     }
-    void refresh(){const bool enabled=session!=nullptr;toolbar->setEnabled(enabled);tree->setEnabled(enabled);inspector->setEnabled(enabled);assets->setEnabled(enabled);if(!session)return;
-        playAction->setEnabled(!session->playing()&&!session->playPending());stopAction->setEnabled(session->playing()||session->playPending());pauseAction->setEnabled(session->playing());pauseAction->setText(session->paused()?"Resume":"Pause");stepAction->setEnabled(session->playing()&&session->paused());status->setText(QString::fromStdString(session->status()));
-        auto& document=session->editingDocument();
-        if(shownGeneration!=document.documentGeneration()){if(!session->playing()&&session->editorCamera()){pilot.useEditorCamera(document,camera);camera=*session->editorCamera();}shownGeneration=document.documentGeneration();shownRevision=UINT64_MAX;shownSelection=UINT64_MAX;}
-        if(shownRevision!=session->revision()||shownSelection!=document.selection().primary){updating=true;const QSignalBlocker block(tree);tree->clear();outliner.synchronize(document.scene(),search->text().toStdString(),static_cast<SceneOutlinerFilter>(filter->currentData().toInt()));std::unordered_map<EntityId,QTreeWidgetItem*> rows;for(const auto& row:outliner.rows()){const auto& record=outliner.record(row.entity);auto* item=new QTreeWidgetItem(QStringList{QString::fromStdString(record.name)});item->setData(0,Qt::UserRole,QVariant::fromValue<qulonglong>(record.id));rows.emplace(record.id,item);}for(const auto& row:outliner.rows()){auto* item=rows.at(row.entity);const auto parent=rows.find(row.parent);if(parent!=rows.end())parent->second->addChild(item);else tree->addTopLevelItem(item);item->setSelected(std::find(document.selection().ids.begin(),document.selection().ids.end(),row.entity)!=document.selection().ids.end());if(outliner.filtered())item->setExpanded(true);}shownRevision=session->revision();shownSelection=document.selection().primary;updating=false;}
-        refreshInspector();if(documents)documents->update();updateMaterialPreview();
+
+    void bind(LevelSession* value){
+        if(session==value)return;inspector->detach();releaseMaterialPreview();documentPreviews.reset();documents.reset();authoring.reset();if(browser)browser->bind(nullptr);if(session)session->gameInput().setMouseCapture({});session=value;commandStatus.clear();pendingRagdoll={};gameFocusPending=wasPlaying=false;
+        if(browser)browser->bind(session);if(!session)return;
+        authoring=std::make_unique<NativeSceneAuthoring>(*session,project);authoring->set_retention_observer(observeNativeAssets);documents=std::make_unique<AssetDocuments>(main,*session,request);documentPreviews=std::make_unique<LevelDocumentPreviews>(*documents,*session,host,request);
+        documents->setActiveMaterialChanged([this](MaterialDocument* document,QMainWindow* window){bindMaterialPreview(document,window);});
+        session->gameInput().setMouseCapture([this](InputSurfaceId id,bool enabled){return id==game->inputId()&&game->capture(enabled);});refresh();
     }
-    void refreshInspector(){if(!session)return;if(auto* renderer=host.crimson_renderer()){inspector->setQuaderBridge(&session->modelingBridge());inspector->setCollisionLayerNames(defaultCollisionLayerNames());inspector->setNavigationPreview(&session->navigationProfile(),[this](const std::string& id){return session->navigationStatus(id);});inspector->synchronize(session->editingDocument(),session->assets(),*renderer);setMeshPaintSubdivisionQuery(session->editingDocument(),[this](const EntityRecord& record,std::uint32_t level,SceneMeshPaint& paint,std::string& diagnostic){return session->meshPaintSubdivision(record,level,paint,diagnostic);});}
-        const auto actions=inspector->takeActions();
-        for(const auto& id:{actions.openMaterial,actions.openParticle,actions.openAnimation,actions.openRagdoll,actions.openDecal,actions.openNavigationAgentProfile,actions.openGameplayEffect})if(!id.empty())openAsset(id);
-        if(!actions.createRagdollModel.empty())if(const auto asset=session->assets().createRagdoll(actions.createRagdollModel);asset&&documents)documents->open(AssetKind::Ragdoll,asset->id);
+    void openAsset(const std::string& id){if(!session||!documents)return;const auto& catalog=session->assets().catalog();const auto found=std::find_if(catalog.begin(),catalog.end(),[&](const auto& entry){return entry.id==id;});if(found!=catalog.end()&&found->kind!=AssetKind::Scene)documents->open(found->kind,id);}
+    void refreshInspector(){
+        if(!session||!authoring||!authoring->session()){inspector->hide();return;}
+        auto& native=authoring->session()->scene();const auto id=native.primary_selection();const auto target=session->nativeProjection().entity_id(native.uuid(id));
+        inspector->setVisible(target!=NoEntity);inspector->setEnabled(!session->playing());
+        if(target&&host.crimson_renderer()){inspector->setComponentsOnly(true,native.light(id)!=nullptr);inspector->setCollisionLayerNames(defaultCollisionLayerNames());inspector->setNavigationPreview(&session->navigationProfile(),[this](const std::string& asset){return session->navigationStatus(asset);});inspector->synchronize(session->document(),session->assets(),*host.crimson_renderer(),target);}
+        const auto actions=inspector->takeActions();for(const auto& asset:{actions.openMaterial,actions.openParticle,actions.openAnimation,actions.openRagdoll,actions.openDecal,actions.openNavigationAgentProfile,actions.openGameplayEffect})if(!asset.empty())openAsset(asset);
+        if(!actions.createRagdollModel.empty()&&!session->playing()){pendingRagdoll={actions.createRagdollModel,{}};if(request)request();}
         if(actions.playParticleEntity)session->replayParticle(actions.playParticleEntity);
-        if(session->playing()){if(actions.activateRagdollEntity)session->runtime().activateRagdoll(actions.activateRagdollEntity);if(actions.resetRagdollEntity)session->runtime().resetRagdoll(actions.resetRagdollEntity);}
-        if(const auto id=inspector->takeDecalPlacement())session->armDecalPlacement(id);
     }
+    void refresh(){toolbar->setEnabled(session!=nullptr);if(!session)return;playAction->setEnabled(!session->playing()&&!session->playPending());stopAction->setEnabled(session->playing()||session->playPending());pauseAction->setEnabled(session->playing());pauseAction->setText(session->paused()?"Resume":"Pause");stepAction->setEnabled(session->playing()&&session->paused());auto message=commandStatus.empty()?session->status():commandStatus;if(commandStatus.empty()&&session->playing()&&!resolveGameCamera(session->presentationScene()))message="No active Game camera. Create a Player or assign a Camera.";status->setText(QString::fromStdString(message));status->setToolTip(status->text());for(const auto& action:createActions)if(action)action->setEnabled(!session->playing());refreshInspector();if(documents)documents->update();updateMaterialPreview();}
 };
-LevelPanels::LevelPanels(QMainWindow& window,quader::RenderHost& host,std::function<void()> request):impl_(std::make_unique<Impl>(window,host,std::move(request))){
-    impl_->scene->composition->set_prepare_callback([this]{return prepareFrame();});impl_->game->composition->set_prepare_callback([this]{return prepareFrame();});
-}
+LevelPanels::LevelPanels(QMainWindow& window,quader::RenderHost& host,quader::QuaderEditorApi& editor,quader::ProjectSession& project,std::function<void()> request):impl_(std::make_unique<Impl>(window,host,editor,project,std::move(request))){impl_->game->composition->set_prepare_callback([this]{return prepareFrame();});}
 LevelPanels::~LevelPanels()=default;
 void LevelPanels::bind(LevelSession* value){impl_->bind(value);}
-void LevelPanels::setModelingSource(std::filesystem::path manifest,std::string project,std::string scene){impl_->modelingManifest=std::move(manifest);impl_->modelingProject=std::move(project);impl_->modelingScene=std::move(scene);}
-void LevelPanels::update(double seconds,bool active){
-    auto& state=*impl_;if(!state.session)return;
-    const auto changed=state.session->takeFileChanges();if(state.documents&&!changed.empty())state.documents->filesChanged(changed);
-    ++state.updateEpoch;
-    if(active&&state.session->playing()&&!state.wasPlaying)state.focusGame();
-    state.wasPlaying=state.session->playing();
-    auto& document=state.session->editingDocument();
-    state.viewportTools->bind(&document,&state.session->assets(),&state.camera);
-    state.vertexPaint->bind(&document,&state.session->assets(),state.host.crimson_renderer());
-    state.pilot.sync(document,state.camera);
-    state.scene->drain();state.game->drain();
-    auto region=state.scene->region();region.inputBlocked=state.viewportTools->active()||state.vertexPaint->interacting()||(state.pilot.selectedCamera()&&!state.pilot.piloting());
-    if(!active)state.navigation.cancel();
-    state.navigation.update(state.camera,region,float(seconds),false,state.pilot.selectedCamera()!=NoEntity);
-    if(state.pilot.piloting())state.pilot.apply(document,state.camera,state.navigation.active());
-    if(const auto click=state.navigation.consumeContextClick())state.requestContext(QPointF{(*click)[0],(*click)[1]});
-    state.viewportTools->synchronize(state.navigation.active()||state.session->playing()||state.pilot.gestureActive()||state.vertexPaint->enabled());
-    const auto size=state.scene->pixels();
-    state.vertexPaint->synchronize({state.camera.projectionMatrix(float(std::max(1,size.width()))/float(std::max(1,size.height())),ClipDepth::NegativeOneToOne)*state.camera.viewMatrix(),std::uint32_t(std::max(0,size.width())),std::uint32_t(std::max(0,size.height())),float(state.scene->width()),float(state.scene->height()),state.scene->underMouse(),state.scene->hasFocus(),!active||state.navigation.active()||state.session->playing()||state.pilot.gestureActive()},state.host.completed_frame());
-    state.session->setVertexPaintState(state.vertexPaint->enabled(),state.vertexPaint->surfaceHeld(),state.vertexPaint->showSubdivisions());
-    if(!state.session->playing())state.session->rememberEditorCamera(state.pilot.freeCamera().value_or(state.camera));
-    state.processContext();
-    auto& input=state.session->gameInput();
-    input.setViewport(state.game->region(),state.session->playing()&&!state.session->paused()&&resolveGameCamera(state.session->presentationScene()).has_value(),
-        !active||!state.game->hasFocus()||QApplication::activeModalWidget());
-    input.syncMouseCapture();state.browser->update(state.host.completed_frame(),state.vertexPaint->surfaceHeld(),state.preferences->values().browserPreviewSize,state.vertexPaint->previewMaterials());state.processBrowserActions();state.refresh();
-    if(state.documentPreviews){state.documentPreviews->setAntiAliasing(state.preferences->values().antiAliasing);state.documentPreviews->update(seconds,active);}
-    if(state.scene->isVisible())state.scene->composition->update();
-    if(state.game->isVisible())state.game->composition->update();
-}
+void LevelPanels::setNativeAssetObserver(std::function<void(quader::SceneDocument&)> observer){impl_->observeNativeAssets=std::move(observer);if(impl_->authoring)impl_->authoring->set_retention_observer(impl_->observeNativeAssets);}
+void LevelPanels::bindScene(quader::SceneSession* scene,std::string uuid){auto& state=*impl_;if(!state.authoring)return;state.authoring->bind(scene,std::move(uuid));state.authoring->synchronize();if(state.presentedNative!=scene){state.presentedNative=scene;for(auto* widget:state.main.findChildren<QWidget*>())if(Impl::nativePane(widget))widget->setAcceptDrops(true);}}
+void LevelPanels::update(double seconds,bool active){auto& state=*impl_;if(!state.session)return;++state.updateEpoch;if(state.authoring)state.authoring->synchronize();const auto changes=state.session->takeFileChanges();if(state.documents&&!changes.empty())state.documents->filesChanged(changes);if(state.session->playing()&&!state.wasPlaying)state.gameFocusPending=true;if(active&&state.gameFocusPending&&state.session->playing()&&!state.session->paused()){state.focusGame();state.gameFocusPending=false;}state.wasPlaying=state.session->playing();state.game->drain();auto& input=state.session->gameInput();input.setViewport(state.game->region(),state.session->playing()&&!state.session->paused()&&resolveGameCamera(state.session->presentationScene()).has_value(),!active||!state.game->hasFocus()||QApplication::activeModalWidget());input.syncMouseCapture();state.browser->update(state.host.completed_frame(),false,state.preferences->values().browserPreviewSize);state.processBrowserActions();state.refresh();if(state.documentPreviews){state.documentPreviews->setAntiAliasing(state.preferences->values().antiAliasing);state.documentPreviews->update(seconds,active);}if(state.game->isVisible())state.game->composition->update();}
+void LevelPanels::syncNativeSelection(){auto& state=*impl_;if(!state.viewportSelectionPending||!state.session||state.session->viewportRequestPending()||!state.authoring||!state.authoring->session())return;auto& native=state.authoring->session()->scene();std::vector<quader::EntityId> selected;for(const auto id:state.session->document().selection().ids){const auto entity=native.entity_for_uuid(state.session->nativeProjection().entity_uuid(id));if(entity!=quader::kInvalidEntityId)selected.push_back(entity);}(void)state.editor.selection().select_objects(selected);state.viewportSelectionPending=false;}
 bool LevelPanels::prepareFrame(){
     auto& state=*impl_;if(!state.session||state.preparing)return false;const QScopedValueRollback preparing(state.preparing,true);
-    try {
-        LevelViewRequest request;request.sceneCamera=state.camera;const auto scene=state.scene->pixels(),game=state.game->pixels();request.sceneWidth=std::uint32_t(std::max(0,scene.width()));request.sceneHeight=std::uint32_t(std::max(0,scene.height()));request.gameWidth=std::uint32_t(std::max(0,game.width()));request.gameHeight=std::uint32_t(std::max(0,game.height()));request.sceneVisible=state.scene->isVisible();request.gameVisible=state.game->isVisible();
-        state.preferences->apply(request);
-        const auto& document=state.session->editingDocument();
-        Impl::FrameKey key{state.updateEpoch,document.documentGeneration(),document.scene().generation(),document.scene().revision(),document.scene().poseRevision(),state.camera.viewMatrix(),state.camera.projectionMatrix(float(std::max(1u,request.sceneWidth))/float(std::max(1u,request.sceneHeight)),ClipDepth::ZeroToOne),document.selection().ids,document.selection().primary,request.sceneWidth,request.sceneHeight,request.gameWidth,request.gameHeight,request.sceneVisible,request.gameVisible,state.session->playing(),state.session->paused(),state.vertexPaint->enabled(),state.vertexPaint->surfaceHeld(),state.vertexPaint->showSubdivisions(),request.gridVisible,request.antiAliasing,request.appearance,request.shadowResolution};
-        if(state.preparedKey&&*state.preparedKey==key)return true;
-        auto frame=state.session->prepareRender(request);if(!frame)return false;state.host.publish_engine_frame(std::move(frame));state.preparedKey=std::move(key);return true;
+    try{
+        const bool scene_lighting=state.editor.mode().workspace_mode()==quader::QuaderWorkspaceMode::Default;state.session->setSceneLighting(scene_lighting);
+        LevelViewRequest request;const auto game=state.game->pixels();request.gameWidth=std::uint32_t(std::max(0,game.width()));request.gameHeight=std::uint32_t(std::max(0,game.height()));request.gameVisible=state.game->isVisible();request.sceneWidth=request.sceneHeight=1;request.sceneVisible=true;
+        if(state.authoring&&state.authoring->session()){auto& native=*state.authoring->session();const auto pane=native.viewport_workspace().focused_pane();const auto size=native.viewport_workspace().camera(pane).viewport_size();request.sceneWidth=std::uint32_t(std::max(1.f,size.x));request.sceneHeight=std::uint32_t(std::max(1.f,size.y));request.sceneCamera=Impl::viewCamera(native,pane);}
+        state.preferences->apply(request);const auto& document=state.session->editingDocument();const Impl::PreparedKey key{state.updateEpoch,document.documentGeneration(),document.scene().revision(),document.scene().poseRevision(),request.sceneWidth,request.sceneHeight,request.gameWidth,request.gameHeight,request.gameVisible,state.session->playing(),scene_lighting,request.sceneCamera.viewMatrix(),request.sceneCamera.projectionMatrix(float(request.sceneWidth)/float(request.sceneHeight),ClipDepth::ZeroToOne)};
+        if(state.preparedKey==key)return true;auto frame=state.session->prepareRender(request);if(!frame)return false;state.host.publish_engine_frame(std::move(frame));state.host.publish_native_scene_bindings(state.session->nativeRenderBindings());state.preparedKey=key;return true;
     }catch(const std::exception& error){state.status->setText(QString::fromUtf8(error.what()));return false;}
 }
-bool LevelPanels::continuous()const{return impl_->session&&(impl_->session->playing()||impl_->navigation.active()||impl_->scene->isVisible()||impl_->game->isVisible()||(impl_->previewDocument&&impl_->materialPreviewContainer&&impl_->materialPreviewContainer->isVisible())||(impl_->documentPreviews&&impl_->documentPreviews->continuous()));}
+bool LevelPanels::continuous()const{return impl_->session&&(impl_->session->playing()||(impl_->authoring&&impl_->authoring->session())||(impl_->previewDocument&&impl_->materialPreviewContainer&&impl_->materialPreviewContainer->isVisible())||(impl_->documentPreviews&&impl_->documentPreviews->continuous()));}
 bool LevelPanels::ownsInput()const{return impl_->ownsInput();}
-bool LevelPanels::navigating()const{return impl_->navigation.active();}
-void LevelPanels::setProjectOpenHandler(std::function<void(const std::filesystem::path&)> callback){impl_->openProject=std::move(callback);}
-bool LevelPanels::confirmClose(){if(!impl_->confirm())return false;if(impl_->session){impl_->session->rememberEditorCamera(impl_->pilot.freeCamera().value_or(impl_->camera));(void)impl_->session->saveEditorState();}return true;}
+bool LevelPanels::navigating()const{return false;}
+QWidget* LevelPanels::componentExtension()const{return impl_->inspector;}
+std::shared_ptr<quader::QtAssetBrowserExtension> LevelPanels::assetBrowserExtension(){return impl_->browser->extension();}
+void LevelPanels::setBeforePlay(std::function<void()> callback){impl_->beforePlay=std::move(callback);}
+bool LevelPanels::confirmClose(){if(!impl_->inspector->finish())return false;if(impl_->authoring&&!impl_->authoring->finish())return false;if(impl_->session)impl_->session->stop();return !impl_->documents||impl_->documents->confirmClose();}
 } // namespace crimson::integration

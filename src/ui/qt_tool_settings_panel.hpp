@@ -14,6 +14,7 @@
 #include <string_view>
 
 class QObject;
+class QResizeEvent;
 
 namespace quader {
 
@@ -23,7 +24,7 @@ class QtUiScaleMetrics;
 enum class QuaderNativeToolSettingsIntent;
 
 /**
- * Presents active settings in a collapsible viewport overlay.
+ * Presents active settings in a retained dock beneath the Outliner.
  * Call refresh from the host UI update path so activation, value changes, and
  * preview completion are reflected immediately.
  */
@@ -48,7 +49,7 @@ public:
   [[nodiscard]] QSize sizeHint() const override;
   [[nodiscard]] QSize minimumSizeHint() const override;
 
-  /// Requests host placement after presence or preferred geometry changes.
+  /// Notifies the host after presence or preferred geometry changes.
   std::function<void()> presentation_changed;
   /**
    * Returns whether a local numeric edit is still in progress or waiting to
@@ -61,13 +62,16 @@ public:
   [[nodiscard]] bool prepare_lifecycle_intent(
       QuaderEditorApi &editor, QuaderNativeToolSettingsIntent intent);
 
+protected:
+  void resizeEvent(QResizeEvent *event) override;
+
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
 
 /**
- * Returns whether an application event target belongs to the settings overlay,
+ * Returns whether an application event target belongs to the settings panel,
  * including native child windows and settings control popups.
  */
 [[nodiscard]] bool

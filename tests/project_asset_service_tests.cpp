@@ -166,6 +166,7 @@ protected:
   }
 
   void TearDown() override {
+    assets().set_mutation_prepare({});
     (void)project_.close(true);
     std::error_code error;
     std::filesystem::remove_all(temporary_, error);
@@ -183,6 +184,9 @@ protected:
   }
 
   std::filesystem::path root() const { return temporary_ / "Project"; }
+  static std::string bytes(const std::filesystem::path& file){std::ifstream input(file,std::ios::binary);return {std::istreambuf_iterator<char>(input),{}};}
+  static void write(const std::filesystem::path& file,std::string_view value){std::filesystem::create_directories(file.parent_path());std::ofstream output(file,std::ios::binary|std::ios::trunc);output.write(value.data(),static_cast<std::streamsize>(value.size()));}
+
 
   ProjectAssetService &assets() { return project_.project_assets(); }
 
@@ -232,21 +236,22 @@ TEST_F(ProjectAssetServiceTests, RootContainsMixedAssetsAndEmptyFolders) {
   EXPECT_TRUE(has("Lobby.qdr", ProjectAssetKind::Scene));
   EXPECT_TRUE(has("Paint.qmat", ProjectAssetKind::Material));
   EXPECT_TRUE(has(texture.paths.front().portable_string(), ProjectAssetKind::Texture));
+  EXPECT_TRUE(has("notes.txt",ProjectAssetKind::Unknown));
   EXPECT_FALSE(std::ranges::any_of(snapshot.value().entries, [](const auto &entry) {
     const auto value = entry.path.portable_string();
-    return value == "notes.txt" || value.starts_with(".quader") || value.ends_with(".qproj");
+    return value.starts_with(".quader") || value.ends_with(".qproj");
   }));
 }
 
-TEST_F(ProjectAssetServiceTests, FolderOperationsRejectUnsupportedDescendants) {
+TEST_F(ProjectAssetServiceTests, FolderOperationsPreserveArbitraryFileBytes) {
   ASSERT_TRUE(assets().create_folder({}, "Mixed").ok);
   ASSERT_TRUE(assets().create_scene("Mixed", "Scene").ok);
-  std::ofstream(root() / "Mixed/source.txt") << "keep this file";
-  const auto renamed = assets().rename(path("Mixed"), "Renamed");
-  EXPECT_FALSE(renamed.ok);
-  EXPECT_TRUE(std::filesystem::exists(root() / "Mixed/source.txt"));
-  EXPECT_TRUE(std::filesystem::exists(root() / "Mixed/Scene.qdr"));
-  EXPECT_FALSE(std::filesystem::exists(root() / "Renamed"));
+  const std::string raw("native\0source\xff",14);write(root()/"Mixed/source.native",raw);
+  const auto renamed=assets().rename(path("Mixed"),"Renamed");ASSERT_TRUE(renamed.ok)<<renamed.message;
+  EXPECT_EQ(bytes(root()/"Renamed/source.native"),raw);EXPECT_TRUE(std::filesystem::exists(root()/"Renamed/Scene.qdr"));EXPECT_FALSE(std::filesystem::exists(root()/"Mixed"));
+  ASSERT_TRUE(assets().create_folder({},"Copies").ok);const auto copied=assets().copy(std::array{path("Renamed")},"Copies");ASSERT_TRUE(copied.ok)<<copied.message;
+  EXPECT_EQ(bytes(root()/"Copies/Renamed/source.native"),raw);EXPECT_EQ(bytes(root()/"Renamed/source.native"),raw);
+  EXPECT_TRUE(std::filesystem::exists(root()/"Copies/Renamed/Scene.qdr"));
 }
 
 TEST_F(ProjectAssetServiceTests, AssetDestinationsStayWithinProject) {
@@ -388,6 +393,26 @@ TEST_F(ProjectAssetServiceTests, PrivateStagingFilesDoNotInvalidateAuthoredAsset
   EXPECT_EQ(with_staging.value().revision, before.value().revision);
   std::filesystem::remove(staging);
   EXPECT_EQ(assets().refresh().value().revision, before.value().revision);
+}
+
+TEST_F(ProjectAssetServiceTests, UserDotPathsArePhysicalFilesWhileOwnedMetadataStaysPrivate) {
+  std::filesystem::create_directory(root() / ".art");
+  std::ofstream(root() / ".art/.palette") << "authored user data";
+  std::filesystem::create_directory(root() / ".crimson");
+  std::ofstream(root() / ".crimson/cache.bin") << "private owner";
+  std::ofstream(root() / ".art/.palette.interrupted.stage") << "private atomic stage";
+  const auto snapshot = assets().refresh();
+  ASSERT_TRUE(snapshot.ok()) << snapshot.error().message;
+  const auto contains = [&](std::string_view path) {
+    return std::ranges::any_of(snapshot.value().entries, [&](const auto &entry) {
+      return entry.path.portable_string() == path;
+    });
+  };
+  EXPECT_TRUE(contains(".art"));
+  EXPECT_TRUE(contains(".art/.palette"));
+  EXPECT_FALSE(contains(".crimson"));
+  EXPECT_FALSE(contains(".crimson/cache.bin"));
+  EXPECT_FALSE(contains(".art/.palette.interrupted.stage"));
 }
 
 TEST_F(ProjectAssetServiceTests, SceneAndFolderOrganizationRetainsMaterialImages) {
@@ -664,7 +689,7 @@ TEST_F(ProjectAssetServiceTests, RegisteringExternalSceneNormalizesRetainedShare
 TEST_F(ProjectAssetServiceTests, RejectedCatalogPublicationRestoresMovedFiles) {
   ASSERT_TRUE(assets().create_material({}, "Before").ok);
   std::filesystem::rename(root() / "Materials/default_material.qmat",
-                           root() / "Materials/.default_material.qmat");
+                           root() / "Materials/.default_material.qmat.interrupted.stage");
   const auto failed = assets().rename(path("Before.qmat"), "After");
   EXPECT_FALSE(failed.ok);
   EXPECT_TRUE(std::filesystem::exists(root() / "Before.qmat"));
@@ -672,7 +697,7 @@ TEST_F(ProjectAssetServiceTests, RejectedCatalogPublicationRestoresMovedFiles) {
   const auto original = QmatCodec::read(project_.workspace()->file_system, path("Before.qmat"));
   ASSERT_TRUE(original.ok());
   EXPECT_EQ(original.value().material.name, "Before");
-  std::filesystem::rename(root() / "Materials/.default_material.qmat",
+  std::filesystem::rename(root() / "Materials/.default_material.qmat.interrupted.stage",
                            root() / "Materials/default_material.qmat");
   EXPECT_TRUE(ProjectAssetService::recover_pending_operations(project_.manifest_path()).ok());
 }
@@ -735,4 +760,30 @@ TEST_F(ProjectAssetServiceTests, InterruptedCaseOnlyFolderRenameRestoresOriginal
 }
 
 } // namespace
+TEST_F(ProjectAssetServiceTests, MutationHookRejectsBeforePhysicalChanges){
+  write(root()/"source.native","original");ASSERT_TRUE(assets().refresh().ok());unsigned prepares=0;
+  assets().set_mutation_prepare([&](const ProjectAssetMutation& mutation){++prepares;EXPECT_EQ(mutation.kind,ProjectAssetMutationKind::Move);EXPECT_EQ(mutation.paths.size(),1u);if(!mutation.paths.empty()){EXPECT_EQ(mutation.paths.front().source,path("source.native"));EXPECT_EQ(mutation.paths.front().destination,path("renamed.native"));}return ProjectIoResult<ProjectAssetMutationPreparation>::failure(ProjectIoErrorCode::InvalidWorkspaceState,"Protected by typed owner");});
+  const auto renamed=assets().rename(path("source.native"),"renamed");EXPECT_FALSE(renamed.ok);EXPECT_EQ(prepares,1u);EXPECT_EQ(bytes(root()/"source.native"),"original");EXPECT_FALSE(std::filesystem::exists(root()/"renamed.native"));
+}
+TEST_F(ProjectAssetServiceTests, MutationMetadataCommitsWithExactMoveRoots){
+  write(root()/"source.native","source");write(root()/".crimson/asset-locations.json","before");ASSERT_TRUE(assets().create_folder({},"Destination").ok);unsigned commits=0,validations=0;
+  assets().set_mutation_prepare([&](const ProjectAssetMutation& mutation){EXPECT_EQ(mutation.kind,ProjectAssetMutationKind::Move);EXPECT_EQ(mutation.paths.size(),1u);if(!mutation.paths.empty()){EXPECT_EQ(mutation.paths.front().source,path("source.native"));EXPECT_EQ(mutation.paths.front().destination,path("Destination/source.native"));}ProjectAssetMutationPreparation prepared;prepared.revision=71;prepared.writes.push_back({path(".crimson/asset-locations.json"),"before","after"});prepared.validate=[&]{++validations;return ProjectIoResult<void>::success();};prepared.committed=[&]{++commits;};return ProjectIoResult<ProjectAssetMutationPreparation>::success(std::move(prepared));});
+  const auto moved=assets().move(std::array{path("source.native")},"Destination");ASSERT_TRUE(moved.ok)<<moved.message;EXPECT_EQ(bytes(root()/"Destination/source.native"),"source");EXPECT_EQ(bytes(root()/".crimson/asset-locations.json"),"after");EXPECT_EQ(commits,1u);EXPECT_GE(validations,1u);
+}
+TEST_F(ProjectAssetServiceTests, MutationValidationFailurePreservesPhysicalAndMetadataBaselines){
+  write(root()/"source.native","source");write(root()/".crimson/asset-locations.json","before");ASSERT_TRUE(assets().refresh().ok());unsigned commits=0;
+  assets().set_mutation_prepare([&](const ProjectAssetMutation&){ProjectAssetMutationPreparation prepared;prepared.writes.push_back({path(".crimson/asset-locations.json"),"before","after"});prepared.validate=[](){return ProjectIoResult<void>::failure(ProjectIoErrorCode::InvalidWorkspaceState,"Owner revision changed");};prepared.committed=[&]{++commits;};return ProjectIoResult<ProjectAssetMutationPreparation>::success(std::move(prepared));});
+  EXPECT_FALSE(assets().rename(path("source.native"),"renamed").ok);EXPECT_EQ(bytes(root()/"source.native"),"source");EXPECT_EQ(bytes(root()/".crimson/asset-locations.json"),"before");EXPECT_FALSE(std::filesystem::exists(root()/"renamed.native"));EXPECT_EQ(commits,0u);
+}
+TEST_F(ProjectAssetServiceTests, RejectedCatalogPublicationRollsBackMoveAndBothMetadataWriteKinds){
+  ASSERT_TRUE(assets().create_material({},"Before").ok);write(root()/".crimson/asset-locations.json","before");const auto source=bytes(root()/"Before.qmat");unsigned commits=0;
+  assets().set_mutation_prepare([&](const ProjectAssetMutation&){ProjectAssetMutationPreparation prepared;prepared.writes.push_back({path(".crimson/asset-locations.json"),"before","after"});prepared.writes.push_back({.path=path(".crimson/references.json"),.after="created",.create_new=true});prepared.committed=[&]{++commits;};return ProjectIoResult<ProjectAssetMutationPreparation>::success(std::move(prepared));});
+  std::filesystem::rename(root()/"Materials/default_material.qmat",root()/"Materials/.default_material.qmat.interrupted.stage");const auto failed=assets().rename(path("Before.qmat"),"After");EXPECT_FALSE(failed.ok);EXPECT_EQ(bytes(root()/"Before.qmat"),source);EXPECT_FALSE(std::filesystem::exists(root()/"After.qmat"));EXPECT_EQ(bytes(root()/".crimson/asset-locations.json"),"before");EXPECT_FALSE(std::filesystem::exists(root()/".crimson/references.json"));EXPECT_EQ(commits,0u);std::filesystem::rename(root()/"Materials/.default_material.qmat.interrupted.stage",root()/"Materials/default_material.qmat");
+}
+TEST_F(ProjectAssetServiceTests, CopyDerivedIdentityRewritePreservesOriginalBytes){
+  write(root()/"source.native","id=original");ASSERT_TRUE(assets().create_folder({},"Copies").ok);unsigned commits=0;
+  assets().set_mutation_prepare([&](const ProjectAssetMutation& mutation){EXPECT_EQ(mutation.kind,ProjectAssetMutationKind::Copy);ProjectAssetMutationPreparation prepared;if(mutation.paths.size()!=1||!mutation.paths.front().destination)return ProjectIoResult<ProjectAssetMutationPreparation>::failure(ProjectIoErrorCode::InvalidArgument,"Missing accepted copy root");EXPECT_EQ(mutation.paths.front().source,path("source.native"));EXPECT_EQ(*mutation.paths.front().destination,path("Copies/source.native"));prepared.writes.push_back({.path=*mutation.paths.front().destination,.before="id=original",.after="id=copy",.created_by_copy=true});prepared.committed=[&]{++commits;};return ProjectIoResult<ProjectAssetMutationPreparation>::success(std::move(prepared));});
+  const auto copied=assets().copy(std::array{path("source.native")},"Copies");ASSERT_TRUE(copied.ok)<<copied.message;EXPECT_EQ(bytes(root()/"source.native"),"id=original");EXPECT_EQ(bytes(root()/"Copies/source.native"),"id=copy");EXPECT_EQ(commits,1u);
+}
+
 } // namespace quader

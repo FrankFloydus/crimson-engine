@@ -327,7 +327,7 @@ QuaderProjectApi::create(const std::filesystem::path &root_path) {
   std::filesystem::path target = root_path;
   if (target.empty()) {
     if (!runtime_hooks_.choose_create_root) {
-      return unsupported("Project creation requires an empty folder.");
+      return unsupported("Project creation requires a folder.");
     }
     const std::optional<std::filesystem::path> selected =
         runtime_hooks_.choose_create_root();
@@ -341,10 +341,20 @@ QuaderProjectApi::create(const std::filesystem::path &root_path) {
   if (!std::filesystem::is_directory(target, folder_error) || folder_error) {
     return quader_api_failure_status(
         scene_session(session_),
-        "A new project requires an existing empty folder.");
+        "A new project requires an existing folder.");
+  }
+  if (runtime_hooks_.allow_nonempty_project_folder) {
+    const auto existing = ProjectManifestStore::manifest_in_directory(target);
+    if (!existing.ok()) {
+      return quader_api_failure_status(scene_session(session_),
+                                       existing.error().message);
+    }
+    if (existing.value().has_value()) {
+      return open(*existing.value());
+    }
   }
   const bool folder_empty = std::filesystem::is_empty(target, folder_error);
-  if (folder_error || !folder_empty) {
+  if (folder_error || (!folder_empty && !runtime_hooks_.allow_nonempty_project_folder)) {
     return quader_api_failure_status(
         scene_session(session_),
         "A new project requires a completely empty folder.");
@@ -357,7 +367,8 @@ QuaderProjectApi::create(const std::filesystem::path &root_path) {
                              runtime_hooks_.end_loading);
   ProjectCloseLifecycleEvents close_events =
       capture_project_close_events(*project_session_);
-  ProjectSessionResult created = project_session_->create(target, true);
+  ProjectSessionResult created = project_session_->create(
+      target, true, runtime_hooks_.allow_nonempty_project_folder);
   if (!created.ok) {
     return quader_api_failure_status(scene_session(session_), created.message);
   }
@@ -422,6 +433,25 @@ QuaderApiVoidResult QuaderProjectApi::open(const std::filesystem::path& path) {
         return unsupported("Project open requires a path.");
     }
 
+    if (project_session_ != nullptr) {
+      std::error_code error;
+      if (std::filesystem::is_directory(target, error) && !error) {
+        const auto existing = ProjectManifestStore::manifest_in_directory(target);
+        if (!existing.ok()) {
+          return quader_api_failure_status(scene_session(session_),
+                                           existing.error().message);
+        }
+        if (existing.value().has_value()) {
+          target = *existing.value();
+        } else if (runtime_hooks_.allow_nonempty_project_folder) {
+          return create(target);
+        } else {
+          return quader_api_failure_status(
+              scene_session(session_),
+              "The selected folder does not contain a project manifest.");
+        }
+      }
+    }
     if (project_session_ != nullptr) {
       const ProjectSessionResult validated = [&]() {
         QuaderLoadingScope preflight_loading(runtime_hooks_.begin_loading,

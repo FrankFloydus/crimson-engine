@@ -394,7 +394,13 @@ public:
         std::span<const SceneTextureMappingAssignment> mappings);
     bool set_light(EntityId id, LightComponent light);
     bool clear_light(EntityId id);
+    using EngineComponentsObserver = std::function<void(const EngineComponentsComponent&)>;
+    void set_engine_components_observer(EngineComponentsObserver observer) { engine_components_observer_ = std::move(observer); }
+    bool set_engine_components(EntityId id, EngineComponentsComponent components);
+    bool clear_engine_components(EntityId id);
+    bool remap_engine_entity_references(std::span<const EngineEntityClone> clones);
     bool set_scene_settings(SceneSettings settings);
+    bool set_engine_settings(std::optional<EngineSceneSettings> settings);
 
     SceneLayerId create_layer(
         std::string name = {},
@@ -439,7 +445,11 @@ public:
     const MaterialComponent* material(EntityId id) const;
     const TextureMappingComponent *texture_mapping(EntityId id) const;
     const LightComponent* light(EntityId id) const;
+    const EngineComponentsComponent *engine_components(EntityId id) const;
     const SceneSettings &scene_settings() const { return scene_settings_; }
+    const EngineSceneSettings *engine_settings() const {
+      return scene_settings_.engine ? &*scene_settings_.engine : nullptr;
+    }
     const SceneLayerMembershipComponent *layer_membership(EntityId id) const;
 
     [[nodiscard]] const SceneLayerRecord *layer(SceneLayerId id) const;
@@ -741,6 +751,7 @@ private:
   SceneSettings scene_settings_;
   std::vector<EntityId> root_entities_;
   EditorObjectIdAllocator editor_object_id_allocator_;
+  EngineComponentsObserver engine_components_observer_;
   entt::registry registry_;
   std::unordered_map<EntityId, entt::entity> entities_;
   std::unordered_map<std::uint32_t, EntityId> ids_by_entity_;

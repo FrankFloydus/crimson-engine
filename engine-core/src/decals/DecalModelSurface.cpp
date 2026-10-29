@@ -67,7 +67,7 @@ Vec3 closestBarycentrics(Vec3 p,Vec3 a,Vec3 b,Vec3 c) {
     const double inverse=1/(va+vb+vc),v=vb*inverse,w=vc*inverse;return {1-v-w,v,w};
 }
 ModelSurfaceHit sourceHit(const ModelDrawSurface&draw,const SurfaceTriangle&triangle,uint64_t entity,Vec3 bary) {
-    ModelSurfaceHit hit;hit.seed={{entity,draw.surface.id.draw,draw.surface.id.primitive},triangle.triangle,bary};
+    ModelSurfaceHit hit;hit.seed={{entity,draw.surface.id.draw,draw.surface.id.primitive,draw.surface.id.sourceInstanceId},triangle.triangle,bary};
     hit.localPoint=math::transformPoint(draw.surface.localToWorld,triangle.positions[0]*bary[0]+triangle.positions[1]*bary[1]+triangle.positions[2]*bary[2]);
     auto normal=triangle.normals[0]*bary[0]+triangle.normals[1]*bary[1]+triangle.normals[2]*bary[2];
     if(const auto matrix=math::normalMatrix(draw.surface.localToWorld))normal=math::transformDirection(*matrix,normal);

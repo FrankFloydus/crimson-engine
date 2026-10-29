@@ -8,6 +8,7 @@
 
 #include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/session/viewport_local_visibility_service.hpp"
@@ -57,6 +58,7 @@ EditorModeService::EditorModeService(SceneSession &session) : session_(session) 
 
 bool EditorModeService::permits_selection_mode(
     ModelingSelectionMode kind) const noexcept {
+  if(workspace_mode()==EditorWorkspaceMode::Default&&is_component_kind(kind))return false;
   return mode() == EditorMode::Edit
              ? is_component_kind(kind)
              : kind == ModelingSelectionMode::Object ||
@@ -143,6 +145,7 @@ EditorModeService::entry_participants(bool use_active_fallback) const {
 }
 
 bool EditorModeService::can_enter_edit() const {
+  if(workspace_mode()!=EditorWorkspaceMode::Modeling)return false;
   return mode() == EditorMode::Edit || !entry_participants().empty();
 }
 
@@ -168,6 +171,39 @@ void EditorModeService::set_transition_settlement(
   transition_settlement_ = std::move(settlement);
 }
 
+void EditorModeService::workspace_mode_changed(){advance_revision(true);normalize_tools();}
+
+CommandResult EditorModeService::prepare_workspace_mode(EditorWorkspaceMode requested){
+  if(requested!=EditorWorkspaceMode::Default&&requested!=EditorWorkspaceMode::Modeling)return command_invalid_result("Unknown workspace mode.");
+  if(requested==EditorWorkspaceMode::Modeling)return command_unchanged_result();
+  // A mode switch abandons a held modeling gesture, retaining accepted shapes.
+  // Settling the primitive session afterwards publishes its ordinary native history.
+  if (session_.primitive_creation().active()) {
+    const auto resized = session_.primitive_creation().cancel_resize();
+    if (!resized.ok) return resized;
+    if (session_.modeling().box_drag_state() != ModelingBoxDragState::Idle) {
+      const auto footprint = session_.modeling().cancel_box();
+      if (!footprint.ok) return {.ok = false, .changed = footprint.changed, .message = footprint.message};
+    }
+  }
+  if (session_.modeling().transform_drag_active()) {
+    const auto drag = session_.modeling().cancel_transform_drag();
+    if (!drag.ok) return {.ok = false, .changed = drag.changed, .message = drag.message};
+  }
+  if(mode()==EditorMode::Edit){const auto object=transition_mode(EditorMode::Object,false);if(!object.ok)return object;}
+  else if(transition_settlement_){const auto settled=transition_settlement_();if(!settled.ok)return settled;}
+  const auto property=session_.document_commands().accept_active_property_edit();if(!property.ok)return property;
+  const auto settled=session_.native_tools().settle_competing_state_for_tool_activation();if(!settled.ok)return settled;
+  if(session_.instances().can_exit_instance_edit()){const auto exited=session_.instances().exit_instance_edit();if(!exited.ok)return exited.command_result();}
+  return command_changed_result();
+}
+CommandResult EditorModeService::set_workspace_mode(EditorWorkspaceMode requested){
+  if(workspace_provider_)return command_invalid_result("Workspace mode belongs to the project.");
+  if(requested==workspace_mode_)return command_unchanged_result();
+  const auto prepared=prepare_workspace_mode(requested);if(!prepared.ok)return prepared;
+  workspace_mode_=requested;workspace_mode_changed();return command_changed_result();
+}
+
 CommandResult EditorModeService::set_mode(EditorMode requested) {
   return transition_mode(requested, false);
 }
@@ -189,6 +225,7 @@ CommandResult EditorModeService::transition_mode(EditorMode requested, bool allo
   if (requested != EditorMode::Object && requested != EditorMode::Edit) {
     return command_invalid_result("Unknown editor mode.");
   }
+  if(requested==EditorMode::Edit&&workspace_mode()!=EditorWorkspaceMode::Modeling)return command_invalid_result("Edit selection requires Modeling workspace mode.");
   if (requested == mode()) {
     return command_unchanged_result();
   }
@@ -308,7 +345,7 @@ EditorModeService::set_component_kind(ModelingSelectionMode kind) {
 void EditorModeService::normalize_tools() {
   const auto compatible = [this](const ToolDescriptor *descriptor) {
     return descriptor != nullptr &&
-           editor_mode_supported(descriptor->supported_editor_modes, mode()) &&
+           editor_mode_supported(descriptor->supported_editor_modes, mode()) && permits_tool(descriptor->id) &&
            (mode() != EditorMode::Edit ||
             !descriptor->required_component_kind.has_value() ||
             *descriptor->required_component_kind == snapshot_.component_kind);

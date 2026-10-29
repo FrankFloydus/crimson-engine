@@ -49,7 +49,7 @@ void assetsRoundTripAndPolicies() {
     auto json=Json::parse(bytes);json["version"]=3;rejects([&]{deserializeDecalAsset(json.dump());},"Future decal version was accepted.");
     const auto copied=saveDecalAssetAs(p.root,asset);require(copied.id!=asset.id&&copied.name!=asset.name&&copied.material==asset.material&&read(decalAssetPath(p.root,asset.id))==bytes,"Save As mutated its source or duplicated a shared material.");
     BrowserCatalog browser(p.root);const std::array<AssetEntry,2> entries{{{asset.id,asset.name,AssetKind::Decal},{copied.id,copied.name,AssetKind::Decal}}};browser.synchronize(entries);
-    const auto folder=browser.createFolder(BrowserCatalog::ContentFolder,"Decal proof");const std::array<std::string,1> selection{asset.id};browser.move(selection,folder);browser.rename(asset.id,"Moved surface");
+    const auto folder=browser.createFolder(BrowserCatalog::RootFolder,"Decal proof");const std::array<std::string,1> selection{asset.id};browser.move(selection,folder);browser.rename(asset.id,"Moved surface");
     require(loadDecalAsset(p.root,asset.id)==asset&&decalAssetPath(p.root,asset.id).parent_path()==browser.folderPath(folder),"Decal move/rename lost its managed identity or data.");
     const auto filtered=browser.items(folder,"",BrowserAssetFilter::Decals);require(filtered.size()==1&&filtered.front().id==asset.id,"Decal browser filtering omitted the moved asset.");
     AssetReferenceManager references(p.root);const auto wrong=createMaterialAsset(p.root,"Wrong kind");const std::array<AssetEntry,1> removed{{{asset.id,asset.name,AssetKind::Decal}}};
@@ -141,8 +141,6 @@ void sceneCapabilityHistoryAndMigration() {
     const auto historical=document.historicalDecalReferences();require(std::find(historical.begin(),historical.end(),asset.id)!=historical.end(),"Scene history omitted decal asset references.");
     const auto models=document.historicalModelReferences();require(std::find(models.begin(),models.end(),value.seed.modelId)!=models.end(),"Scene history omitted seed geometry generations.");
     auto bad=*document.scene().find(decal);bad.decal->seed.barycentric={-1,1,1};const auto previous=*document.scene().find(decal);require(!document.updateEntity(decal,bad)&&sameEntity(*document.scene().find(decal),previous),"Malformed seed partially changed the scene.");
-    auto oldPolicy=Json::parse(bytes);const auto oldEntity=std::find_if(oldPolicy["entities"].begin(),oldPolicy["entities"].end(),[](const auto& entity){return entity.contains("decal");});auto& oldDecal=(*oldEntity)["decal"];oldDecal["seed"]["sourceKey"]="previous-import-source";oldDecal["receivers"]={{"scope","SeedQuaderScene"},{"include",Json::array()},{"exclude",Json::array({receiver})}};
-    const auto oldPolicyBytes=oldPolicy.dump(2)+"\n";writeFileAtomically(file,oldPolicyBytes);require(reopened.load(sceneId)&&!reopened.dirty()&&reopened.scene().find(decal)->decal==value&&read(file)==oldPolicyBytes,"Removed import scope affected generic receiver loading or rewrote scene bytes.");
     auto legacy=Json::parse(bytes);legacy["version"]=23;writeFileAtomically(file,legacy.dump(2)+"\n");const auto legacyBytes=read(file);
     require(reopened.load(sceneId)&&!reopened.dirty()&&!reopened.scene().find(decal)->decal&&read(file)==legacyBytes,"Old scene loading created a decal, dirtied data or rewrote its bytes.");
     require(reopened.save()&&Json::parse(read(file)).at("version")==25,reopened.status());

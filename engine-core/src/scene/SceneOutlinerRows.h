@@ -18,12 +18,12 @@ bool isSceneGroup(const EntityRecord&);
 // visible ancestor; model and particle attachments keep their real rows.
 std::vector<SceneOutlinerRow> sceneOutlinerRows(const Scene&);
 enum class SceneOutlinerFilter : std::uint8_t {
-    All,Models,Lights,Cameras,Colliders,Particles,Actors,Decals,Environment,Navigation,Quader
+    All,Models,Lights,Cameras,Colliders,Particles,Actors,Decals,Environment,Navigation
 };
 inline constexpr std::array SceneOutlinerFilters{
     SceneOutlinerFilter::All,SceneOutlinerFilter::Models,SceneOutlinerFilter::Lights,SceneOutlinerFilter::Cameras,
     SceneOutlinerFilter::Colliders,SceneOutlinerFilter::Particles,SceneOutlinerFilter::Actors,SceneOutlinerFilter::Decals,
-    SceneOutlinerFilter::Environment,SceneOutlinerFilter::Navigation,SceneOutlinerFilter::Quader};
+    SceneOutlinerFilter::Environment,SceneOutlinerFilter::Navigation};
 const char* sceneOutlinerFilterName(SceneOutlinerFilter);
 // Selection spans use only the currently displayed hierarchy order. A filtered
 // or collapsed anchor is absent and therefore cannot add hidden rows.

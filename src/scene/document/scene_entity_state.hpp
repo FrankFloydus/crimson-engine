@@ -42,6 +42,7 @@ struct SceneEntityState {
   std::optional<MaterialComponent> material;
   std::optional<TextureMappingComponent> texture_mapping;
   std::optional<LightComponent> light;
+  std::optional<EngineComponentsComponent> engine_components;
   std::optional<InstanceDefinitionComponent> instance_definition;
   std::optional<InstanceOccurrenceComponent> instance_occurrence;
   SceneLayerId layer_id = kInvalidSceneLayerId;

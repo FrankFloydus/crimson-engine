@@ -6,8 +6,14 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/metadata/command_presentation_catalog.hpp"
 
+#include "api/quader_api_types.hpp"
+#include "core/public_command_targets.hpp"
+#include "editor/metadata/host_contract.hpp"
+#include "editor/tools/viewport_tool_descriptor_catalog.hpp"
+
 #include <algorithm>
 #include <iterator>
+#include <optional>
 
 namespace quader {
 namespace {
@@ -19,6 +25,7 @@ using Danger = CommandPresentationDanger;
 using Palette = CommandPalettePolicy;
 using Surface = CommandPresentationSurface;
 
+constexpr Surface kLibrary = Surface::CommandsLibrary;
 constexpr Surface kMenuPalette = Surface::MainMenu | Surface::CommandPalette;
 constexpr Surface kMenuViewportPalette =
     kMenuPalette | Surface::ViewportContextMenu;
@@ -210,11 +217,11 @@ constexpr CommandPresentationDescriptor kCatalog[]{
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kSelectionKeywords),
     presentation(quader_command::kSelectEdgeLoops, Domain::Select,
-                 Group::Selection, 210u, kMenuViewportPalette,
+                 Group::Selection, 210u, kMenuViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kSelectionKeywords),
     presentation(quader_command::kSelectEdgeRing, Domain::Select,
-                 Group::Selection, 220u, kMenuViewportPalette,
+                 Group::Selection, 220u, kMenuViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kSelectionKeywords),
     presentation(quader_command::kSelectFacesWithSameMaterial,
@@ -382,33 +389,33 @@ constexpr CommandPresentationDescriptor kCatalog[]{
                  Danger::None, {}, {}, "tool_settings"),
     presentation(quader_command::kModelingCopyPivotFromActive,
                  Domain::Object, Group::Transform, 240u,
-                 kViewportPalette),
+                 kViewportPalette | kLibrary),
     presentation(quader_command::kModelingSetOriginToCenter,
                  Domain::Object, Group::Transform, 242u,
-                 kViewportPalette),
+                 kViewportPalette | kLibrary),
     presentation(quader_command::kModelingSetOriginToPivot,
                  Domain::Object, Group::Transform, 244u,
-                 kViewportPalette),
+                 kViewportPalette | kLibrary),
     presentation(quader_command::kModelingSnapMeshesToFloor, Domain::Object,
-                 Group::Transform, 250u, kViewportPalette),
+                 Group::Transform, 250u, kViewportPalette | kLibrary),
     presentation(quader_command::kModelingBakeTransforms, Domain::Object,
-                 Group::Transform, 260u, kViewportPalette,
+                 Group::Transform, 260u, kViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  kBakeTransformsAliases),
     presentation(quader_command::kModelingBakeLocation, Domain::Object,
-                 Group::Transform, 270u, kViewportPalette,
+                 Group::Transform, 270u, kViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  kBakeLocationAliases),
     presentation(quader_command::kModelingBakeRotation, Domain::Object,
-                 Group::Transform, 280u, kViewportPalette,
+                 Group::Transform, 280u, kViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  kBakeRotationAliases),
     presentation(quader_command::kModelingBakeScale, Domain::Object,
-                 Group::Transform, 290u, kViewportPalette,
+                 Group::Transform, 290u, kViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  kBakeScaleAliases),
     presentation(quader_command::kToolsActivateAlign, Domain::Object,
-                 Group::Arrangement, 300u, kMenuViewportToolbarPalette,
+                 Group::Arrangement, 300u, kMenuViewportToolbarPalette | kLibrary,
                  Palette::Searchable, Activation::InteractiveTool,
                  Danger::None, {}, {}, "tool_settings"),
     presentation(quader_command::kDuplicateSelection, Domain::Object,
@@ -421,16 +428,16 @@ constexpr CommandPresentationDescriptor kCatalog[]{
                  Danger::None, {}, {}, "tool_settings"),
     presentation(quader_command::kToolsActivateLinearArray,
                  Domain::Object, Group::Duplication, 520u,
-                 kViewportToolbarPalette, Palette::Searchable,
+                 kViewportToolbarPalette | kLibrary, Palette::Searchable,
                  Activation::InteractiveTool, Danger::None, {}, {},
                  "tool_settings"),
     presentation(quader_command::kToolsActivateRadialArray,
                  Domain::Object, Group::Duplication, 530u,
-                 kViewportToolbarPalette, Palette::Searchable,
+                 kViewportToolbarPalette | kLibrary, Palette::Searchable,
                  Activation::InteractiveTool, Danger::None, {}, {},
                  "tool_settings"),
     presentation(quader_command::kToolsActivatePathArray, Domain::Object,
-                 Group::Duplication, 540u, kViewportToolbarPalette,
+                 Group::Duplication, 540u, kViewportToolbarPalette | kLibrary,
                  Palette::Searchable, Activation::InteractiveTool,
                  Danger::None, {}, {}, "tool_settings"),
     presentation(quader_command::kSceneHideSelection, Domain::Object,
@@ -445,7 +452,7 @@ constexpr CommandPresentationDescriptor kCatalog[]{
                      Surface::LayersContextMenu, Palette::Searchable,
                  Activation::Immediate, Danger::Destructive),
     presentation(quader_command::kModelingRemoveDoubles, Domain::Object,
-                 Group::Cleanup, 910u, kMenuViewportPalette,
+                 Group::Cleanup, 910u, kMenuViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  kRemoveDoublesAliases),
 
@@ -460,15 +467,15 @@ constexpr CommandPresentationDescriptor kCatalog[]{
                  Palette::Searchable, Activation::Immediate,
                  Danger::Caution, kFlattenInstanceAliases),
     presentation(quader_command::kToolsActivateExtrude, Domain::Mesh,
-                 Group::Tools, 10u, kMenuViewportToolbarPalette,
+                 Group::Tools, 10u, kMenuViewportToolbarPalette | kLibrary,
                  Palette::Searchable, Activation::InteractiveTool,
                  Danger::None, {}, {}, "tool_settings"),
     presentation(quader_command::kToolsActivateExtrudeIndividual,
-                 Domain::Mesh, Group::Tools, 11u, kMenuViewportPalette,
+                 Domain::Mesh, Group::Tools, 11u, kMenuViewportPalette | kLibrary,
                  Palette::Searchable, Activation::InteractiveTool,
                  Danger::None, {}, kExtrudeIndividualKeywords, "tool_settings"),
     presentation(quader_command::kToolsActivateExtrudeAlongNormals,
-                 Domain::Mesh, Group::Tools, 12u, kMenuViewportPalette,
+                 Domain::Mesh, Group::Tools, 12u, kMenuViewportPalette | kLibrary,
                  Palette::Searchable, Activation::InteractiveTool,
                  Danger::None, {}, kExtrudeAlongNormalsKeywords, "tool_settings"),
     presentation(quader_command::kToolsActivateKnife, Domain::Mesh,
@@ -476,7 +483,7 @@ constexpr CommandPresentationDescriptor kCatalog[]{
                  Palette::Searchable, Activation::InteractiveTool,
                  Danger::None, {}, {}, "tool_settings"),
     presentation(quader_command::kToolsActivateCut, Domain::Mesh,
-                 Group::Tools, 30u, kMenuViewportToolbarPalette,
+                 Group::Tools, 30u, kMenuViewportToolbarPalette | kLibrary,
                  Palette::Searchable, Activation::InteractiveTool,
                  Danger::None, {}, {}, "tool_settings"),
     presentation(quader_command::kModelingDuplicateMeshes, Domain::Mesh,
@@ -484,17 +491,17 @@ constexpr CommandPresentationDescriptor kCatalog[]{
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  kDuplicateAliases),
     presentation(quader_command::kModelingCombineMesh, Domain::Mesh,
-                 Group::Topology, 200u, kMenuViewportPalette),
+                 Group::Topology, 200u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingCombineMeshes, Domain::Mesh,
                  Group::Topology, 210u, kPalette),
     presentation(quader_command::kModelingBridge, Domain::Mesh,
                  Group::Topology, 220u, kPalette),
     presentation(quader_command::kModelingCreateOuterHull, Domain::Mesh,
-                 Group::Topology, 230u, kMenuViewportPalette,
+                 Group::Topology, 230u, kMenuViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Preview, Danger::None,
                  kOuterHullAliases, {}, "tool_settings"),
     presentation(quader_command::kModelingHalfCut, Domain::Mesh,
-                 Group::Topology, 240u, kMenuViewportPalette,
+                 Group::Topology, 240u, kMenuViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Preview, Danger::None, {},
                  {}, "tool_settings"),
     presentation(quader_command::kModelingRadialAlign, Domain::Mesh,
@@ -506,14 +513,14 @@ constexpr CommandPresentationDescriptor kCatalog[]{
     presentation(quader_command::kModelingMirrorSelectionZ, Domain::Mesh,
                  Group::Transform, 330u, kMenuViewportPalette),
     presentation(quader_command::kModelingFlipHorizontal, Domain::Mesh,
-                 Group::Transform, 340u, kMenuViewportPalette),
+                 Group::Transform, 340u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingFlipVertical, Domain::Mesh,
-                 Group::Transform, 350u, kMenuViewportPalette),
+                 Group::Transform, 350u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingFlipFaceNormals, Domain::Mesh,
                  Group::Normals, 400u, kPalette, Palette::Searchable,
                  Activation::Immediate, Danger::None, {}, kNormalKeywords),
     presentation(quader_command::kModelingInvertMesh, Domain::Mesh,
-                 Group::Normals, 410u, kMenuViewportPalette,
+                 Group::Normals, 410u, kMenuViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kNormalKeywords),
     presentation(quader_command::kModelingRecalculateFaceNormals,
@@ -540,111 +547,111 @@ constexpr CommandPresentationDescriptor kCatalog[]{
     // Vertex: topology and transforms first, merge workflows together, and
     // removal last so menus follow the modeling workflow.
     presentation(quader_command::kModelingConnectVertices, Domain::Vertex,
-                 Group::Topology, 100u, kMenuViewportPalette),
+                 Group::Topology, 100u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingBevelVertices, Domain::Vertex,
-                 Group::Topology, 110u, kMenuViewportPalette),
+                 Group::Topology, 110u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingSnapVerticesToActive,
                  Domain::Vertex, Group::Transform, 200u,
-                 kMenuViewportPalette),
+                 kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingSnapVerticesToFloor,
                  Domain::Vertex, Group::Transform, 210u,
-                 kMenuViewportPalette),
+                 kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingRadialAlignVertices,
                  Domain::Vertex, Group::Transform, 220u,
-                 kMenuViewportPalette),
+                 kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingMergeVertices, Domain::Vertex,
-                 Group::Merge, 300u, kMenuViewportPalette),
+                 Group::Merge, 300u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingMergeVerticesAtCenter,
                  Domain::Vertex, Group::Merge, 310u,
-                 kMenuViewportPalette),
+                 kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingMergeVerticesToActive,
                  Domain::Vertex, Group::Merge, 320u, kPalette),
     presentation(quader_command::kModelingMergeVerticesToCenter,
                  Domain::Vertex, Group::Merge, 330u, kPalette),
     presentation(quader_command::kModelingMergeByDistance, Domain::Vertex,
-                 Group::Merge, 340u, kMenuViewportPalette,
+                 Group::Merge, 340u, kMenuViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Preview, Danger::None,
                  kMergeDistanceAliases, {}, "tool_settings"),
     presentation(quader_command::kModelingDissolveVertices,
                  Domain::Vertex, Group::Cleanup, 900u,
-                 kMenuViewportPalette),
+                 kMenuViewportPalette | kLibrary),
 
     // Edge: edge-loop activation and topology lead; cleanup removals are
     // deliberately last.
     presentation(quader_command::kToolsActivateInsertEdgeLoop,
                  Domain::Edge, Group::Tools, 10u,
-                 kMenuViewportToolbarPalette, Palette::Searchable,
+                 kMenuViewportToolbarPalette | kLibrary, Palette::Searchable,
                  Activation::InteractiveTool, Danger::None, {}, {},
                  "tool_settings"),
     presentation(quader_command::kModelingConnectEdges, Domain::Edge,
-                 Group::Topology, 100u, kMenuViewportPalette),
+                 Group::Topology, 100u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingSplitEdges, Domain::Edge,
-                 Group::Topology, 110u, kMenuViewportPalette),
+                 Group::Topology, 110u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingSplitEdgesMidpoint, Domain::Edge,
-                 Group::Topology, 115u, kMenuViewportPalette),
+                 Group::Topology, 115u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingFillHole, Domain::Edge,
-                 Group::Topology, 120u, kMenuViewportPalette),
+                 Group::Topology, 120u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingBridgeEdges, Domain::Edge,
                  Group::Topology, 130u, kViewportPalette),
     presentation(quader_command::kModelingPreviewBridgeEdges,
                  Domain::Edge, Group::Topology, 140u,
-                 kMenuViewportPalette, Palette::Searchable,
+                 kMenuViewportPalette | kLibrary, Palette::Searchable,
                  Activation::Preview, Danger::None, {}, {},
                  "tool_settings"),
     presentation(quader_command::kModelingBevelEdges, Domain::Edge,
-                 Group::Topology, 150u, kMenuViewportPalette,
+                 Group::Topology, 150u, kMenuViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Preview, Danger::None, {},
                  {}, "tool_settings"),
     presentation(quader_command::kModelingSnapEdgesToActive, Domain::Edge,
-                 Group::Transform, 200u, kMenuViewportPalette),
+                 Group::Transform, 200u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingRadialAlignEdges, Domain::Edge,
-                 Group::Transform, 210u, kMenuViewportPalette),
+                 Group::Transform, 210u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingMergeEdges, Domain::Edge,
-                 Group::Merge, 300u, kMenuViewportPalette),
+                 Group::Merge, 300u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingDefaultEdgeNormals, Domain::Edge,
-                 Group::Normals, 400u, kMenuViewportPalette,
+                 Group::Normals, 400u, kMenuViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kNormalKeywords),
     presentation(quader_command::kModelingHardenEdgeNormals, Domain::Edge,
-                 Group::Normals, 410u, kMenuViewportPalette,
+                 Group::Normals, 410u, kMenuViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kNormalKeywords),
     presentation(quader_command::kModelingSoftenEdgeNormals, Domain::Edge,
-                 Group::Normals, 420u, kMenuViewportPalette,
+                 Group::Normals, 420u, kMenuViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kNormalKeywords),
     presentation(quader_command::kModelingDissolveEdges, Domain::Edge,
-                 Group::Cleanup, 900u, kMenuViewportPalette),
+                 Group::Cleanup, 900u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingCollapseEdges, Domain::Edge,
-                 Group::Cleanup, 910u, kMenuViewportPalette),
+                 Group::Cleanup, 910u, kMenuViewportPalette | kLibrary),
 
     // Face: face topology, transforms, normals, and shading. Collapse remains
     // the last destructive-shape operation.
     presentation(quader_command::kModelingExtractFaces, Domain::Face,
-                 Group::Topology, 100u, kMenuViewportPalette),
+                 Group::Topology, 100u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingDetachFaces, Domain::Face,
-                 Group::Topology, 110u, kMenuViewportPalette),
+                 Group::Topology, 110u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingCombineFaces, Domain::Face,
-                 Group::Topology, 120u, kMenuViewportPalette),
+                 Group::Topology, 120u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingBridgeFaces, Domain::Face,
                  Group::Topology, 130u, kViewportPalette),
     presentation(quader_command::kModelingPreviewBridgeFaces,
                  Domain::Face, Group::Topology, 140u,
-                 kMenuViewportPalette, Palette::Searchable,
+                 kMenuViewportPalette | kLibrary, Palette::Searchable,
                  Activation::Preview, Danger::None, {}, {},
                  "tool_settings"),
     presentation(quader_command::kModelingSliceQuad, Domain::Face,
-                 Group::Topology, 150u, kMenuViewportPalette,
+                 Group::Topology, 150u, kMenuViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Preview, Danger::None, {},
                  {}, "tool_settings"),
     presentation(quader_command::kModelingThickenFaces, Domain::Face,
-                 Group::Topology, 160u, kMenuViewportPalette,
+                 Group::Topology, 160u, kMenuViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Preview, Danger::None, {},
                  {}, "tool_settings"),
     presentation(quader_command::kModelingRadialAlignFaces, Domain::Face,
-                 Group::Transform, 200u, kMenuViewportPalette),
+                 Group::Transform, 200u, kMenuViewportPalette | kLibrary),
     presentation(quader_command::kModelingInvertFaces, Domain::Face,
-                 Group::Normals, 300u, kMenuViewportPalette,
+                 Group::Normals, 300u, kMenuViewportPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kNormalKeywords),
     presentation(quader_command::kModelingShadeFacesSmooth, Domain::Face,
@@ -656,124 +663,124 @@ constexpr CommandPresentationDescriptor kCatalog[]{
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kShadingKeywords),
     presentation(quader_command::kModelingCollapseFaces, Domain::Face,
-                 Group::Cleanup, 900u, kMenuViewportPalette),
+                 Group::Cleanup, 900u, kMenuViewportPalette | kLibrary),
 
     // UV: the main menu is a curated modeling surface; lower-frequency scale,
     // shift, and face-flip variants remain searchable without crowding it.
     presentation(quader_command::kModelingUvPeel, Domain::UV,
-                 Group::Texture, 500u, kMenuViewportToolbarPalette,
+                 Group::Texture, 500u, kMenuViewportToolbarPalette | kLibrary,
                  Palette::Searchable, Activation::InteractiveTool, Danger::None,
                  {}, kTextureKeywords, "tool_settings"),
     presentation(quader_command::kModelingTextureProjectCube,
-                 Domain::UV, Group::Texture, 501u, kMenuPalette,
+                 Domain::UV, Group::Texture, 501u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureProjectCylinder,
-                 Domain::UV, Group::Texture, 502u, kMenuPalette,
+                 Domain::UV, Group::Texture, 502u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureProjectSphere,
-                 Domain::UV, Group::Texture, 503u, kMenuPalette,
+                 Domain::UV, Group::Texture, 503u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureAlignToGrid,
-                 Domain::UV, Group::Texture, 510u, kMenuPalette,
+                 Domain::UV, Group::Texture, 510u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureAlignToFace,
-                 Domain::UV, Group::Texture, 520u, kMenuPalette,
+                 Domain::UV, Group::Texture, 520u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureAlignToView,
-                 Domain::UV, Group::Texture, 530u, kMenuPalette,
+                 Domain::UV, Group::Texture, 530u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureScaleXUp, Domain::UV,
-                 Group::Texture, 540u, kPalette,
+                 Group::Texture, 540u, kPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureScaleXDown, Domain::UV,
-                 Group::Texture, 550u, kPalette,
+                 Group::Texture, 550u, kPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureScaleYUp, Domain::UV,
-                 Group::Texture, 560u, kPalette,
+                 Group::Texture, 560u, kPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureScaleYDown, Domain::UV,
-                 Group::Texture, 570u, kPalette,
+                 Group::Texture, 570u, kPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureShiftLeft, Domain::UV,
-                 Group::Texture, 580u, kPalette,
+                 Group::Texture, 580u, kPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureShiftRight, Domain::UV,
-                 Group::Texture, 590u, kPalette,
+                 Group::Texture, 590u, kPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureShiftUp, Domain::UV,
-                 Group::Texture, 600u, kPalette,
+                 Group::Texture, 600u, kPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureShiftDown, Domain::UV,
-                 Group::Texture, 610u, kPalette,
+                 Group::Texture, 610u, kPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureRotateClockwise,
-                 Domain::UV, Group::Texture, 620u, kMenuPalette,
+                 Domain::UV, Group::Texture, 620u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureRotateCounterClockwise,
-                 Domain::UV, Group::Texture, 630u, kMenuPalette,
+                 Domain::UV, Group::Texture, 630u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureFlipTextureHorizontal,
-                 Domain::UV, Group::Texture, 640u, kMenuPalette,
+                 Domain::UV, Group::Texture, 640u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureFlipTextureVertical,
-                 Domain::UV, Group::Texture, 650u, kMenuPalette,
+                 Domain::UV, Group::Texture, 650u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureFlipFaceHorizontal,
-                 Domain::UV, Group::Texture, 660u, kPalette,
+                 Domain::UV, Group::Texture, 660u, kPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kMirrorFaceUvKeywords),
     presentation(quader_command::kModelingTextureFlipFaceVertical,
-                 Domain::UV, Group::Texture, 670u, kPalette,
+                 Domain::UV, Group::Texture, 670u, kPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kMirrorFaceUvKeywords),
     presentation(quader_command::kModelingTextureFitBoth, Domain::UV,
-                 Group::Texture, 680u, kMenuPalette,
+                 Group::Texture, 680u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureFitX, Domain::UV,
-                 Group::Texture, 690u, kMenuPalette,
+                 Group::Texture, 690u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureFitY, Domain::UV,
-                 Group::Texture, 700u, kMenuPalette,
+                 Group::Texture, 700u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureJustifyLeft, Domain::UV,
-                 Group::Texture, 710u, kMenuPalette,
+                 Group::Texture, 710u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureJustifyRight,
-                 Domain::UV, Group::Texture, 720u, kMenuPalette,
+                 Domain::UV, Group::Texture, 720u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureJustifyTop, Domain::UV,
-                 Group::Texture, 730u, kMenuPalette,
+                 Group::Texture, 730u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureJustifyBottom,
-                 Domain::UV, Group::Texture, 740u, kMenuPalette,
+                 Domain::UV, Group::Texture, 740u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     presentation(quader_command::kModelingTextureJustifyCenter,
-                 Domain::UV, Group::Texture, 750u, kMenuPalette,
+                 Domain::UV, Group::Texture, 750u, kMenuPalette | kLibrary,
                  Palette::Searchable, Activation::Immediate, Danger::None,
                  {}, kTextureKeywords),
     // View: focused viewport navigation and presentation, including layouts.
@@ -975,6 +982,18 @@ constexpr CommandPresentationDescriptor kCatalog[]{
 
 };
 
+std::optional<ModelingSelectionMode>
+modeling_selection_kind(QuaderSelectionMode kind) noexcept {
+  switch (kind) {
+  case QuaderSelectionMode::Object: return ModelingSelectionMode::Object;
+  case QuaderSelectionMode::Group: return ModelingSelectionMode::Group;
+  case QuaderSelectionMode::Vertex: return ModelingSelectionMode::Vertex;
+  case QuaderSelectionMode::Edge: return ModelingSelectionMode::Edge;
+  case QuaderSelectionMode::Face: return ModelingSelectionMode::Face;
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 std::span<const CommandPresentationDescriptor>
@@ -990,6 +1009,97 @@ find_command_presentation(std::string_view command_id) noexcept {
         return descriptor.command_id.string() == command_id;
       });
   return found == std::end(kCatalog) ? nullptr : &*found;
+}
+
+bool command_presentation_supports_selection_kind(
+    const CommandPresentationDescriptor &descriptor,
+    QuaderSelectionMode kind) noexcept {
+  const auto modeling_kind = modeling_selection_kind(kind);
+  if (!modeling_kind.has_value() ||
+      !has_command_presentation_surface(descriptor, Surface::CommandsLibrary)) {
+    return false;
+  }
+  const auto command = descriptor.command_id;
+  const auto is = [command](QuaderCommandId id) {
+    return command.string() == id.string();
+  };
+  const auto supports = [modeling_kind](EditorModeSupport support) {
+    const bool object = *modeling_kind == ModelingSelectionMode::Object ||
+                        *modeling_kind == ModelingSelectionMode::Group;
+    return editor_mode_supported(support, object ? EditorMode::Object : EditorMode::Edit);
+  };
+
+  if (is(quader_command::kSelectEdgeLoops) || is(quader_command::kSelectEdgeRing)) {
+    return kind == QuaderSelectionMode::Edge;
+  }
+
+  // Runtime Cut preflight accepts whole objects, edges or faces, never vertices.
+  if (is(quader_command::kToolsActivateCut) &&
+      kind == QuaderSelectionMode::Vertex) {
+    return false;
+  }
+
+  // Component menus describe authoring contexts, not activation permissions.
+  // An Edge tool that can switch from Vertex selection still belongs to Edge.
+  if ((descriptor.domain == Domain::Vertex && kind != QuaderSelectionMode::Vertex) ||
+      (descriptor.domain == Domain::Edge && kind != QuaderSelectionMode::Edge) ||
+      (descriptor.domain == Domain::Face && kind != QuaderSelectionMode::Face)) {
+    return false;
+  }
+  if (is(quader_command::kToolsActivateExtrudeIndividual) ||
+      is(quader_command::kToolsActivateExtrudeAlongNormals)) {
+    return kind == QuaderSelectionMode::Face;
+  }
+  if (const auto tool_id =
+          quader_tool_id_from_activation_command_target(command.string())) {
+    const auto *tool = find_viewport_tool_descriptor(*tool_id);
+    if (tool == nullptr || !supports(tool->supported_editor_modes)) {
+      return false;
+    }
+    // Extrude edits faces; Knife, Insert Loop and UV Peel author edges.
+    // Their broad activation masks permit a deliberate context switch elsewhere.
+    return !tool->required_component_kind.has_value() ||
+           *tool->required_component_kind == *modeling_kind;
+  }
+  if (!command.string().starts_with(kQuaderModelingCommandTargetPrefix)) {
+    return false;
+  }
+  if (descriptor.domain == Domain::UV) {
+    if (is(quader_command::kModelingTextureProjectCube) ||
+        is(quader_command::kModelingTextureProjectCylinder) ||
+        is(quader_command::kModelingTextureProjectSphere)) {
+      return kind == QuaderSelectionMode::Object ||
+             kind == QuaderSelectionMode::Face;
+    }
+    return kind == QuaderSelectionMode::Face;
+  }
+  if ((descriptor.domain == Domain::Object || descriptor.domain == Domain::Mesh) &&
+      kind != QuaderSelectionMode::Object) {
+    return false;
+  }
+  const auto action_id = quader_command_target_suffix(
+      command.string(), kQuaderModelingCommandTargetPrefix);
+  if (action_id.has_value()) {
+    if (const auto *action =
+            quader_host_contract::find_action_descriptor(*action_id)) {
+      return supports(action->supported_editor_modes);
+    }
+  }
+  // Native-only modeling commands retain the selected menu's authoring scope.
+  // Their command descriptor separately evaluates the current operand selection.
+  switch (descriptor.domain) {
+  case Domain::Object:
+  case Domain::Mesh:
+    return kind == QuaderSelectionMode::Object;
+  case Domain::Vertex:
+    return kind == QuaderSelectionMode::Vertex;
+  case Domain::Edge:
+    return kind == QuaderSelectionMode::Edge;
+  case Domain::Face:
+    return kind == QuaderSelectionMode::Face;
+  default:
+    return false;
+  }
 }
 
 std::string_view

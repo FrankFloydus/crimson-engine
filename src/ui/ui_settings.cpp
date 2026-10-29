@@ -85,6 +85,10 @@ UISettings UISettings::load(const std::filesystem::path& path) {
         settings.set_panel_visible(
             *panel_id,
             parse_bool(value, settings.is_panel_visible(*panel_id)));
+      } else if (key == "ModelingToolsToolbarVisible") {
+        settings.modeling_tools_toolbar_visible_ = parse_bool(value, true);
+      } else if (key == "ModelingTextureToolbarVisible") {
+        settings.modeling_texture_toolbar_visible_ = parse_bool(value, true);
       } else if (key == "Locale") {
         settings.set_locale(value);
       } else if (key == "VSync") {
@@ -151,6 +155,12 @@ bool UISettings::save(const std::filesystem::path& path) const {
       file << ui_panel_stable_id(id) << '='
            << (is_panel_visible(id) ? "true" : "false") << '\n';
     }
+    if (modeling_tools_toolbar_visible_.has_value()) {
+      file << "ModelingToolsToolbarVisible=" << (*modeling_tools_toolbar_visible_ ? "true" : "false") << '\n';
+    }
+    if (modeling_texture_toolbar_visible_.has_value()) {
+      file << "ModelingTextureToolbarVisible=" << (*modeling_texture_toolbar_visible_ ? "true" : "false") << '\n';
+    }
     file << "\n[Localization]\n";
     file << "Locale=" << locale_ << '\n';
     file << "\n[Interface]\n";
@@ -191,6 +201,10 @@ bool UISettings::is_panel_visible(UIPanelId id) const {
     return face_texture_visible_;
   case UIPanelId::AssetBrowser:
     return asset_browser_visible_;
+  case UIPanelId::ToolSettings:
+    return tool_settings_visible_;
+  case UIPanelId::CommandsLibrary:
+    return commands_library_visible_;
   case UIPanelId::Count:
     break;
   }
@@ -218,6 +232,12 @@ void UISettings::set_panel_visible(UIPanelId id, bool visible) {
     break;
   case UIPanelId::AssetBrowser:
     asset_browser_visible_ = visible;
+    break;
+  case UIPanelId::ToolSettings:
+    tool_settings_visible_ = visible;
+    break;
+  case UIPanelId::CommandsLibrary:
+    commands_library_visible_ = visible;
     break;
   case UIPanelId::Count:
     break;

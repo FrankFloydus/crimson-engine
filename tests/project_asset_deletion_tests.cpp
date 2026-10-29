@@ -156,6 +156,7 @@ protected:
   }
 
   void TearDown() override {
+    project_.project_assets().set_mutation_prepare({});
     (void)project_.close(true);
     std::error_code ignored;
     std::filesystem::remove_all(root_, ignored);
@@ -335,15 +336,11 @@ TEST_F(ProjectAssetDeletionTests, PostRecycleFailureRestoresEmptyFoldersAndLeave
   EXPECT_EQ(asset_delete_read(root_ / "Content/Scene.qdr"), baseline);
 }
 
-TEST_F(ProjectAssetDeletionTests, UnsupportedFolderContentsPreventAnyMutation) {
-  asset_delete_write(root_ / "Content/notes.txt", "Preserve unsupported content");
-  ProjectAssetDeletionService deletion(project_, recycle_all());
-  const std::array paths{asset_delete_path("Content")};
-  const auto preview = deletion.preview(paths);
-  EXPECT_FALSE(preview.complete);
-  EXPECT_FALSE(deletion.erase(paths, preview.revision).ok);
-  EXPECT_TRUE(recycled_paths_.empty());
-  EXPECT_TRUE(std::filesystem::exists(root_ / "Content/notes.txt"));
+TEST_F(ProjectAssetDeletionTests, ArbitraryFolderContentsParticipateInPhysicalDeletion) {
+  asset_delete_write(root_/"Content/notes.native","Ordinary native source");bool saw_raw=false;
+  ProjectAssetDeletionService deletion(project_,[&](std::span<const std::filesystem::path> paths){saw_raw=asset_delete_read(root_/"Content/notes.native")=="Ordinary native source";return recycle_all()(paths);});
+  const std::array paths{asset_delete_path("Content")};const auto preview=deletion.preview(paths);ASSERT_TRUE(preview.complete)<<::testing::PrintToString(preview.errors);
+  const auto erased=deletion.erase(paths,preview.revision);ASSERT_TRUE(erased.ok)<<erased.message;EXPECT_TRUE(saw_raw);EXPECT_FALSE(std::filesystem::exists(root_/"Content"));
 }
 
 TEST_F(ProjectAssetDeletionTests, FileChangeInvalidatesConfirmationBeforeRecycling) {
@@ -510,4 +507,16 @@ TEST_F(ProjectAssetDeletionTests, WindowsRecycleBinKeepsOriginalProjectRestoreLo
 }
 
 } // namespace
+TEST_F(ProjectAssetDeletionTests, TypedMutationRejectionPreventsAnyRecycling){
+  asset_delete_write(root_/"Content/typed.native","typed source");unsigned prepares=0;
+  project_.project_assets().set_mutation_prepare([&](const ProjectAssetMutation& mutation){++prepares;EXPECT_EQ(mutation.kind,ProjectAssetMutationKind::Delete);if(!mutation.paths.empty()){EXPECT_EQ(mutation.paths.front().source,asset_delete_path("Content/typed.native"));EXPECT_FALSE(mutation.paths.front().destination);}return ProjectIoResult<ProjectAssetMutationPreparation>::failure(ProjectIoErrorCode::InvalidWorkspaceState,"Typed asset has retained references");});
+  ProjectAssetDeletionService deletion(project_,recycle_all());const std::array paths{asset_delete_path("Content/typed.native")};const auto preview=deletion.preview(paths);EXPECT_FALSE(preview.complete);EXPECT_FALSE(deletion.erase(paths,preview.revision).ok);EXPECT_GE(prepares,1u);EXPECT_TRUE(recycled_paths_.empty());EXPECT_EQ(asset_delete_read(root_/"Content/typed.native"),"typed source");
+}
+TEST_F(ProjectAssetDeletionTests, PostRecycleFailureRollsBackExistingAndPreviouslyAbsentMetadata){
+  asset_delete_write(root_/"Content/typed.native","typed source");asset_delete_write(root_/".crimson/asset-locations.json","before");unsigned commits=0;
+  project_.project_assets().set_mutation_prepare([&](const ProjectAssetMutation& mutation){EXPECT_EQ(mutation.kind,ProjectAssetMutationKind::Delete);ProjectAssetMutationPreparation prepared;prepared.revision=9;prepared.writes.push_back({asset_delete_path(".crimson/asset-locations.json"),"before","after"});prepared.writes.push_back({.path=asset_delete_path(".crimson/references.json"),.after="created",.create_new=true});prepared.validate=[](){return ProjectIoResult<void>::success();};prepared.committed=[&]{++commits;};return ProjectIoResult<ProjectAssetMutationPreparation>::success(std::move(prepared));});
+  ProjectAssetDeletionService deletion(project_,recycle_all(),{.after_recycle=[&]{EXPECT_EQ(asset_delete_read(root_/".crimson/asset-locations.json"),"after");EXPECT_TRUE(std::filesystem::exists(root_/".crimson/references.json"));throw std::runtime_error("Injected post-recycle publication failure");}});
+  const auto manifest=asset_delete_read(manifest_path_);const std::array paths{asset_delete_path("Content/typed.native")};const auto preview=deletion.preview(paths);ASSERT_TRUE(preview.complete)<<::testing::PrintToString(preview.errors);const auto erased=deletion.erase(paths,preview.revision);EXPECT_FALSE(erased.ok);EXPECT_EQ(asset_delete_read(root_/"Content/typed.native"),"typed source");EXPECT_EQ(asset_delete_read(root_/".crimson/asset-locations.json"),"before");EXPECT_FALSE(std::filesystem::exists(root_/".crimson/references.json"));EXPECT_EQ(asset_delete_read(manifest_path_),manifest);EXPECT_EQ(commits,0u);
+}
+
 } // namespace quader

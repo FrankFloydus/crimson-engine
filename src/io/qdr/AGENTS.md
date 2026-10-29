@@ -19,7 +19,13 @@ See [README.md](README.md) for the format/owner map.
   checksums and container/scene references remain validated independently of topology quality.
 - Successful native read/write results carry the exact source byte count and FNV-1a fingerprint
   for save synchronization. Compute these from the bytes already being decoded/serialized.
-- Current scene metadata is schema 20; compiled circular UV fields use optional sparse
+- Current scene metadata is schema 21; optional Engine component/settings envelopes retain
+  immutable host bytes and declared native entity UUID references. These fields are rejected
+  in older schemas. Optional Engine asset UUID inventories distinguish an explicit empty set from
+  absent/unknown data. The Engine reference projection validates only SCNE and never accesses geometry
+  chunks; deletion fails closed for missing inventories or unreadable saved metadata.
+  Portable SDK topology/container identities are independent and unchanged.
+  Schema 20 compiled circular UV fields use optional sparse
   descriptors and one-based vertex references. Older schemas must not carry these fields.
   Schema 19 optional per-mesh wire colors inherit the viewport default when absent or read
   from older schemas. Colors contain finite normalized sRGB.

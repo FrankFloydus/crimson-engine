@@ -10,6 +10,7 @@
 
 class QMainWindow;
 class QWidget;
+namespace quader { struct QtAssetBrowserExtension; }
 
 namespace crimson::integration {
 class LevelSession;
@@ -18,9 +19,10 @@ class LevelSession;
 // reference reports and transactional deletion. It owns no device or app loop.
 class LevelAssetBrowser final {
 public:
-    LevelAssetBrowser(QMainWindow&,std::function<void()> requestFrame);
+    LevelAssetBrowser(QMainWindow&,std::function<void()> requestFrame,bool createView=true);
     ~LevelAssetBrowser();
     QWidget* widget() const;
+    std::shared_ptr<quader::QtAssetBrowserExtension> extension();
     void bind(LevelSession*);
     void update(std::uint32_t rendererFrame,bool pauseThumbnails=false,int previewSize=128,
         std::span<const std::string> materialPreviews={});

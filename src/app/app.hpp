@@ -15,6 +15,7 @@
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/render_host.hpp"
 #include "render/render_scene_sink.hpp"
+#include "render/render_source_stamp.hpp"
 #include "ui/ui_system.hpp"
 
 #include <QMetaObject>
@@ -29,6 +30,7 @@ class QApplication;
 class QScreen;
 class QTimer;
 namespace crimson::integration {class LevelSession;class LevelPanels;}
+namespace crimson::integration {class NativeAssetRetention;}
 namespace crimson::integration {class LevelProfiling;}
 namespace crimson::profiling {class EngineProfile;class FrameProfile;}
 
@@ -41,7 +43,6 @@ class ProjectSessionRenderMaterialResolver;
 struct AppOptions {
   RendererBackend render_backend = RendererBackend::Vulkan;
   std::optional<RenderCompositionApi> composition_api;
-  std::filesystem::path engine_project_root;
   std::string profile_mode;
   std::uint32_t profile_duration{15};
   std::filesystem::path profile_output,frame_profile;
@@ -79,18 +80,22 @@ private:
   void poll_autosave();
 #if defined(CRIMSON_ENGINE_APPLICATION)
   void synchronize_engine_session();
-  bool open_engine_project(const std::filesystem::path&,bool explicit_selection);
+  void synchronize_modeling_world();
+  bool bind_engine_project(const std::filesystem::path&);
   std::unique_ptr<crimson::integration::LevelSession> engine_level_;
   std::unique_ptr<crimson::integration::LevelPanels> engine_panels_;
-  std::filesystem::path engine_project_root_;
-  std::filesystem::path requested_engine_root_,engine_root_selection_path_,rejected_engine_root_;
-  bool engine_root_pinned_{};
+  std::shared_ptr<crimson::integration::NativeAssetRetention> native_asset_retention_;
+  std::uint64_t retention_project_generation_{UINT64_MAX};
+  std::filesystem::path bound_project_root_,rejected_project_root_;
+  std::uint64_t workspace_project_generation_{UINT64_MAX};
+  std::uint64_t engine_asset_catalog_revision_{UINT64_MAX};
+  std::shared_ptr<const RenderSceneSnapshot> modeling_authoring_source_;
+  std::optional<RenderSourceStamp> modeling_authoring_stamp_;
   std::unique_ptr<crimson::profiling::EngineProfile> engine_profile_;
   std::unique_ptr<crimson::profiling::FrameProfile> frame_profile_;
   std::unique_ptr<crimson::integration::LevelProfiling> profiling_controls_;
   std::uint32_t profile_frame_{};
   bool profile_backend_ready_{};
-  std::string engine_document_key_;
 #endif
 
   QApplication *application_ = nullptr;

@@ -528,9 +528,50 @@ std::uint64_t ProjectManifest::texture_metadata_fingerprint() const noexcept {
   return hash == 0u ? 1u : hash;
 }
 
+ProjectIoResult<std::optional<std::filesystem::path>>
+ProjectManifestStore::manifest_in_directory(const std::filesystem::path &root) {
+  auto opened = ProjectFileSystem::open(root);
+  if (!opened.ok()) {
+    return ProjectIoResult<std::optional<std::filesystem::path>>::failure(
+        opened.error().code, opened.error().message, opened.error().path);
+  }
+  std::error_code error;
+  std::optional<std::filesystem::path> manifest;
+  for (std::filesystem::directory_iterator iterator(opened.value().root(), error), end;
+       !error && iterator != end; iterator.increment(error)) {
+    if (QStr::to_ascii_lower(iterator->path().extension().string()) != ".qproj") {
+      continue;
+    }
+    if (!iterator->is_regular_file(error) || error) {
+      return ProjectIoResult<std::optional<std::filesystem::path>>::failure(
+          ProjectIoErrorCode::FileNotRegular,
+          "Project manifest is not a regular file.", iterator->path());
+    }
+    if (manifest.has_value()) {
+      return ProjectIoResult<std::optional<std::filesystem::path>>::failure(
+          ProjectIoErrorCode::DuplicateAsset,
+          "The selected folder contains more than one project manifest.",
+          opened.value().root());
+    }
+    manifest = iterator->path();
+  }
+  if (error) {
+    return ProjectIoResult<std::optional<std::filesystem::path>>::failure(
+        ProjectIoErrorCode::IoFailure,
+        "Could not inspect project folder: " + error.message(), root);
+  }
+  return ProjectIoResult<std::optional<std::filesystem::path>>::success(
+      std::move(manifest));
+}
+
 ProjectIoResult<ProjectWorkspaceStorage>
-ProjectManifestStore::create_in_empty_directory(
-    const std::filesystem::path &root) {
+ProjectManifestStore::create_in_empty_directory(const std::filesystem::path &root) {
+  return create_in_directory(root, false);
+}
+
+ProjectIoResult<ProjectWorkspaceStorage>
+ProjectManifestStore::create_in_directory(
+    const std::filesystem::path &root, bool allow_existing_content) {
   ProjectIoResult<ProjectFileSystem> opened_file_system =
       ProjectFileSystem::open(root);
   if (!opened_file_system.ok()) {
@@ -548,13 +589,24 @@ ProjectManifestStore::create_in_empty_directory(
         "Could not inspect project folder: " + error.message(),
         file_system.root());
   }
-  if (iterator != std::filesystem::directory_iterator{}) {
+  if (!allow_existing_content && iterator != std::filesystem::directory_iterator{}) {
     return ProjectIoResult<ProjectWorkspaceStorage>::failure(
         ProjectIoErrorCode::RootNotEmpty,
         "A new Quader project requires a completely empty folder.",
         file_system.root());
   }
 
+  const auto existing = manifest_in_directory(file_system.root());
+  if (!existing.ok()) {
+    return ProjectIoResult<ProjectWorkspaceStorage>::failure(
+        existing.error().code, existing.error().message, existing.error().path);
+  }
+  if (existing.value().has_value()) {
+    return ProjectIoResult<ProjectWorkspaceStorage>::failure(
+        ProjectIoErrorCode::DuplicateAsset,
+        "The selected folder already contains a project manifest; open that project.",
+        *existing.value());
+  }
   const std::filesystem::path project_name =
       normalized_root_filename(file_system.root());
   if (project_name.empty()) {
@@ -574,7 +626,14 @@ ProjectManifestStore::create_in_empty_directory(
 
   const std::filesystem::path scenes_directory =
       file_system.root() / "Scenes";
-  if (!std::filesystem::create_directory(scenes_directory, error) || error) {
+  const bool created_scenes =
+      std::filesystem::create_directory(scenes_directory, error);
+  if (!error && !created_scenes) {
+    if (!std::filesystem::is_directory(scenes_directory, error) && !error) {
+      error = std::make_error_code(std::errc::not_a_directory);
+    }
+  }
+  if (error) {
     return ProjectIoResult<ProjectWorkspaceStorage>::failure(
         ProjectIoErrorCode::IoFailure,
         "Could not create project Scenes directory: " + error.message(),
@@ -585,12 +644,15 @@ ProjectManifestStore::create_in_empty_directory(
       .file_system = std::move(file_system),
       .manifest = created_manifest.take_value(),
   };
+  workspace.created_scenes_directory = created_scenes;
   workspace.manifest_path = expected_manifest_path(workspace.file_system);
   workspace.manifest.mark_saved_by_current_app();
-  ProjectIoResult<void> saved = save_atomic(workspace);
+  ProjectIoResult<void> saved = save_atomic(workspace, true);
   if (!saved.ok()) {
     std::error_code ignored;
-    std::filesystem::remove(scenes_directory, ignored);
+    if (created_scenes) {
+      std::filesystem::remove(scenes_directory, ignored);
+    }
     return ProjectIoResult<ProjectWorkspaceStorage>::failure(
         saved.error().code, saved.error().message, saved.error().path);
   }
@@ -698,15 +760,15 @@ ProjectManifestStore::open_metadata(const std::filesystem::path &manifest_path) 
 }
 
 ProjectIoResult<void> ProjectManifestStore::save_atomic(
-    const ProjectWorkspaceStorage &workspace) {
+    const ProjectWorkspaceStorage &workspace, bool create_new) {
   return save_atomic(workspace.file_system, workspace.manifest_path,
-                     workspace.manifest);
+                     workspace.manifest, create_new);
 }
 
 ProjectIoResult<void> ProjectManifestStore::save_atomic(
     const ProjectFileSystem &file_system,
     const std::filesystem::path &manifest_path,
-    const ProjectManifest &manifest) {
+    const ProjectManifest &manifest, bool create_new) {
   if (!file_system.valid() || !manifest.id().valid()) {
     return ProjectIoResult<void>::failure(
         ProjectIoErrorCode::InvalidWorkspaceState,
@@ -732,7 +794,10 @@ ProjectIoResult<void> ProjectManifestStore::save_atomic(
         "Project manifest exceeds its encoded size limit.", manifest_path);
   }
   quader_io::QdrAtomicWriteResult write_result =
-      quader_io::write_qdr_text_atomic(manifest_path, encoded);
+      quader_io::write_qdr_text_atomic(
+          manifest_path, encoded, {},
+          create_new ? quader_io::QdrAtomicWriteDisposition::CreateNew
+                     : quader_io::QdrAtomicWriteDisposition::ReplaceExisting);
   if (!write_result.ok) {
     return ProjectIoResult<void>::failure(ProjectIoErrorCode::IoFailure,
                                           write_result.message,

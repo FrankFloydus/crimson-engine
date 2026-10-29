@@ -2,7 +2,6 @@
 #include "ModelAnimation.h"
 #include "MaterialAsset.h"
 #include "ContentStorage.h"
-#include "QuaderSceneBundle.h"
 #include "resources/AssetId.h"
 #include "resources/StreamingModel.h"
 
@@ -930,10 +929,10 @@ void animations(const GltfSource& data,ModelAsset& asset) {
 
 std::string modelIdentity(const fs::path& root,const fs::path& directory) {
     if(const auto id=assetIdAtPath(root,directory/"manifest.json");!id.empty())return canonicalAssetId(id);
-    return canonicalAssetId("assets/models/"+utf8(directory.filename())+"/manifest.json");
+    return canonicalAssetId("model-package:"+utf8(directory.lexically_relative(root)));
 }
 fs::path modelStagingRoot(const fs::path& root) {
-    return contentStorageReady(root)?resolveAssetPath(root,"assets/.staging-models"):root/"assets/models";
+    return root/".crimson/.staging-models";
 }
 bool modelIdentityAvailable(const fs::path& root,const fs::path& directory) {
     const auto id=modelIdentity(root,directory);const auto file=fs::weakly_canonical(directory/"manifest.json");
@@ -941,21 +940,11 @@ bool modelIdentityAvailable(const fs::path& root,const fs::path& directory) {
     return true;
 }
 bool modelManifestLocation(const fs::path& root,const fs::path& file) {
-    if(file.filename()!="manifest.json")return false;
-    if(inside(file,fs::weakly_canonical(contentStorageReady(root)?root/"Content":root/"assets/models")))return true;
-    if(contentStorageReady(root)&&inside(file,fs::weakly_canonical(root/".crimson/cache/quader-imports"))) {
-        // Generated packages are addressable only through a registered member
-        // of a tracked bundle. An arbitrary cache manifest is not an asset.
-        const auto id=assetIdAtPath(root,file);const auto source=quaderBundleSource(root,id);
-        if(!isAssetUuid(id)||!source||!fs::is_regular_file(*source)||source->extension()!=".crimson-quader")return false;
-        const auto owner=assetIdAtPath(root,*source);
-        return isAssetUuid(owner)&&file==fs::weakly_canonical(quaderBundleCacheDirectory(root,owner,id)/"manifest.json")&&
-            inside(fs::weakly_canonical(*source),fs::weakly_canonical(root/"Content"));
-    }
-    const auto privateRoot=fs::weakly_canonical(contentStorageReady(root)?root/".crimson":root/"assets");
-    const auto relative=file.lexically_relative(privateRoot);
+    if(file.filename()!="manifest.json"||!inside(file,fs::weakly_canonical(root)))return false;
+    const auto relative=file.lexically_relative(fs::weakly_canonical(root));
     if(relative.empty()||relative.is_absolute()||*relative.begin()=="..")return false;
-    return utf8(*relative.begin()).starts_with(".staging-quader-");
+    if(*relative.begin()!=".crimson")return true;
+    return inside(file,fs::weakly_canonical(modelStagingRoot(root)));
 }
 std::shared_ptr<ModelAsset> load(const fs::path& manifestFile,const fs::path& root,const fs::path& identityDirectory,const ModelResolvers& resolvers={},bool metadataOnly=false) {
     const auto bytes=read(manifestFile); const auto manifest=Json::parse(bytes);
@@ -1046,12 +1035,12 @@ ModelImportStage::~ModelImportStage() {
 }
 std::shared_ptr<ModelImportStage> stageModelImport(const fs::path& source,const fs::path& projectRoot) {
     const auto ext=lower(utf8(source.extension())); check(ext==".gltf" || ext==".glb","unsupported model extension");
-    const auto root=fs::weakly_canonical(fs::absolute(projectRoot));if(!contentStorageReady(root))initializeContentStorage(root);const auto models=resolveAssetPath(root,"assets/models"),stages=modelStagingRoot(root);
+    const auto root=fs::weakly_canonical(fs::absolute(projectRoot));if(!contentStorageReady(root))initializeContentStorage(root);const auto models=root,stages=modelStagingRoot(root);
     fs::create_directories(models);fs::create_directories(stages); static std::atomic<uint64_t> sequence{};
     std::string id; fs::path destination,stage;
     do {
         id="model-"+std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count())+"-"+std::to_string(sequence.fetch_add(1));
-        destination=models/path(id); stage=stages/path(".staging-"+id);
+        destination=models/path(id+".crimson-model"); stage=stages/path(".staging-"+id);
     } while (fs::exists(destination) || fs::exists(stage));
     check(fs::create_directory(stage),"could not create a unique model staging directory");
     auto result=std::make_shared<ModelImportStage>();result->root=root;result->staging=stage;result->destination=destination;result->sourceName=utf8(source.stem());
@@ -1066,7 +1055,7 @@ std::shared_ptr<ModelImportStage> stageModelImport(const fs::path& source,const 
     else {
         const auto base="model-"+result->contentIdentity;
         for(std::uint32_t suffix=0;;++suffix) {
-            destination=models/path(base+(suffix?"-"+std::to_string(suffix):std::string{}));
+            destination=models/path(base+(suffix?"-"+std::to_string(suffix):std::string{})+".crimson-model");
             if(!fs::exists(destination) && !reserved.contains(modelIdentity(root,destination))&&modelIdentityAvailable(root,destination))break;
         }
     }
@@ -1102,7 +1091,7 @@ std::shared_ptr<ModelAsset> publishModelImport(const std::shared_ptr<const Model
     static std::unordered_map<std::string,Published> published;
     static std::deque<std::string> recent;
     if(stage->published)return stage->asset;
-    const auto root=fs::weakly_canonical(stage->root),models=fs::weakly_canonical(resolveAssetPath(root,"assets/models"));
+    const auto root=fs::weakly_canonical(stage->root),models=root;
     const auto staging=fs::weakly_canonical(stage->staging);auto destination=fs::weakly_canonical(stage->destination);
     check(staging.parent_path()==fs::weakly_canonical(modelStagingRoot(root))&&utf8(staging.filename()).starts_with(".staging-model-"),"model import staging path is invalid");
     check(modelImportFilesUnchanged(stage->inputFiles),"model import staging files changed before publication");
@@ -1134,7 +1123,7 @@ std::shared_ptr<ModelAsset> publishModelImport(const std::shared_ptr<const Model
         stage->destination=candidate;fs::remove_all(staging);stage->reused=true;stage->published=true;return true;
     };
     // A preceding file in this batch may already have moved the shared package
-    // into its captured Content folder. Follow its stable ID before considering
+    // into its captured project folder. Follow its stable ID before considering
     // the original default publication path or creating another package.
     try{if(reuse(resolveAssetPath(root,stage->asset->id).parent_path()))return stage->asset;}
     catch(const std::exception&){/* Fresh UUID: no published location yet. */}
@@ -1146,7 +1135,7 @@ std::shared_ptr<ModelAsset> publishModelImport(const std::shared_ptr<const Model
     if(reuse(destination))return stage->asset;
     const auto base="model-"+stage->contentIdentity;
     for(std::uint32_t suffix=0;;++suffix) {
-        destination=models/path(base+(suffix?"-"+std::to_string(suffix):std::string{}));
+        destination=models/path(base+(suffix?"-"+std::to_string(suffix):std::string{})+".crimson-model");
         if(reuse(destination))return stage->asset;
         if(fs::exists(destination))continue;
         if(!modelIdentityAvailable(root,destination))continue;
@@ -1162,14 +1151,12 @@ std::shared_ptr<ModelAsset> publishModelImport(const std::shared_ptr<const Model
     // This bridge covers overlapping staged jobs; normal later imports validate
     // managed bytes on a worker. It is not an unbounded residency cache.
     while(recent.size()>256) {published.erase(recent.front());recent.pop_front();}
-    if(contentStorageReady(root)) {
-        const auto logical="assets/models/"+utf8(destination.filename());
-        registerAssetPath(root,logical+"/manifest.json",destination/"manifest.json");
-        std::ifstream input(destination/"manifest.json");const auto manifest=Json::parse(input);
-        for(const auto& member:manifest.at("dependencies"))if(member.at("kind")=="image") {
-            const auto name=member.at("path").get<std::string>();registerAssetPath(root,logical+"/"+name,destination/path(name));
-        }
+    std::vector<StoredAssetPath> registrations{{stage->asset->id,destination/"manifest.json"}};
+    std::ifstream input(destination/"manifest.json");const auto manifest=Json::parse(input);
+    for(const auto& member:manifest.at("dependencies"))if(member.at("kind")=="image") {
+        const auto name=member.at("path").get<std::string>();registrations.push_back({derivedAssetId(stage->asset->id,"image:"+name),destination/path(name)});
     }
+    registerAssetPaths(root,registrations);
     stage->published=true;return stage->asset;
 }
 std::shared_ptr<ModelAsset> importModelPackage(const fs::path& source,const fs::path& projectRoot) {

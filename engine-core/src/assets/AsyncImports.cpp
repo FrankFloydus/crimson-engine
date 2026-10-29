@@ -65,7 +65,7 @@ void AsyncImports::pump(AssetLibrary& library){
                     for(auto it=library.assets_.begin();it!=library.assets_.end();)if(created.contains(it->id)){library.retiredTextures_.push_back(std::move(*it));it=library.assets_.erase(it);}else ++it;
                     std::erase_if(library.catalog_,[&](const auto& a){return created.contains(a.id);});if(!existingRuntime)std::erase_if(library.models_,[&](const auto& a){return a->id==asset->id;});
                     for(const auto& id:createdMaterialIds){std::error_code ignored;std::filesystem::remove(checkedManagedAssetPath(root_,id),ignored);}
-                    const auto target=checkedManagedAssetPath(root_,asset->id).parent_path(),owner=std::filesystem::weakly_canonical(resolveAssetPath(root_,"assets/models"));
+                    const auto target=checkedManagedAssetPath(root_,asset->id).parent_path(),owner=std::filesystem::weakly_canonical(root_);
                     if(!ready->reused&&target.parent_path()==owner&&utf8(target.filename()).starts_with("model-")){std::error_code ignored;std::filesystem::remove_all(target,ignored);}throw;
                 }
                 resources_.forget(model->reference().id);

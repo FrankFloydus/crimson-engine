@@ -48,6 +48,9 @@ public:
 
   void set_material_presentation(
       InspectorMaterialPresentationSnapshot snapshot);
+  /// Mounts externally owned scene components below native properties.
+  /// Replacing or clearing detaches the prior widget without deleting it.
+  void set_component_extension(QWidget *extension);
   void abandon_runtime() noexcept;
   void apply_ui_scale(const QtUiScaleMetrics &metrics);
   void refresh(UIContext &context);

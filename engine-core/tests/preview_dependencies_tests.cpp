@@ -1,7 +1,9 @@
 #include "editor/AssetPreviews.h"
 #include "editor/AssetPreviewCache.h"
 #include "editor/AssetSourceSnapshot.h"
-#include "quader_bundle_fixture.h"
+#include "assets/ContentStorage.h"
+#include "assets/AtomicFile.h"
+#include "resources/AssetId.h"
 #include "resources/ThumbnailDemand.h"
 #include "resources/ResourceManager.h"
 #include <array>
@@ -119,41 +121,35 @@ void deletedSourceObservers() {
         if(!error && absolute.parent_path()==temporary && absolute.filename().string().starts_with("crimson-observer-"))fs::remove_all(absolute,error);
     };
     try {
-        const auto fixture=bundle_test::writeFixture(root);
-        const auto textureId=newAssetId(),materialId=newAssetId(),survivorId=newAssetId();
-        const auto texture=root/"Content/Quader.png",material=root/"Content/Quader.crimson-material",survivor=root/"Content/Keep.crimson-material";
-        writeFileAtomically(texture,"image bytes");writeFileAtomically(material,"{}");writeFileAtomically(survivor,"{}");
-        const std::array<StoredAssetPath,3> added{{{textureId,texture},{materialId,material},{survivorId,survivor}}};
-        registerAssetPaths(root,added);
-        const std::vector<AssetEntry> initial{{fixture.modelId,"Quader mesh",AssetKind::Model},{textureId,"Texture",AssetKind::Texture},
-            {materialId,"Material",AssetKind::Material},{survivorId,"Keep",AssetKind::Material}};
+        fs::create_directories(root);initializeContentStorage(root);
+        const auto model_id=newAssetId(),textureId=newAssetId(),materialId=newAssetId(),survivorId=newAssetId(),member_id=newAssetId();
+        const auto model_file=root/"package/manifest.json",member_file=root/"package/geometry.bin";
+        const auto texture=root/"Source.png",material=root/"Surface.crimson-material",survivor=root/"Keep.crimson-material";
+        writeFileAtomically(model_file,"{}");writeFileAtomically(member_file,"geometry");writeFileAtomically(texture,"image bytes");writeFileAtomically(material,"{}");writeFileAtomically(survivor,"{}");
+        const std::array<StoredAssetPath,5> added{{{model_id,model_file},{member_id,member_file},{textureId,texture},{materialId,material},{survivorId,survivor}}};registerAssetPaths(root,added);
+        const std::vector<AssetEntry> initial{{model_id,"Mesh",AssetKind::Model},{textureId,"Texture",AssetKind::Texture},{materialId,"Material",AssetKind::Material},{survivorId,"Keep",AssetKind::Material}};
         AssetCatalogSnapshot catalog;
         require(catalog.update(root,initial).added.size()==4,"The source observer failed to capture the initial catalog.");
         const AssetSourceSnapshot oldSources(root);
-        std::vector<StoredAssetPath> dependencies{{fixture.bundle.id,fixture.file},{materialId,material},{textureId,texture}};
-        std::vector<std::string> removedIds{materialId,textureId};
-        for(const auto& id:fixture.bundle.models.front().memberIds) {
-            dependencies.push_back({id,resolveAssetPath(root,id)});removedIds.push_back(id);
-        }
-        for(const auto& dependency:dependencies)require(oldSources.matches(dependency.id,dependency.file),"A current bundle dependency was rejected.");
-        const auto modelFile=resolveAssetPath(root,fixture.modelId);
-        auto emptyBundle=fixture.bundle;emptyBundle.models.clear();
-        writeFileAtomically(fixture.file,encodeQuaderSceneBundle(emptyBundle));
+        const std::vector<StoredAssetPath> dependencies{{model_id,model_file},{member_id,member_file},{materialId,material},{textureId,texture}};
+        const std::vector<std::string> removedIds{model_id,member_id,materialId,textureId};
+        for(const auto& dependency:dependencies)require(oldSources.matches(dependency.id,dependency.file),"A current dependency was rejected.");
+        const auto modelFile=resolveAssetPath(root,model_id);
         const auto index=prepareAssetPathRegistration(root,{},removedIds);
-        for(const auto& dependency:dependencies)if(dependency.id!=fixture.bundle.id)fs::remove(dependency.file);
+        for(const auto& dependency:dependencies)fs::remove(dependency.file);
         writeFileAtomically(root/".crimson/asset-locations.json",index);refreshContentStorage(root);
-        rejects([&]{(void)resolveAssetPath(root,fixture.modelId);},"The regression fixture did not unregister the deleted model identity.");
+        rejects([&]{(void)resolveAssetPath(root,model_id);},"The regression fixture did not unregister the deleted model identity.");
         const std::vector<AssetEntry> surviving{{survivorId,"Keep",AssetKind::Material}};
         const auto changes=catalog.update(root,surviving);
         require(changes.added.empty() && changes.removed.size()==3,"Final deletion did not evict exactly the removed catalog assets.");
-        const auto removedModel=std::find_if(changes.removed.begin(),changes.removed.end(),[&](const auto& source){return source.id==fixture.modelId;});
+        const auto removedModel=std::find_if(changes.removed.begin(),changes.removed.end(),[&](const auto& source){return source.id==model_id;});
         require(removedModel!=changes.removed.end() && removedModel->kind==AssetKind::Model && removedModel->file==modelFile,
             "A removed model was resolved after unregister instead of retaining its literal source path.");
         for(const auto& source:changes.removed)require(source.file==oldSources.find(source.id),"A deletion acknowledgement lost its predelete path.");
         const AssetSourceSnapshot afterDelete(root);
-        for(const auto& dependency:dependencies)require(afterDelete.matches(dependency.id,dependency.file)==(dependency.id==fixture.bundle.id),
+        for(const auto& dependency:dependencies)require(!afterDelete.matches(dependency.id,dependency.file),
             "A retained thumbnail did not invalidate a removed model/member/material/texture dependency.");
-        require(afterDelete.matches(survivorId,survivor),"Deleting bundled sources invalidated an unrelated surviving source.");
+        require(afterDelete.matches(survivorId,survivor),"Deleting sources invalidated an unrelated surviving source.");
         require(catalog.update(root,surviving).removed.empty(),"A later frame repeated catalog removals.");
         const auto returned=root/"Content/Returned.crimson-material",moved=root/"Content/Moved.crimson-material";
         writeFileAtomically(returned,"{}");registerAssetPath(root,materialId,returned);

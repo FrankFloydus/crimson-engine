@@ -36,6 +36,7 @@
 #include "ui/qt_face_texture_canvas.hpp"
 #include "ui/qt_command_event_filter.hpp"
 #include "ui/qt_command_palette.hpp"
+#include "ui/qt_commands_library_panel.hpp"
 #include "ui/qt_contextual_input_hints.hpp"
 #include "ui/qt_dock_title_presentation.hpp"
 #include "ui/qt_main_window.hpp"
@@ -803,7 +804,7 @@ bool UISystem::initialize(RenderHost &render_system,
     }
   }
   viewport_panel_ = new QtViewportPanel(viewport_container, composed_viewports,
-      render_system_->composition_api());
+        render_system_->composition_api(),QApplication::instance()->property("crimsonEngineApplication").toBool());
   viewport_panel_->set_presentation_requested_callback([this]() {
     if (viewport_presentation_requested_) {
       viewport_presentation_requested_();
@@ -1403,6 +1404,14 @@ void UISystem::install_runtime_hooks(
         selection_toolbar_->synchronize(*editor_, active_mode, true);
         synchronize_tool_toolbar(selection, true);
       });
+  selection_toolbar_->set_workspace_requested_callback([this](QuaderWorkspaceMode mode){
+    if(!editor_||!modeling_)return;
+    const auto generation=runtime_binding_generation_;present_lifecycle_result(editor_->mode().set_workspace_mode(mode));
+    if(!editor_||!modeling_||generation!=runtime_binding_generation_)return;
+    selection_toolbar_->synchronize(*editor_,to_api_selection_mode(modeling_->selection_mode()),true);
+    synchronize_tool_toolbar(editor_->selection().summary(),true);
+    synchronize_workspace_mode_presentation(true);
+  });
   selection_toolbar_->set_group_selection_toggle_requested_callback([this]() {
     if (editor_ == nullptr || modeling_ == nullptr) {
       return;
@@ -1529,6 +1538,7 @@ void UISystem::install_runtime_hooks(
   apply_viewport_settings_to_workspace();
   viewport_panel_->attach_workspace(workspace);
   tool_settings_panel_->bind(editor);
+  commands_library_panel_->bind(editor);
   if (face_texture_panel_ != nullptr) {
     face_texture_panel_->bind(editor);
   }
@@ -1624,8 +1634,10 @@ void UISystem::install_runtime_hooks(
               },
           .set_texture_toolbar_visible =
               [this](bool visible) {
+                texture_toolbar_workspace_visible_ = visible;
+                settings_.set_modeling_toolbar_visibility(tool_toolbar_workspace_visible_, texture_toolbar_workspace_visible_);
                 if (texture_toolbar_ != nullptr) {
-                  texture_toolbar_->setVisible(visible);
+                  texture_toolbar_->setVisible(visible && editor_->mode().workspace_mode() == QuaderWorkspaceMode::Modeling);
                 }
               },
           .tool_toolbar_visible =
@@ -1634,6 +1646,8 @@ void UISystem::install_runtime_hooks(
               },
           .set_tool_toolbar_visible =
               [this](bool visible) {
+                tool_toolbar_workspace_visible_ = visible;
+                settings_.set_modeling_toolbar_visibility(tool_toolbar_workspace_visible_, texture_toolbar_workspace_visible_);
                 if (tool_toolbar_ != nullptr) {
                   tool_toolbar_->setVisible(visible);
                 }
@@ -3188,6 +3202,39 @@ void UISystem::show_home() {
   }
 }
 
+void UISystem::synchronize_workspace_mode_presentation(bool force) {
+  if (editor_ == nullptr || home_visible_) return;
+  const auto mode = editor_->mode().workspace_mode();
+  const bool changed = presented_workspace_mode_ != mode;
+  if (!force && !changed) return;
+  const bool modeling = mode == QuaderWorkspaceMode::Modeling;
+  if (changed && !modeling) {
+    if (tool_toolbar_ != nullptr) {
+      tool_toolbar_workspace_visible_ = settings_.modeling_tools_toolbar_visible().value_or(!tool_toolbar_->isHidden());
+    }
+    if (texture_toolbar_ != nullptr) {
+      texture_toolbar_workspace_visible_ = settings_.modeling_texture_toolbar_visible().value_or(!texture_toolbar_->isHidden());
+    }
+    settings_.set_modeling_toolbar_visibility(tool_toolbar_workspace_visible_, texture_toolbar_workspace_visible_);
+  }
+  presented_workspace_mode_ = mode;
+  if (command_palette_ != nullptr) command_palette_->refresh_localization();
+  if (tool_toolbar_ != nullptr) {
+    // The same toolbar also owns ordinary object Select/Move/Rotate/Scale.
+    // Its action presenter filters modeling capabilities and product releases.
+    tool_toolbar_->toggleViewAction()->setVisible(true);
+    tool_toolbar_->setVisible(tool_toolbar_workspace_visible_);
+  }
+  if (texture_toolbar_ != nullptr) {
+    texture_toolbar_->toggleViewAction()->setVisible(modeling);
+    texture_toolbar_->setVisible(modeling && texture_toolbar_workspace_visible_);
+  }
+  panels_.set_suppressed(UIPanelId::FaceTexture, !modeling);
+  panels_.set_suppressed(UIPanelId::CommandsLibrary, !modeling);
+  if (commands_library_panel_ != nullptr) commands_library_panel_->refresh();
+  if (main_menu_ != nullptr) main_menu_->refresh();
+}
+
 void UISystem::synchronize_tool_toolbar(
     const QuaderSelectionSummary &selection, bool force) {
   if (editor_ == nullptr) {
@@ -3196,6 +3243,10 @@ void UISystem::synchronize_tool_toolbar(
   if (tool_toolbar_ != nullptr) {
     tool_toolbar_->synchronize(*editor_, selection, force);
   }
+}
+
+void UISystem::set_scene_component_extension(QWidget *extension) {
+  if (inspector_panel_ != nullptr) inspector_panel_->set_component_extension(extension);
 }
 
 void UISystem::show_workspace() {
@@ -3272,6 +3323,7 @@ void UISystem::show_workspace() {
     }
   }
   panels_.apply_settings(settings_);
+  synchronize_workspace_mode_presentation(true);
   if (presentation_changed && main_menu_ != nullptr) {
     main_menu_->refresh();
   }
@@ -3469,8 +3521,10 @@ void UISystem::detach_render_resources() {
   if (tool_settings_panel_ != nullptr) {
     tool_settings_panel_->unbind();
   }
+  if (commands_library_panel_ != nullptr) {
+    commands_library_panel_->unbind();
+  }
   if (viewport_panel_ != nullptr) {
-    viewport_panel_->set_settings_panel(nullptr);
     if (shell_replacement_pending_) {
       viewport_panel_->abandon_interactions();
     } else {
@@ -3548,6 +3602,8 @@ void UISystem::shutdown() {
   material_preview_surface_ = nullptr;
   standard_material_editor_window_ = nullptr;
   tool_settings_panel_ = nullptr;
+  commands_library_panel_ = nullptr;
+  presented_workspace_mode_.reset();
   unsaved_confirmation_ = nullptr;
   standard_material_unsaved_confirmation_ = nullptr;
   lifecycle_message_box_ = nullptr;
@@ -3655,6 +3711,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
     QDR_PROFILE_SCOPE("UI refresh project workspace");
     refresh_project_workspace(false);
   }
+  synchronize_workspace_mode_presentation();
   refresh_asset_browser();
   validate_material_find_replace_context();
   const bool retained_material_surface_visible =
@@ -3877,12 +3934,9 @@ void UISystem::refresh(const FrameTiming &frame_timing,
       tool_settings_presenter_.mark_presented(stamp);
     }
   }
-  if (viewport_panel_ != nullptr && editor_ != nullptr) {
-    const auto binding_generation = runtime_binding_generation_;
-    viewport_panel_->refresh_settings_overlay(*editor_);
-    if (binding_generation != runtime_binding_generation_) {
-      return;
-    }
+  if (commands_library_panel_ != nullptr && !edit_drag_active &&
+      !numeric_interaction_active && panel_presented(UIPanelId::CommandsLibrary)) {
+    commands_library_panel_->refresh();
   }
   if (panel_presented(UIPanelId::FaceTexture)) {
     // The panel gates settings, geometry and images by their owner revisions.
@@ -3908,6 +3962,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
     main_menu_->rebuild();
     viewport_panel_->set_localization(localization_);
     tool_settings_panel_->set_localization(localization_);
+    commands_library_panel_->set_localization(localization_);
   }
   if (ui_settings_changed_) {
     ui_settings_changed_ = false;
@@ -4063,10 +4118,12 @@ void UISystem::capture_workspace_window_state() {
       selection_toolbar_ != nullptr && !selection_toolbar_->isHidden();
   snapping_toolbar_workspace_visible_ =
       snapping_toolbar_ != nullptr && !snapping_toolbar_->isHidden();
-  texture_toolbar_workspace_visible_ =
-      texture_toolbar_ != nullptr && !texture_toolbar_->isHidden();
-  tool_toolbar_workspace_visible_ =
-      tool_toolbar_ != nullptr && !tool_toolbar_->isHidden();
+  if (presented_workspace_mode_ != QuaderWorkspaceMode::Default) {
+    texture_toolbar_workspace_visible_ =
+        texture_toolbar_ != nullptr && !texture_toolbar_->isHidden();
+    tool_toolbar_workspace_visible_ =
+        tool_toolbar_ != nullptr && !tool_toolbar_->isHidden();
+  }
 }
 
 void UISystem::create_docks() {
@@ -4134,12 +4191,23 @@ void UISystem::create_docks() {
   configure_asset_browser();
   tool_settings_panel_ = new QtToolSettingsPanel(main_window_.get());
   tool_settings_panel_->set_localization(localization_);
-  viewport_panel_->set_settings_panel(tool_settings_panel_);
+  commands_library_panel_ = new QtCommandsLibraryPanel(main_window_.get());
+  commands_library_panel_->set_localization(localization_);
 
   QDockWidget &outliner = create_dock(
       UIPanelId::Outliner, *outliner_panel_, Qt::LeftDockWidgetArea);
+  set_palette_aware_dock_title_icon(outliner, QStringLiteral(":/quader/icons/outliner_icon.png"));
+  QDockWidget &tool_settings = create_dock(
+      UIPanelId::ToolSettings, *tool_settings_panel_, Qt::LeftDockWidgetArea);
+  set_palette_aware_dock_title_icon(tool_settings, QStringLiteral(":/quader/icons/tool_settings_icon.png"));
+  QDockWidget &commands_library = create_dock(
+      UIPanelId::CommandsLibrary, *commands_library_panel_, Qt::LeftDockWidgetArea);
+  set_palette_aware_dock_title_icon(commands_library, QStringLiteral(":/quader/icons/command_library_icon.png"));
+  main_window_->splitDockWidget(&outliner, &commands_library, Qt::Vertical);
+  main_window_->splitDockWidget(&commands_library, &tool_settings, Qt::Vertical);
   QDockWidget &inspector = create_dock(
       UIPanelId::Inspector, *inspector_panel_, Qt::RightDockWidgetArea);
+  set_palette_aware_dock_title_icon(inspector, QStringLiteral(":/quader/icons/inspector_icon.png"));
   QDockWidget *layers = nullptr;
   if (release_has_feature(ReleaseFeature::Layers)) {
     layer_panel_ = new LayerPanel(main_window_.get());
@@ -4160,6 +4228,8 @@ void UISystem::create_docks() {
   main_window_->resizeDocks({&outliner, &inspector},
                             {metrics.px(340), metrics.px(340)},
                             Qt::Horizontal);
+  main_window_->resizeDocks({&outliner, &commands_library, &tool_settings},
+                            {metrics.px(240), metrics.px(300), metrics.px(240)}, Qt::Vertical);
   QList<QDockWidget *> vertical_docks{&inspector};
   QList<int> vertical_sizes{metrics.px(320)};
   if (release_has_feature(ReleaseFeature::UvEditing)) {
@@ -4221,7 +4291,47 @@ void UISystem::restore_window_state() {
     if (!bytes.empty()) {
       const QByteArray state(bytes.data(),
                              static_cast<qsizetype>(bytes.size()));
+      // A newly introduced dock has no saved placement. Leave it unplaced so
+      // restoration cannot append it beside an existing dock column.
+      QDockWidget *tool_settings = panels_.dock(UIPanelId::ToolSettings);
+      if (tool_settings != nullptr) {
+        main_window_->removeDockWidget(tool_settings);
+      }
+      QDockWidget *commands_library = panels_.dock(UIPanelId::CommandsLibrary);
+      if (commands_library != nullptr) {
+        main_window_->removeDockWidget(commands_library);
+      }
       (void)main_window_->restoreState(state, kQtWindowStateVersion);
+      if (tool_settings != nullptr && !tool_settings->isFloating() &&
+          main_window_->dockWidgetArea(tool_settings) == Qt::NoDockWidgetArea) {
+        QDockWidget *outliner = panels_.dock(UIPanelId::Outliner);
+        const auto area = outliner != nullptr && !outliner->isFloating()
+            ? main_window_->dockWidgetArea(outliner) : Qt::LeftDockWidgetArea;
+        main_window_->addDockWidget(
+            area == Qt::NoDockWidgetArea ? Qt::LeftDockWidgetArea : area,
+            tool_settings);
+        if (outliner != nullptr && !outliner->isFloating()) {
+          main_window_->splitDockWidget(outliner, tool_settings, Qt::Vertical);
+          const auto &metrics = ui_scale_controller_->metrics();
+          main_window_->resizeDocks({outliner, tool_settings},
+              {metrics.px(300), metrics.px(420)}, Qt::Vertical);
+        }
+      }
+      if (commands_library != nullptr && !commands_library->isFloating() &&
+          main_window_->dockWidgetArea(commands_library) == Qt::NoDockWidgetArea) {
+        QDockWidget *outliner = panels_.dock(UIPanelId::Outliner);
+        const auto area = outliner != nullptr && !outliner->isFloating()
+            ? main_window_->dockWidgetArea(outliner) : Qt::LeftDockWidgetArea;
+        main_window_->addDockWidget(
+            area == Qt::NoDockWidgetArea ? Qt::LeftDockWidgetArea : area,
+            commands_library);
+        if (outliner != nullptr && !outliner->isFloating()) {
+          main_window_->splitDockWidget(outliner, commands_library, Qt::Vertical);
+          const auto &metrics = ui_scale_controller_->metrics();
+          main_window_->resizeDocks({outliner, commands_library},
+              {metrics.px(240), metrics.px(300)}, Qt::Vertical);
+        }
+      }
     }
   }
 
@@ -5542,6 +5652,8 @@ void UISystem::refresh_localized_chrome() {
   update_title(UIPanelId::FaceTexture);
   update_title(UIPanelId::Console);
   update_title(UIPanelId::AssetBrowser);
+  update_title(UIPanelId::ToolSettings);
+  update_title(UIPanelId::CommandsLibrary);
   if (face_texture_panel_ != nullptr) {
     face_texture_panel_->set_localization(localization_);
   }
@@ -6082,6 +6194,7 @@ void UISystem::apply_ui_scale_to_retained_surfaces(
   if (tool_settings_panel_ != nullptr) {
     tool_settings_panel_->apply_ui_scale(metrics);
   }
+  if (commands_library_panel_ != nullptr) commands_library_panel_->apply_ui_scale(metrics);
   if (face_texture_panel_ != nullptr) {
     face_texture_panel_->apply_ui_scale(metrics);
   }
@@ -7137,6 +7250,8 @@ bool UISystem::panel_presented(UIPanelId id) const {
 }
 
 void UISystem::set_panel_visible(UIPanelId id, bool visible) {
+  if (visible && editor_ != nullptr && editor_->mode().workspace_mode() == QuaderWorkspaceMode::Default &&
+      (id == UIPanelId::FaceTexture || id == UIPanelId::CommandsLibrary)) return;
   if (id != UIPanelId::AssetBrowser || main_window_ == nullptr) {
     (void)panels_.set_visible(id, visible);
     return;
@@ -7172,6 +7287,13 @@ void UISystem::set_panel_visible(UIPanelId id, bool visible) {
   main_window_->setAnimated(animated);
   if (suspend_updates) main_window_->setUpdatesEnabled(true);
   refresh_asset_thumbnails();
+}
+
+bool UISystem::request_native_pick(const crimson::PickRequest& request) {
+  if(!editor_||!render_system_||!viewport_panel_||!editor_->project().has_project())return false;
+  auto* surface=viewport_panel_->surface(editor_->viewports().focused_pane());
+  auto* view=surface?surface->renderer_if_initialized():nullptr;
+  return view&&render_system_->request_native_pick(*view,request);
 }
 
 } // namespace quader

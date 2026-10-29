@@ -22,18 +22,10 @@ std::filesystem::path materialPath(const std::filesystem::path& root,const std::
     if(isAssetUuid(id)) {
         std::optional<std::filesystem::path> existing;
         try{existing=resolveAssetPath(root,id);}catch(const std::exception&){/* New UUID has no location until its first save. */}
-        if(existing){if(existing->extension()!=".crimson-material")throw std::runtime_error("Asset identity does not reference a material file.");return *existing;}
-        return resolveAssetPath(root,"assets/materials")/(id+".crimson-material");
+        if(existing){if(assetPathExtension(*existing)!=".crimson-material")throw std::runtime_error("Asset identity does not reference a material file.");return *existing;}
+        return root/(id+".crimson-material");
     }
-    const auto relative=path(id);
-    if (relative.has_root_path() || relative.parent_path()!=std::filesystem::path("assets/materials") || relative.extension()!=".crimson-material" || id.find(':')!=std::string::npos)
-        throw std::runtime_error("Material asset must be stored directly under assets/materials.");
-    if(contentStorageReady(root))return resolveAssetPath(root,id);
-    const auto result=std::filesystem::weakly_canonical(root/relative),directory=std::filesystem::weakly_canonical(root/"assets/materials");
-    const auto containment=result.lexically_relative(std::filesystem::weakly_canonical(root));
-    if (result.parent_path()!=directory || containment.empty() || containment.is_absolute() || *containment.begin()=="..")
-        throw std::runtime_error("Material path escapes its managed directory.");
-    return result;
+    throw std::runtime_error("Material files require a managed UUID.");
 }
 bool safeImage(const std::string& id) {
     if(isAssetUuid(id))return true;
@@ -85,8 +77,7 @@ std::string uniqueName(const std::filesystem::path& root,const std::string& requ
     const std::string base=requested.empty()?"New Material":requested;if(base.size()>1024)throw std::runtime_error("Material name exceeds 1024 UTF-8 bytes.");
     std::unordered_set<std::string> names;
     const auto readName=[&](const auto& file){try{std::ifstream input(file);const auto json=Json::parse(input);names.insert(json.at("name").get<std::string>());}catch(const std::exception&){/* Damaged files remain untouched. */}};
-    if(contentStorageReady(root)) {for(const auto& entry:storedAssetPaths(root))if(entry.file.extension()==".crimson-material")readName(entry.file);}
-    else {const auto directory=root/"assets/materials";if(std::filesystem::exists(directory))for(const auto& entry:std::filesystem::directory_iterator(directory))if(entry.is_regular_file()&&entry.path().extension()==".crimson-material")readName(entry.path());}
+    if(contentStorageReady(root)) {for(const auto& entry:storedAssetPaths(root))if(assetPathExtension(entry.file)==".crimson-material")readName(entry.file);}
     if(!names.contains(base))return base;
     for(uint64_t suffix=2;;++suffix){const auto name=base+" "+std::to_string(suffix);if(name.size()>1024)throw std::runtime_error("Material name is too long for a unique suffix.");if(!names.contains(name))return name;}
 }
@@ -229,7 +220,7 @@ void validateMaterialAsset(const MaterialAsset& a) {
             if(canonicalAssetId(id)==canonicalAssetId(a.id))throw std::runtime_error("A material cannot reference itself.");
             if(!isAssetUuid(id)) {
                 const auto relative=path(id);
-                if(relative.has_root_path()||relative.parent_path()!=std::filesystem::path("assets/materials")||relative.extension()!=".crimson-material")
+                if(relative.has_root_path()||relative.parent_path()!=std::filesystem::path("assets/materials")||assetPathExtension(relative)!=".crimson-material")
                     throw std::runtime_error("Invalid material layer reference.");
             }
         }

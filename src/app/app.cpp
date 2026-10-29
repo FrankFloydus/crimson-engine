@@ -11,10 +11,13 @@
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
+#include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "editor/render/standard_material_render_snapshot_adapter.hpp"
 #include "api/quader_project_assets_api_internal_access.hpp"
 #include "platform/project_asset_recycle.hpp"
 #include "editor/session/project_asset_bootstrap_service.hpp"
+#include "editor/session/scene_session.hpp"
+#include "render/scene_render_extraction.hpp"
 #include "editor/session/project_autosave_service.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "platform/platform_file_dialog.hpp"
@@ -22,7 +25,9 @@
 #if defined(CRIMSON_ENGINE_APPLICATION)
 #include "integration/LevelSession.h"
 #include "integration/LevelPanels.h"
-#include "integration/LevelProjectState.h"
+#include "integration/project_asset_mutations.hpp"
+#include "integration/native_asset_retention.hpp"
+#include "assets/AssetLibrary.h"
 #include "integration/profiling/LevelProfiling.h"
 #include "profiling/EngineProfile.h"
 #include "profiling/FrameProfile.h"
@@ -313,17 +318,8 @@ bool App::initialize(QApplication &application,
 
   options_ = options;
 #if defined(CRIMSON_ENGINE_APPLICATION)
-  engine_root_selection_path_=quader_user_config_directory(executable_dir_)/"engine-project.json";
-  requested_engine_root_=options.engine_project_root;
-  engine_root_pinned_=!requested_engine_root_.empty();
-  if(requested_engine_root_.empty())if(const auto saved=crimson::integration::readLevelProjectSelection(engine_root_selection_path_)){requested_engine_root_=*saved;engine_root_pinned_=true;}
-  if(requested_engine_root_.empty())if(const auto found=crimson::integration::findLevelProjectRoot(std::filesystem::current_path()))requested_engine_root_=*found;
-  if(requested_engine_root_.empty())if(const auto found=crimson::integration::findLevelProjectRoot(executable_dir_))requested_engine_root_=*found;
-#if defined(CRIMSON_ENGINE_DEFAULT_PROJECT_ROOT)
-  if(requested_engine_root_.empty())if(const auto found=crimson::integration::findLevelProjectRoot(CRIMSON_ENGINE_DEFAULT_PROJECT_ROOT))requested_engine_root_=*found;
-#endif
-  rejected_engine_root_.clear();
-  if(!engine_profile_){crimson::profiling::EngineProfileOptions profile;profile.projectRoot=requested_engine_root_;profile.toolsDirectory=executable_dir_/"profiling";profile.outputDirectory=options.profile_output;profile.mode=options.profile_mode;profile.durationSeconds=options.profile_duration;engine_profile_=std::make_unique<crimson::profiling::EngineProfile>(profile);}
+  rejected_project_root_.clear();workspace_project_generation_=UINT64_MAX;
+  if(!engine_profile_){crimson::profiling::EngineProfileOptions profile;profile.toolsDirectory=executable_dir_/"profiling";profile.outputDirectory=options.profile_output;profile.mode=options.profile_mode;profile.durationSeconds=options.profile_duration;engine_profile_=std::make_unique<crimson::profiling::EngineProfile>(profile);}
   if(!options.frame_profile.empty())frame_profile_=std::make_unique<crimson::profiling::FrameProfile>(options.frame_profile);
   profile_frame_=0;profile_backend_ready_=false;
 #endif
@@ -348,6 +344,9 @@ bool App::initialize(QApplication &application,
   }
 
   editor_ = std::make_unique<QuaderEditorApi>(project_session_);
+#if defined(CRIMSON_ENGINE_APPLICATION)
+  QuaderViewportApiRuntimeAccess::set_scene_rendering_available(editor_->viewports(),true);
+#endif
   QuaderProjectAssetsApiInternalAccess::set_recycle_port(
       editor_->project_assets(), recycle_project_asset_paths);
   QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
@@ -362,9 +361,15 @@ bool App::initialize(QApplication &application,
           },
       .choose_open_manifest_path =
           [this]() {
+#if defined(CRIMSON_ENGINE_APPLICATION)
+            return platform_choose_project_folder_dialog(
+                project_folder_dialog_options(ui_.native_window_handle(),
+                                              editor_->project()));
+#else
             return platform_open_project_file_dialog(
                 project_file_dialog_options(ui_.native_window_handle(),
                                             editor_->project()));
+#endif
           },
       .choose_export_obj_path =
           [this]() {
@@ -378,12 +383,18 @@ bool App::initialize(QApplication &application,
           },
       .prepare_material_document_close =
           [this](std::string_view action_id) {
+#if defined(CRIMSON_ENGINE_APPLICATION)
+            if(engine_panels_&&!engine_panels_->confirmClose())return false;
+#endif
             return ui_.prepare_standard_material_project_transition(
                 action_id);
           },
       .begin_loading = [this]() { ui_.begin_loading_presentation(); },
       .end_loading =
           [this](bool succeeded) { ui_.end_loading_presentation(succeeded); },
+#if defined(CRIMSON_ENGINE_APPLICATION)
+      .allow_nonempty_project_folder = true,
+#endif
   });
   editor_->scene_documents().set_runtime_hooks(
       QuaderSceneDocumentsRuntimeHooks{
@@ -593,6 +604,7 @@ void App::shutdown() {
   autosave_timer_.reset();
   retire_shell();
 #if defined(CRIMSON_ENGINE_APPLICATION)
+  native_asset_retention_.reset();
   frame_profile_.reset();engine_profile_.reset();
 #endif
   editor_.reset();
@@ -605,11 +617,16 @@ void App::retire_shell() {
 #if defined(CRIMSON_ENGINE_APPLICATION)
   ui_.set_external_close_guard({});
   ui_.set_external_command_input_owner({});
+  ui_.set_asset_browser_extension({});
+  ui_.set_scene_component_extension(nullptr);
+  project_session_.project_assets().set_mutation_prepare({});
   profiling_controls_.reset();
   if(engine_profile_)engine_profile_->backendRetired();profile_backend_ready_=false;
   engine_panels_.reset();
+  if(render_system_)render_system_->publish_modeling_authoring_source({});
+  modeling_authoring_source_.reset();modeling_authoring_stamp_.reset();
   if(engine_level_)engine_level_->detachRenderer();
-  engine_level_.reset();engine_project_root_.clear();engine_document_key_.clear();
+  engine_level_.reset();bound_project_root_.clear();
 #endif
   ui_.set_viewport_presentation_requested_callback({});
   viewport_presentation_request_ = {};
@@ -703,6 +720,12 @@ void App::bind_current_scene() {
 }
 
 void App::bind_active_scene(SceneSession &scene) {
+#if defined(CRIMSON_ENGINE_APPLICATION)
+  if(editor_&&project_session_.has_project()&&workspace_project_generation_!=project_session_.project_generation()){
+    (void)editor_->mode().set_workspace_mode(QuaderWorkspaceMode::Default);
+    workspace_project_generation_=project_session_.project_generation();
+  }
+#endif
   const auto next_window_settings_path = AppWindowSettings::resolve_project_path(
       executable_dir_, project_session_.manifest_path());
   const bool project_changed = next_window_settings_path != window_settings_path_;
@@ -998,10 +1021,17 @@ bool App::render_frame(const FrameTiming &frame_timing) {
   }
   const auto viewport_input_end = std::chrono::steady_clock::now();
 #if defined(CRIMSON_ENGINE_APPLICATION)
+  synchronize_modeling_world();
   if(engine_level_&&engine_panels_) {
     const bool active=QGuiApplication::applicationState()==Qt::ApplicationActive;
     engine_panels_->update(frame_timing.delta_seconds,active);
     engine_level_->update(frame_timing.delta_seconds,active,render_system_->completed_frame());
+    engine_panels_->syncNativeSelection();
+    const auto catalog_revision=engine_level_->assets().catalogRevision();
+    if(catalog_revision!=engine_asset_catalog_revision_){
+      (void)editor_->project_assets().assets(true);
+      engine_asset_catalog_revision_=catalog_revision;
+    }
     (void)engine_panels_->prepareFrame();
   }
 #endif
@@ -1193,50 +1223,107 @@ void App::schedule_next_frame(bool submitted) {
 }
 
 #if defined(CRIMSON_ENGINE_APPLICATION)
-bool App::open_engine_project(const std::filesystem::path& selected,bool explicit_selection) {
+bool App::bind_engine_project(const std::filesystem::path& selected) {
   try {
     const auto root=std::filesystem::absolute(selected).lexically_normal();
-    if(!std::filesystem::is_directory(root))throw std::runtime_error("Choose an existing Engine project folder.");
-    if(root==engine_project_root_){if(explicit_selection){crimson::integration::writeLevelProjectSelection(engine_root_selection_path_,root);requested_engine_root_=root;engine_root_pinned_=true;}return true;}
+    if(!std::filesystem::is_directory(root))throw std::runtime_error("The selected project folder is unavailable.");
+    if(root==bound_project_root_)return true;
     if(engine_level_&&engine_panels_&&!engine_panels_->confirmClose())return false;
     auto candidate=std::make_unique<crimson::integration::LevelSession>(root,executable_dir_);
     candidate->attachRenderer(*render_system_->crimson_renderer());
-    if(explicit_selection)crimson::integration::writeLevelProjectSelection(engine_root_selection_path_,root);
+    candidate->setViewportPickRequester([this](const crimson::PickRequest& request){return ui_.request_native_pick(request);});
+    project_session_.project_assets().set_mutation_prepare({});
     if(engine_panels_)engine_panels_->bind(nullptr);
     render_system_->publish_engine_frame({});
+    render_system_->publish_native_scene_bindings({});
     if(engine_level_)engine_level_->detachRenderer();
-    engine_level_=std::move(candidate);engine_project_root_=root;engine_document_key_.clear();
+    engine_level_=std::move(candidate);bound_project_root_=root;
+    if(!native_asset_retention_||retention_project_generation_!=project_session_.project_generation()){
+      native_asset_retention_=std::make_shared<crimson::integration::NativeAssetRetention>(project_session_);
+      retention_project_generation_=project_session_.project_generation();
+    }
+    const std::weak_ptr<crimson::integration::NativeAssetRetention> retention=native_asset_retention_;
+    engine_level_->assets().setExternalAssetRetentionProbe([retention]{const auto source=retention.lock();if(!source)throw std::runtime_error("The project reference owner is unavailable.");return source->snapshot();},
+        [retention]{const auto source=retention.lock();return source?source->revision():0;});
+    engine_asset_catalog_revision_=UINT64_MAX;
+    modeling_authoring_source_.reset();modeling_authoring_stamp_.reset();
+    render_system_->publish_modeling_authoring_source({});
+    project_session_.project_assets().set_mutation_prepare([this](const ProjectAssetMutation& mutation){
+      return crimson::integration::prepare_project_asset_mutation(engine_level_->assets(),&engine_level_->document(),mutation);
+    });
     if(engine_profile_)engine_profile_->projectChanged(root);
-    if(explicit_selection){requested_engine_root_=root;engine_root_pinned_=true;}
-    if(engine_panels_)engine_panels_->bind(engine_level_.get());
+    if(engine_panels_){
+      engine_panels_->setNativeAssetObserver([retention](quader::SceneDocument& scene){if(const auto source=retention.lock())source->observe(scene);});
+      engine_panels_->bind(engine_level_.get());
+    }
     return true;
-  }catch(const std::exception& error){LOG_ERROR("Engine project open failed: {}",error.what());if(ui_.main_window())QMessageBox::warning(ui_.main_window(),"Open Engine Project",QString::fromUtf8(error.what()));return false;}
+  }catch(const std::exception& error){LOG_ERROR("Project runtime initialization failed: {}",error.what());if(ui_.main_window())QMessageBox::warning(ui_.main_window(),"Open Project",QString::fromUtf8(error.what()));return false;}
 }
 void App::synchronize_engine_session() {
+  // Home belongs to the native project lifecycle. Runtime controls and docks
+  // only exist inside a chosen project workspace.
+  if(!project_session_.has_project()){
+    if(engine_level_||engine_panels_){
+      ui_.set_asset_browser_extension({});
+      ui_.set_scene_component_extension(nullptr);
+      project_session_.project_assets().set_mutation_prepare({});
+      profiling_controls_.reset();engine_panels_.reset();
+      render_system_->publish_engine_frame({});
+    render_system_->publish_native_scene_bindings({});
+      render_system_->publish_modeling_authoring_source({});
+      modeling_authoring_source_.reset();modeling_authoring_stamp_.reset();
+      if(engine_level_)engine_level_->detachRenderer();
+      engine_level_.reset();bound_project_root_.clear();rejected_project_root_.clear();
+      native_asset_retention_.reset();
+    }
+    return;
+  }
   if(!render_system_->crimson_renderer()||!ui_.main_window())return;
+  const auto& root=project_session_.root();
+  if(root!=bound_project_root_){
+    if(root==rejected_project_root_)return;
+    if(!bind_engine_project(root)){rejected_project_root_=root;return;}
+    rejected_project_root_.clear();
+  }
   if(!profiling_controls_&&engine_profile_)profiling_controls_=std::make_unique<crimson::integration::LevelProfiling>(*ui_.main_window(),engine_profile_->captures());
   if(!engine_panels_&&ui_.main_window()) {
-    engine_panels_=std::make_unique<crimson::integration::LevelPanels>(*ui_.main_window(),*render_system_,[this]{request_viewport_presentation();});
+    engine_panels_=std::make_unique<crimson::integration::LevelPanels>(*ui_.main_window(),*render_system_,*editor_,project_session_,[this]{request_viewport_presentation();});
     engine_panels_->bind(engine_level_.get());
-    engine_panels_->setProjectOpenHandler([this](const std::filesystem::path& root){if(open_engine_project(root,true)){rejected_engine_root_.clear();request_viewport_presentation();}});
+    const std::weak_ptr<crimson::integration::NativeAssetRetention> retention=native_asset_retention_;
+    engine_panels_->setNativeAssetObserver([retention](quader::SceneDocument& scene){if(const auto source=retention.lock())source->observe(scene);});
+    ui_.set_asset_browser_extension(engine_panels_->assetBrowserExtension());
+    ui_.set_scene_component_extension(engine_panels_->componentExtension());
+    (void)editor_->ui().show_panel("asset_browser");
+    engine_panels_->setBeforePlay([this]{synchronize_modeling_world();});
     ui_.set_external_close_guard([this]{return !engine_panels_||engine_panels_->confirmClose();});
     ui_.set_external_command_input_owner([this]{return engine_panels_&&engine_panels_->ownsInput();});
   }
   const auto* active=project_session_.active_scene();
-  const bool paired=project_session_.has_project()&&active&&active->session;
-  const auto root=!engine_root_pinned_&&paired?project_session_.root():requested_engine_root_;
-  if(!root.empty()&&root!=engine_project_root_&&root!=rejected_engine_root_){if(!open_engine_project(root,false))rejected_engine_root_=root;}
   if(!engine_level_)return;
   engine_level_->attachRenderer(*render_system_->crimson_renderer());
-  if(!paired){engine_panels_->setModelingSource({},{},{});return;}
-  const auto* manifest=project_session_.manifest();
-  const std::string project=manifest?std::string(manifest->id().str()):std::string{};
+  if(!active||!active->session)return;
   const std::string scene(active->scene_id.str());
-  const auto key=project+":"+scene;
-  if(!engine_root_pinned_&&engine_project_root_==project_session_.root()){
-    if(key!=engine_document_key_&&engine_level_->bindDocument(key,engine_document_key_.empty()))engine_document_key_=key;
+  engine_panels_->bindScene(active->session.get(),scene);
+  synchronize_modeling_world();
+}
+void App::synchronize_modeling_world() {
+  if(!engine_level_||!project_session_.has_project())return;
+  const auto* active=project_session_.active_scene();
+  if(!active||!active->session){render_system_->publish_modeling_authoring_source({});engine_level_->setModelingWorld({});return;}
+  if(engine_panels_)engine_panels_->bindScene(active->session.get(),std::string(active->scene_id.str()));
+  const auto view=active->session->read_view();
+  const RenderSceneBindingKey binding{active->session_id.packed(),project_session_.activation_generation(),active->session->document_binding_generation()};
+  const auto material_revision=project_material_resolver_?project_material_resolver_->revision():0;
+  auto stamp=capture_render_source_stamp(view.scene,view.assets,{.scene_binding=binding,.project_material_revision=material_revision});
+  // Runtime geometry is independent of editor selection and local isolation.
+  stamp.selection_revision=0;stamp.hierarchy_presentation_revision=0;
+  if(!modeling_authoring_stamp_||*modeling_authoring_stamp_!=stamp){
+    auto source=build_render_scene_snapshot(view.scene,view.assets,{.previous=modeling_authoring_source_.get(),.scene_binding=binding,
+        .project_material_resolver=project_material_resolver_.get(),.project_material_revision=material_revision});
+    modeling_authoring_source_=std::make_shared<const RenderSceneSnapshot>(std::move(source));modeling_authoring_stamp_=stamp;
+    render_system_->publish_modeling_authoring_source(modeling_authoring_source_);
   }
-  engine_panels_->setModelingSource(project_session_.manifest_path(),project,scene);
+  engine_level_->setModelingWorld(render_system_->modeling_world_snapshot(),render_system_->modeling_world_ready());
 }
 #endif
 

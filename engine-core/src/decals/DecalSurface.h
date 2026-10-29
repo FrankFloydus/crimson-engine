@@ -13,6 +13,7 @@ namespace crimson::decals {
 struct ReceiverId {
     uint64_t entity{};
     uint32_t draw{},primitive{};
+    uint64_t sourceInstanceId{};
     auto operator<=>(const ReceiverId&) const = default;
 };
 struct SurfaceTriangle {

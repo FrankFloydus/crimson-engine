@@ -20,13 +20,24 @@ bool project_asset_path_visible(const ProjectRelativePath &path) {
   if (!path.valid()) {
     return false;
   }
+  const auto folded_path = [](const std::filesystem::path &value) {
+    const auto text = value.generic_u8string();
+    return QStr::to_ascii_lower({reinterpret_cast<const char *>(text.data()), text.size()});
+  };
   for (const auto &component : path.native_path()) {
-    const auto text = component.native();
-    if (!text.empty() && text.front() == '.') {
+    const auto text = folded_path(component);
+    const auto suffix = folded_path(component.extension());
+    const bool atomic_file = text.starts_with('.') &&
+        (suffix == ".stage" || suffix == ".rollback" || suffix == ".recovery");
+    if (text == ".crimson" || text == ".quader" || text == ".git" ||
+        text == ".svn" || text == ".hg" || text == "$recycle.bin" ||
+        text == "system volume information" || text == "desktop.ini" ||
+        text == "thumbs.db" || text == ".ds_store" ||
+        text.starts_with(".quader-asset-rename-") || atomic_file) {
       return false;
     }
   }
-  return QStr::to_ascii_lower(path.native_path().extension().string()) != ".qproj";
+  return folded_path(path.native_path().extension()) != ".qproj";
 }
 
 bool project_texture_extension_supported(const std::filesystem::path &path) {

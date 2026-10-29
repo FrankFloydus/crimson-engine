@@ -16,6 +16,7 @@
 #include "scene/scene_document.hpp"
 #include "scene/transform_pivot.hpp"
 #include "core/release_features.hpp"
+#include "ui/qt_application_style.hpp"
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_double_spin_box.hpp"
 #include "ui/qt_numeric_spin_box.hpp"
@@ -41,12 +42,12 @@
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QHBoxLayout>
+#include <QHoverEvent>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
-#include <QPainterPath>
 #include <QPalette>
 #include <QPen>
 #include <QPersistentModelIndex>
@@ -91,6 +92,7 @@ constexpr int kInspectorNumericDispatchIntervalMs = 16;
 constexpr float kInspectorLightRangeMin = 0.001f;
 constexpr float kInspectorLightRangeMax = 100.0f;
 constexpr int kInspectorMinimumValueColumnWidth = 96;
+constexpr int kInspectorSectionBodyPadding = 8;
 constexpr int kInspectorAxisRowPaddingRole = Qt::UserRole + 1;
 constexpr int kInspectorPropertyInsetRole = Qt::UserRole + 2;
 constexpr int kInspectorAxisRowSpacingRole = Qt::UserRole + 3;
@@ -407,6 +409,26 @@ protected:
   }
 };
 
+/// Keeps the first and last visible properties inset from their section edges.
+std::pair<int, int> inspector_row_vertical_padding(
+    const QTreeWidgetItem &item, int inner_padding) {
+  const QTreeWidgetItem *first = nullptr;
+  const QTreeWidgetItem *last = nullptr;
+  if (const auto *section = item.parent()) {
+    for (int index = 0; index < section->childCount(); ++index) {
+      const auto *child = section->child(index);
+      if (!child->isHidden()) {
+        if (first == nullptr) {
+          first = child;
+        }
+        last = child;
+      }
+    }
+  }
+  return {first == &item ? kInspectorSectionBodyPadding : inner_padding,
+          last == &item ? kInspectorSectionBodyPadding : inner_padding};
+}
+
 /// Separates native editors from quiet, consistently inset property labels.
 class InspectorPropertyDelegate final : public QStyledItemDelegate {
 public:
@@ -421,21 +443,23 @@ public:
     painter->save();
     if (!index.parent().isValid() && index.model()->hasChildren(index)) {
       // The retained native button owns the complete section-header surface.
-      painter->fillRect(option.rect, option.palette.window());
+      painter->fillRect(option.rect, option.palette.base());
       painter->restore();
       return;
     }
-    styled.backgroundBrush = index.parent().isValid()
-                                 ? option.palette.alternateBase()
-                                 : option.palette.window();
+    styled.backgroundBrush = option.palette.base();
     painter->fillRect(option.rect, styled.backgroundBrush);
     if (index.column() == 0 && index.data(kInspectorRetainedLabelRole).toBool()) {
       painter->restore();
       return;
     }
     if (index.column() == 0) {
-      styled.rect.setLeft(option.rect.left() +
-                          index.data(kInspectorPropertyInsetRole).toInt());
+      const int inset = index.data(kInspectorPropertyInsetRole).toInt();
+      if (option.direction == Qt::RightToLeft) {
+        styled.rect.setRight(option.rect.right() - inset);
+      } else {
+        styled.rect.setLeft(option.rect.left() + inset);
+      }
       for (const QPalette::ColorGroup group :
            {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
         styled.palette.setColor(
@@ -457,7 +481,7 @@ public:
   }
 };
 
-/// Draws a common boundary around each retained header and its property rows.
+/// Retains the resizable label column and its interaction-only divider cue.
 class InspectorPropertyTree final : public QTreeWidget {
 public:
   using QTreeWidget::QTreeWidget;
@@ -509,70 +533,43 @@ protected:
   }
 
   bool viewportEvent(QEvent *event) override {
-    if (event->type() == QEvent::Leave && !resizing_column_) {
-      set_divider_hovered(false);
+    if (!resizing_column_) {
+      if (event->type() == QEvent::HoverMove) {
+        // Hover moves also reach this viewport over retained child editors.
+        // Its inherited cursor must stop at the divider's actual hit target.
+        const auto *hover = static_cast<QHoverEvent *>(event);
+        set_divider_hovered(over_column_divider(hover->position().toPoint()));
+      } else if (event->type() == QEvent::Leave) {
+        set_divider_hovered(false);
+      }
     }
     return QTreeWidget::viewportEvent(event);
   }
 
   void paintEvent(QPaintEvent *event) override {
     QTreeWidget::paintEvent(event);
+    if (!divider_hovered_ && !resizing_column_) {
+      return;
+    }
     QPainter painter(viewport());
-    painter.setRenderHint(QPainter::Antialiasing);
     const qreal stroke = 1.0 / std::max<qreal>(1.0, devicePixelRatioF());
-    painter.setPen(QPen(palette().color(QPalette::Mid), stroke));
-    painter.setBrush(Qt::NoBrush);
-    const qreal radius = metrics_.px(6.0);
+    painter.setPen(QPen(palette().color(QPalette::Accent), stroke));
+    const qreal x = column_divider() - stroke * 0.5;
     for (int index = 0; index < topLevelItemCount(); ++index) {
       QTreeWidgetItem *item = topLevelItem(index);
-      if (item->isHidden()) {
+      if (item->isHidden() || !item->isExpanded()) {
         continue;
       }
-      const auto *header =
-          dynamic_cast<QtPanelSectionHeader *>(itemWidget(item, 0));
-      if (header == nullptr) {
-        continue;
-      }
-      QRect bounds = visualItemRect(item);
-      bounds.setTop(bounds.top() + header->content_rect().top());
-      if (item->isExpanded()) {
-        for (int child_index = item->childCount() - 1; child_index >= 0;
-             --child_index) {
-          if (!item->child(child_index)->isHidden()) {
-            bounds.setBottom(visualItemRect(item->child(child_index)).bottom());
-            break;
-          }
+      for (int child_index = 0; child_index < item->childCount(); ++child_index) {
+        QTreeWidgetItem *child = item->child(child_index);
+        if (child->isHidden() || child->isFirstColumnSpanned()) {
+          continue;
         }
-      }
-      bounds.setLeft(0);
-      bounds.setRight(viewport()->rect().right());
-      if (!bounds.intersects(viewport()->rect())) {
-        continue;
-      }
-      const QRectF outline = QRectF(bounds).adjusted(
-          stroke * 0.5, stroke * 0.5, -stroke * 0.5, -stroke * 0.5);
-      QPainterPath section_surface;
-      section_surface.addRoundedRect(outline, radius, radius);
-      QPainterPath outer_corners;
-      outer_corners.addRect(bounds);
-      painter.fillPath(outer_corners.subtracted(section_surface),
-                       palette().window());
-      painter.save();
-      painter.setClipRect(visualItemRect(item), Qt::IntersectClip);
-      painter.fillPath(section_surface, palette().alternateBase());
-      painter.restore();
-      painter.drawRoundedRect(outline, radius, radius);
-      if (item->isExpanded() && item->childCount() > 0 &&
-          !item->child(0)->isFirstColumnSpanned()) {
-        const int body_top = visualItemRect(item->child(0)).top();
-        const qreal x = column_divider() - stroke * 0.5;
-        painter.save();
-        painter.setPen(QPen(palette().color(
-            divider_hovered_ || resizing_column_ ? QPalette::Accent
-                                                : QPalette::Mid), stroke));
-        painter.drawLine(QPointF(x, body_top + metrics_.px(8)),
-                         QPointF(x, bounds.bottom() - metrics_.px(8)));
-        painter.restore();
+        const QRect bounds = visualItemRect(child);
+        if (bounds.intersects(viewport()->rect())) {
+          painter.drawLine(QPointF(x, bounds.top() + metrics_.px(4)),
+                           QPointF(x, bounds.bottom() - metrics_.px(4)));
+        }
       }
     }
   }
@@ -697,7 +694,7 @@ struct InspectorPanel::Impl {
 
     auto *root_layout = new QVBoxLayout(&panel_);
     root_layout->setObjectName(QStringLiteral("inspector.layout"));
-    root_layout->setContentsMargins(8, 8, 8, 8);
+    root_layout->setContentsMargins(0, 0, 0, 0);
 
     tree_ = new InspectorPropertyTree(&panel_);
     tree_->setObjectName(QStringLiteral("inspector.tree"));
@@ -707,7 +704,7 @@ struct InspectorPanel::Impl {
     tree_->setAlternatingRowColors(false);
     tree_->setIndentation(0);
     tree_->setFrameShape(QFrame::NoFrame);
-    tree_->viewport()->setBackgroundRole(QPalette::Window);
+    tree_->viewport()->setBackgroundRole(QPalette::Base);
     tree_->setUniformRowHeights(false);
     tree_->setWordWrap(false);
     tree_->setSelectionMode(QAbstractItemView::NoSelection);
@@ -717,6 +714,7 @@ struct InspectorPanel::Impl {
     panel_.setFocusProxy(tree_);
     tree_->header()->setVisible(false);
     tree_->setMouseTracking(true);
+    tree_->viewport()->setAttribute(Qt::WA_Hover, true);
     tree_->header()->setSectionsMovable(false);
     tree_->header()->setSectionsClickable(false);
     tree_->header()->setHighlightSections(false);
@@ -814,6 +812,22 @@ struct InspectorPanel::Impl {
     }
     material_presentation_ = std::move(snapshot);
     force_rebuild_ = true;
+  }
+
+  void set_component_extension(QWidget *extension) {
+    if (component_extension_ == extension) return;
+    auto *layout = qobject_cast<QVBoxLayout *>(panel_.layout());
+    if (component_extension_ != nullptr) {
+      layout->removeWidget(component_extension_);
+      component_extension_->hide();
+      component_extension_->setParent(nullptr);
+    }
+    component_extension_ = extension;
+    if (extension != nullptr) {
+      extension->setParent(&panel_);
+      layout->addWidget(extension);
+      extension->show();
+    }
   }
 
   void abandon_runtime() noexcept {
@@ -3115,6 +3129,7 @@ private:
   }
 
   InspectorPanel &panel_;
+  QPointer<QWidget> component_extension_;
   InspectorPropertyTree *tree_ = nullptr;
   QuaderEditorApi *editor_ = nullptr;
   const SceneDocument *document_ = nullptr;
@@ -3190,6 +3205,10 @@ InspectorPanel::InspectorPanel(QWidget *parent)
     : QWidget(parent), impl_(std::make_unique<Impl>(*this)) {}
 
 InspectorPanel::~InspectorPanel() = default;
+
+void InspectorPanel::set_component_extension(QWidget *extension) {
+  impl_->set_component_extension(extension);
+}
 
 void InspectorPanel::set_material_presentation(
     InspectorMaterialPresentationSnapshot snapshot) {

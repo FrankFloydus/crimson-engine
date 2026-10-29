@@ -54,6 +54,12 @@ ProjectAssetOperationResult failure(std::string message) {
   return {.message = std::move(message)};
 }
 
+bool extension_metadata_path(const ProjectRelativePath &path) {
+  const auto &value = path.portable_string();
+  return value == ".crimson/asset-locations.json" ||
+         value == ".crimson/references.json" || value == ".crimson/browser.json";
+}
+
 void append(std::string &message, std::string_view detail) {
   if (!detail.empty()) {
     if (!message.empty()) {
@@ -479,6 +485,34 @@ public:
     });
   }
 
+  ProjectIoResult<void> replace_bytes(const std::filesystem::path &path,
+                                      std::string_view before,
+                                      std::string_view after) {
+    const auto current = file_bytes(path);
+    if (!current.ok() || current.value() != before) {
+      return ProjectIoResult<void>::failure(
+          ProjectIoErrorCode::InvalidWorkspaceState,
+          "An asset dependency changed while preparing organization.", path);
+    }
+    const auto recorded = journal_.record_replacement(path, after);
+    if (!recorded.ok()) return recorded;
+    auto transaction = std::make_unique<quader_io::QdrAtomicFileTransaction>();
+    const auto prepared = transaction->prepare(path);
+    if (!prepared.ok) {
+      return ProjectIoResult<void>::failure(ProjectIoErrorCode::IoFailure, prepared.message);
+    }
+    const auto written = quader_io::write_qdr_text_atomic(transaction->staging_path(), after);
+    if (!written.ok) {
+      return ProjectIoResult<void>::failure(ProjectIoErrorCode::IoFailure, written.message);
+    }
+    const auto published = transaction->publish();
+    if (!published.ok) {
+      return ProjectIoResult<void>::failure(ProjectIoErrorCode::IoFailure, published.message);
+    }
+    files_.push_back(std::move(transaction));
+    return ProjectIoResult<void>::success();
+  }
+
   std::string rollback() {
     const auto aborted = abort_commit();
     if (!aborted.ok()) {
@@ -842,8 +876,6 @@ std::optional<ProjectAssetService::SourceStamp> ProjectAssetService::inspect_sou
         entry.kind = ProjectAssetKind::Material;
       } else if (is_texture_extension(source.path())) {
         entry.kind = ProjectAssetKind::Texture;
-      } else {
-        continue;
       }
       entry.size = source.file_size(error);
       if (error) return std::nullopt;
@@ -890,6 +922,31 @@ std::uint64_t ProjectAssetService::revision() const noexcept {
 void ProjectAssetService::invalidate() noexcept {
   cached_.reset();
   cached_source_stamp_.reset();
+}
+
+ProjectIoResult<ProjectAssetMutationPreparation> ProjectAssetService::prepare_mutation(
+    const ProjectAssetMutation &mutation) const {
+  try {
+    if (mutation_prepare_) {
+      auto result = mutation_prepare_(mutation);
+      if (!result.ok()) return result;
+      std::set<std::wstring> paths;
+      for (const auto &write : result.value().writes) {
+        if (!write.path.valid() ||
+            (is_project_asset_reserved_path(write.path) && !extension_metadata_path(write.path)) ||
+            !paths.insert(write.path.portable_case_key()).second ||
+            (write.created_by_copy && write.create_new)) {
+          return ProjectIoResult<ProjectAssetMutationPreparation>::failure(
+              ProjectIoErrorCode::InvalidRelativePath, "Invalid or duplicate asset dependency publication.");
+        }
+      }
+      return result;
+    }
+    return ProjectIoResult<ProjectAssetMutationPreparation>::success({});
+  } catch (const std::exception &error) {
+    return ProjectIoResult<ProjectAssetMutationPreparation>::failure(
+        ProjectIoErrorCode::InvalidWorkspaceState, error.what());
+  }
 }
 
 void ProjectAssetService::retain_committed_changes(
@@ -1091,7 +1148,7 @@ ProjectIoResult<void> ProjectAssetService::recover_pending_operations(
           const auto resolved_parent = resolve_project_asset_folder(file_system, parent);
           if (!resolved_parent.ok()) throw std::runtime_error(resolved_parent.error().message);
         }
-        return resolve_action_path(value, rename_stage);
+        return resolve_action_path(value, rename_stage || extension_metadata_path(relative.value()));
       };
       // Validate every path before performing the first compensation.
       for (const auto &action : actions) {
@@ -1304,14 +1361,14 @@ ProjectIoResult<ProjectAssetSnapshot> ProjectAssetService::scan(
         if (const auto *texture = workspace.manifest.find_texture(entry.path)) {
           entry.asset_id = texture->id;
         }
-      } else {
+      } else if (!source.is_regular_file(error) || error) {
         return false;
       }
       const auto size = source.file_size(error);
       if (error) {
         return false;
       }
-      if (entry.kind == ProjectAssetKind::Texture) {
+      if (entry.kind == ProjectAssetKind::Texture || entry.kind == ProjectAssetKind::Unknown) {
         entry.content_revision = kHashOffset;
         hash_text(entry.content_revision, std::to_string(size));
       }
@@ -1319,7 +1376,7 @@ ProjectIoResult<ProjectAssetSnapshot> ProjectAssetService::scan(
     // Folder contents are represented by the sorted entry paths. Directory
     // timestamps also change for private staging files and can settle lazily on
     // Windows; they are not authored asset revisions.
-    if (entry.kind == ProjectAssetKind::Texture) {
+    if (entry.kind == ProjectAssetKind::Texture || entry.kind == ProjectAssetKind::Unknown) {
       const auto modified = source.last_write_time(error);
       if (error) {
         return false;
@@ -1827,6 +1884,24 @@ ProjectAssetOperationResult ProjectAssetService::organize(
   if (pending.empty()) {
     return {.ok = true};
   }
+  ProjectAssetMutation mutation{
+      .kind = clone ? ProjectAssetMutationKind::Copy : ProjectAssetMutationKind::Move};
+  for (const auto &root : root_moves) {
+    mutation.paths.push_back({root.source->path, root.destination});
+  }
+  auto extension = prepare_mutation(mutation);
+  if (!extension.ok()) return failure(extension.error().message);
+  std::unordered_map<std::string, const ProjectAssetMutationWrite *> copied_rewrites;
+  for (const auto &write : extension.value().writes) {
+    if (!write.created_by_copy) continue;
+    const auto target = std::ranges::find_if(pending, [&](const auto &entry) {
+      return entry.destination == write.path && entry.source->kind == ProjectAssetKind::Unknown;
+    });
+    if (!clone || target == pending.end()) {
+      return failure("A copied identity rewrite has no matching physical file.");
+    }
+    copied_rewrites.emplace(write.path.portable_string(), &write);
+  }
   std::vector<std::pair<ProjectAssetId, ProjectAssetId>> material_remaps;
   std::unordered_map<ProjectAssetId, const Pending *, ProjectAssetIdHash> texture_remaps;
   for (const auto &entry : pending) {
@@ -1910,6 +1985,26 @@ ProjectAssetOperationResult ProjectAssetService::organize(
   } else {
     const auto still_current = preflight(before.value().project_id, before.value().revision);
     if (!still_current.ok()) return failure(still_current.error().message);
+  }
+  if (extension.value().validate) {
+    const auto valid_extension = extension.value().validate();
+    if (!valid_extension.ok()) return failure(valid_extension.error().message);
+  }
+  for (const auto &write : extension.value().writes) {
+    const auto target = file_system.resolve(write.path);
+    if (!target.ok()) return failure(target.error().message);
+    if (write.created_by_copy || write.create_new) {
+      if ((write.created_by_copy && (!clone || std::ranges::none_of(root_moves, [&](const auto &root) {
+            return within(write.path.portable_string(), root.destination.portable_string());
+          }))) || std::filesystem::exists(target.value())) {
+        return failure("A copied asset identity rewrite is outside its new physical roots.");
+      }
+    } else {
+      const auto bytes = file_bytes(target.value());
+      if (!bytes.ok() || bytes.value() != write.before) {
+        return failure("An asset dependency changed while preparing organization.");
+      }
+    }
   }
   AssetFileTransaction transaction;
   const auto journal = transaction.begin(*project_->workspace(), manifest);
@@ -2046,16 +2141,36 @@ ProjectAssetOperationResult ProjectAssetService::organize(
         if (!source.ok()) {
           return reject(source.error().message);
         }
-        const auto decoded = ProjectImageDecoder::read_import(source.value());
-        if (!decoded.ok()) {
-          return reject(decoded.error().message);
+        const auto bytes = file_bytes(source.value());
+        if (!bytes.ok()) return reject(bytes.error().message);
+        created = transaction.create_bytes(absolute.value(), std::as_bytes(
+            std::span(bytes.value().data(), bytes.value().size())));
+      } else {
+        const auto source = unaliased(file_system, entry.source->path, false);
+        if (!source.ok()) return reject(source.error().message);
+        const auto bytes = file_bytes(source.value());
+        if (!bytes.ok()) return reject(bytes.error().message);
+        const auto rewrite = copied_rewrites.find(entry.destination.portable_string());
+        if (rewrite != copied_rewrites.end() && rewrite->second->before != bytes.value()) {
+          return reject("A copied asset changed while preparing its identity.");
         }
-        created = transaction.create_bytes(absolute.value(), decoded.value().encoded_bytes);
+        const auto &contents = rewrite == copied_rewrites.end() ? bytes.value() : rewrite->second->after;
+        created = transaction.create_bytes(absolute.value(), std::as_bytes(
+            std::span(contents.data(), contents.size())));
       }
       if (!created.ok()) {
         return reject(created.error().message);
       }
     }
+  }
+  for (const auto &write : extension.value().writes) {
+    if (write.created_by_copy) continue; // Included in the file's first publication.
+    const auto target = file_system.resolve(write.path);
+    if (!target.ok()) return reject(target.error().message);
+    const auto replaced = write.create_new
+        ? transaction.create_bytes(target.value(), std::as_bytes(std::span(write.after.data(), write.after.size())))
+        : transaction.replace_bytes(target.value(), write.before, write.after);
+    if (!replaced.ok()) return reject(replaced.error().message);
   }
   auto catalog = scene_files_only
       ? ProjectIoResult<ProjectMaterialCatalog>::success(project_->material_catalog())
@@ -2117,6 +2232,13 @@ ProjectAssetOperationResult ProjectAssetService::organize(
     if (!clone) relocated.push_back(entry.source->path);
   }
   retain_committed_changes(before.value(), relocated, result.paths);
+  if (extension.value().committed) {
+    try {
+      extension.value().committed();
+    } catch (const std::exception &error) {
+      result.warnings.push_back(error.what());
+    }
+  }
   return result;
 }
 

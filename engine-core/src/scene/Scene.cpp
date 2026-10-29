@@ -90,7 +90,7 @@ bool hasSceneComponent(const EntityRecord& record,SceneComponentKind kind) {
     case SceneComponentKind::PlayerInput:return record.playerInput.has_value();
     case SceneComponentKind::Camera:return record.camera.has_value();
     case SceneComponentKind::CameraFollow:return record.cameraFollow.has_value();
-    case SceneComponentKind::Model:return record.model.has_value();
+    case SceneComponentKind::Model:return record.model.has_value()||record.nativeGeometry;
     case SceneComponentKind::Subdivision:return record.meshPaint.has_value();
     case SceneComponentKind::Collider:return record.collider.has_value();
     case SceneComponentKind::Directional:return record.directional.has_value();
@@ -98,7 +98,6 @@ bool hasSceneComponent(const EntityRecord& record,SceneComponentKind kind) {
     case SceneComponentKind::Spot:return record.spot.has_value();
     case SceneComponentKind::Environment:return record.environment.has_value();
     case SceneComponentKind::Particle:return record.particle.has_value();
-    case SceneComponentKind::Quader:return record.quader.has_value();
     case SceneComponentKind::Decal:return record.decal.has_value();
     }
     return false;
@@ -117,14 +116,13 @@ void normalizeSceneOutlinerStyle(EntityRecord& record) {
 
 bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
     return a.id == b.id && a.name == b.name && a.parent == b.parent && a.order == b.order &&
-        a.local == b.local && a.model == b.model && a.particle == b.particle && a.decal==b.decal && sameLight(a.directional,b.directional) && sameLight(a.point,b.point) && sameLight(a.spot,b.spot) &&
+        a.local == b.local && a.nativeGeometry==b.nativeGeometry && a.model == b.model && a.particle == b.particle && a.decal==b.decal && sameLight(a.directional,b.directional) && sameLight(a.point,b.point) && sameLight(a.spot,b.spot) &&
         a.environment.has_value()==b.environment.has_value() && (!a.environment || sameEnvironment(*a.environment,*b.environment)) &&
         a.actor==b.actor && a.movement==b.movement && a.controller==b.controller && a.navigation==b.navigation && a.enemy==b.enemy && a.navigationVolume==b.navigationVolume &&
         a.tags==b.tags && a.effects==b.effects &&
         a.playerInput==b.playerInput &&
         a.collider==b.collider && a.camera==b.camera && a.cameraFollow==b.cameraFollow && a.modelMaterials==b.modelMaterials &&
         a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows && a.lightingScopes==b.lightingScopes &&
-        a.quader==b.quader && a.quaderGenerated==b.quaderGenerated &&
         a.modelAnimation==b.modelAnimation && a.modelRagdoll==b.modelRagdoll && a.visible==b.visible && a.receiveDecals==b.receiveDecals &&
         a.outlinerStyle==b.outlinerStyle && a.meshShading==b.meshShading && a.primitive==b.primitive && a.meshPaint==b.meshPaint && a.blendSettings==b.blendSettings;
 }
@@ -152,8 +150,9 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     record.visible=registry_.get<Visibility>(entity).authored;
     record.receiveDecals=registry_.get<VisualSettings>(entity).receiveDecals;
     record.outlinerStyle=registry_.get<OutlinerStyle>(entity).value;
-    if (const auto* model = registry_.try_get<ModelReference>(entity)) {
-        record.model=model->assetId;record.modelMaterials=model->materials;
+    const auto* model=registry_.try_get<ModelReference>(entity);if(!model)if(const auto* native=registry_.try_get<NativeGeometryReference>(entity)){model=&native->appearance;record.nativeGeometry=true;}
+    if(model){
+        if(!record.nativeGeometry)record.model=model->assetId;record.modelMaterials=model->materials;
         record.castShadows=model->castShadows;record.receiveShadows=model->receiveShadows;
         record.lightingScopes=model->lightingScopes;
         record.modelAnimation=model->animation;
@@ -181,8 +180,6 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     if (const auto* value = registry_.try_get<SceneCameraFollow>(entity)) record.cameraFollow = *value;
     if (const auto* collider = registry_.try_get<SceneCollider>(entity)) record.collider = *collider;
     if (const auto* camera = registry_.try_get<SceneCamera>(entity)) record.camera = *camera;
-    if (const auto* link = registry_.try_get<QuaderLink>(entity)) record.quader = *link;
-    if (const auto* generated = registry_.try_get<QuaderGenerated>(entity)) record.quaderGenerated = *generated;
     return record;
 }
 bool Scene::isVisible(EntityId id) const {
@@ -279,7 +276,7 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         if(record.primitive && (!record.model || !validPrimitiveMeshSettings(record.model->id,*record.primitive)))
             throw std::runtime_error("Primitive geometry requires a built-in mesh, finite dimensions from 0.001 to 100000 meters, sides from 3 to 256 and rings from 2 to 256.");
         validateSceneBlendSettings(record.blendSettings);
-        if(!record.model&&!record.blendSettings.empty())throw std::runtime_error("Blend settings require a model entity.");
+        if(!record.model&&!record.nativeGeometry&&!record.blendSettings.empty())throw std::runtime_error("Blend settings require a model entity.");
         for(const auto& binding:record.blendSettings) {
             const auto& id=binding.material.id;
             const auto path=std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(id.data()),id.size()));
@@ -289,7 +286,7 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         }
         if(record.meshPaint) {
             const auto& paint=*record.meshPaint;
-            if(!record.model||paint.subdivisionLevel>MaximumMeshPaintLevel||paint.recipeVersion!=MeshPaintRecipeVersion)
+            if((!record.model&&!record.nativeGeometry)||paint.subdivisionLevel>MaximumMeshPaintLevel||paint.recipeVersion!=MeshPaintRecipeVersion)
                 throw std::runtime_error("Subdivision requires a model, a supported recipe and Level from 0 to 5.");
             std::unordered_set<std::uint64_t> bindings;std::uint64_t entityVertices{};
             for(const auto& draw:paint.draws) {
@@ -302,11 +299,11 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             scenePaintVertices+=entityVertices;
             if(scenePaintVertices>MaximumScenePaintVertices)throw std::runtime_error("Scene paint exceeds its 8M vertex storage budget.");
         }
-        if (!record.model && (!record.castShadows || !record.receiveShadows))
+        if (!record.model && !record.nativeGeometry && (!record.castShadows || !record.receiveShadows))
             throw std::runtime_error("Model shadow settings require a model entity.");
         if(!validMeshShading(record.meshShading))
             throw std::runtime_error("Mesh shading must use mesh normals, flat, or smooth.");
-        if(!record.model && record.meshShading!=MeshShading::UseMeshNormals)
+        if(!record.model && !record.nativeGeometry && record.meshShading!=MeshShading::UseMeshNormals)
             throw std::runtime_error("Mesh shading settings require a model entity.");
         const auto& animation=record.modelAnimation;
         if(!std::isfinite(animation.speed) || animation.speed<0 || animation.speed>100 ||
@@ -322,7 +319,7 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             throw std::runtime_error("Start Simulated requires a Ragdoll asset.");
         if(record.modelMaterials.size()>MaximumModelMaterialSlots)
             throw std::runtime_error("Model material slots exceed the supported limit.");
-        if(!record.modelMaterials.empty() && !record.model)
+        if(!record.modelMaterials.empty() && !record.model && !record.nativeGeometry)
             throw std::runtime_error("Material slot assignment requires a model entity.");
         if(record.model && isBuiltinModel(record.model->id) && record.modelMaterials.size()>1)
             throw std::runtime_error("Built-in meshes have only one material slot.");
@@ -342,6 +339,9 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             if(decal.projection!=SceneDecalProjection::Surface&&decal.projection!=SceneDecalProjection::Box)throw std::runtime_error("Invalid decal projection.");
             if(!decal.asset.empty()&&(!isAssetUuid(decal.asset.id)||isEngineAssetId(decal.asset.id)))throw std::runtime_error("Decal reference requires a writable managed decal UUID.");
             if(!seed.modelId.empty()&&!isAssetUuid(seed.modelId))throw std::runtime_error("Decal seed geometry requires a managed model UUID.");
+            if(seed.nativeSource){const auto& source=*seed.nativeSource;
+                if((!source.memberUuid.empty()&&!isAssetUuid(source.memberUuid))||source.indexCount%3u||source.indexOffset>UINT32_MAX-source.indexCount)
+                    throw std::runtime_error("Native decal source requires a valid member UUID and triangle range.");}
             if(!math::finite(seed.barycentric)||!math::finite(seed.localPoint)||!math::finite(seed.localNormal)||math::length(seed.localNormal)<1e-8)
                 throw std::runtime_error("Decal seed requires finite barycentrics, point and nonzero normal.");
             if(std::abs(seed.barycentric[0]+seed.barycentric[1]+seed.barycentric[2]-1)>1e-4||
@@ -364,7 +364,7 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             (record.point && !validLightRoles(record.point->roles)) ||
             (record.spot && !validLightRoles(record.spot->roles)))
             throw std::runtime_error("Lighting scopes require World/Character masks and finite nonnegative reveal strength.");
-        if(!record.model && record.lightingScopes!=SurfaceLightingScopes{})
+        if(!record.model && !record.nativeGeometry && record.lightingScopes!=SurfaceLightingScopes{})
             throw std::runtime_error("Surface lighting scopes require a model entity.");
         if (record.directional && (!std::isfinite(record.directional->shadowDistance) || record.directional->shadowDistance<=0 ||
             !std::isfinite(record.directional->shadowDepthBias) || record.directional->shadowDepthBias<0 ||
@@ -471,11 +471,6 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         if ((record.controller && !validCollisionColor(record.controller->collisionColor)) ||
             (record.collider && !validCollisionColor(record.collider->collisionColor)))
             throw std::runtime_error("Collision color must have finite RGBA values between zero and one.");
-        if (record.quader && (!std::isfinite(record.quader->importScale) || record.quader->importScale<=0 ||
-            record.quader->projectPath.size()>32768 || record.quader->projectId.size()>128 || record.quader->sceneId.size()>128 || record.quader->saveKey.size()>65536))
-            throw std::runtime_error("Quader import scale must be positive and finite, with bounded source identities.");
-        if (record.quaderGenerated && (!record.quaderGenerated->owner || record.quaderGenerated->sourceKey.empty() || record.quaderGenerated->sourceKey.size()>1024))
-            throw std::runtime_error("Generated Quader content requires its owner and source identity.");
         if (record.camera) {
             const auto& c=*record.camera;
             if (!std::isfinite(c.verticalFov) || c.verticalFov<1 || c.verticalFov>179 ||
@@ -525,12 +520,6 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
     std::unordered_map<EntityId,EntityId> follows;
     std::unordered_map<EntityId,const EntityRecord*> indexed;
     for(const auto& record:records)indexed.emplace(record.id,&record);
-    std::unordered_map<EntityId,std::unordered_set<std::string>> generatedKeys;
-    for(const auto& record:records)if(record.quaderGenerated) {
-        const auto owner=indexed.find(record.quaderGenerated->owner);
-        if(owner==indexed.end() || !owner->second->quader || !generatedKeys[owner->first].insert(record.quaderGenerated->sourceKey).second)
-            throw std::runtime_error("Generated Quader content requires a live Quader owner and unique source identities.");
-    }
     for (const auto& record:records) if(record.environment && record.environment->sun) {
         const auto sun=indexed.find(record.environment->sun);
         if (sun==indexed.end() || !sun->second->directional)
@@ -593,6 +582,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         candidate.emplace<VisualSettings>(entity,record.receiveDecals);
         candidate.emplace<OutlinerStyle>(entity,record.outlinerStyle);
         if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation,record.meshShading,record.primitive,record.modelRagdoll,record.meshPaint,record.blendSettings);
+        else if(record.nativeGeometry)candidate.emplace<NativeGeometryReference>(entity,ModelReference{{},record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation,record.meshShading,record.primitive,record.modelRagdoll,record.meshPaint,record.blendSettings});
         if (record.particle) candidate.emplace<ParticleReference>(entity,*record.particle);
         if (record.decal) candidate.emplace<SceneDecal>(entity,*record.decal);
         if (record.directional) candidate.emplace<SceneDirectionalLight>(entity,*record.directional);
@@ -611,8 +601,6 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         if (record.cameraFollow) candidate.emplace<SceneCameraFollow>(entity,*record.cameraFollow);
         if (record.collider) candidate.emplace<SceneCollider>(entity,*record.collider);
         if (record.camera) candidate.emplace<SceneCamera>(entity,*record.camera);
-        if (record.quader) candidate.emplace<QuaderLink>(entity,*record.quader);
-        if (record.quaderGenerated) candidate.emplace<QuaderGenerated>(entity,*record.quaderGenerated);
         entities.emplace(record.id,entity);
     }
     cacheVisibility(candidate,entities);

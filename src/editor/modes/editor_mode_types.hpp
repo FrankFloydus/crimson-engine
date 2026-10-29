@@ -18,6 +18,9 @@ namespace quader {
 /** Editor contexts are independent of the component selection kind. */
 enum class EditorMode { Object, Edit };
 
+/// Workspace capabilities are independent from Object/Edit selection context.
+enum class EditorWorkspaceMode { Default, Modeling };
+
 /** Stable authored identity plus its current scene/modeling projections. */
 struct EditorModeParticipant final {
   EntityId entity = kInvalidEntityId;

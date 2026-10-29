@@ -20,6 +20,7 @@
 #include "scene/PrimitiveMesh.h"
 #include "scene/SceneBlendSettings.h"
 #include <filesystem>
+#include <functional>
 #include <array>
 #include <memory>
 #include <optional>
@@ -96,6 +97,8 @@ public:
     std::string materialDiagnostic(const std::string& id) const;
     std::shared_ptr<const PreparedParticleMaterial> preparedParticleMaterial(const std::string& id) const;
     ModelMaterialTextures materialPreviewBindings(const MaterialAsset& material,std::uint32_t textureEdge=512) const;
+    ModelMaterial nativeMaterialSurface(const MaterialAsset&,const SceneBlendMaterialSettings* appearance=nullptr) const;
+    ModelMaterialTextures nativeMaterialBindings(const ModelMaterial&) const;
     // Numeric Value views reuse the canonical data image; RGB views encode its
     // linear color for display. The transient lease never creates an asset.
     PreparedTexture grungePreview(const MaterialGrungeNode&,std::uint32_t edge=1024,
@@ -108,10 +111,6 @@ public:
     std::unique_ptr<MaterialGraphPrograms> createMaterialNodePreviewPrograms() const;
     ModelMaterialTextures materialNodePreviewBindings(MaterialGraphPrograms&,const MaterialAsset&,MaterialGraphPreviewTarget,std::uint32_t textureEdge=512) const;
     void publishMaterial(std::shared_ptr<const MaterialAsset>);
-    void publishManagedModels(std::span<const std::shared_ptr<const ModelAsset>> models);
-    // Retire removed source meshes from pickers immediately; reclaim their
-    // payload only when saved scenes, this document and its history release it.
-    void collectUnusedQuaderModels(const SceneDocument& active);
     void protectMaterialDocument(std::string id) { if(materialDocumentId_!=id)++referenceSourceRevision_;materialDocumentId_=std::move(id); }
     void refreshMaterials();
     std::shared_ptr<const MaterialAsset> createMaterial(const std::string& name="New Material");
@@ -202,6 +201,10 @@ public:
     std::string modelDiagnostic(const std::string& id) const;
     void updateResources(std::uint32_t bgfxFrame);
     void onFileChanged(const std::filesystem::path& path);
+    void validatePhysicalAssetMutation(std::span<const std::string> ids,bool deleting) const;
+    // Accept metadata already committed by the one project filesystem owner.
+    void publishPhysicalAssetMutation(std::span<const StoredAssetPath> before,
+                                     std::span<const StoredAssetPath> after);
     void noteAssetWrite(const std::string& id) { ++referenceSourceRevision_;ownWrites_.push_back(resolveAssetPath(projectRoot_,id)); }
     std::vector<std::filesystem::path> takeOwnWrites() { auto result=std::move(ownWrites_);ownWrites_.clear();return result; }
     bool modelBindingsReady(const std::vector<ModelMaterialTextures>&) const;
@@ -217,6 +220,9 @@ public:
     std::vector<ModelMaterial> resolvedModelMaterials(const ModelAsset& model,std::span<const AssetRef<MaterialAsset>> materialOverrides={},const SceneBlendSettings& blendSettings={}) const;
     AssetReferenceManager& references() { return references_; }
     const AssetReferenceManager& references() const { return references_; }
+    void validateExternalAssetRetention(std::span<const std::string>) const;
+    void setExternalAssetRetentionProbe(std::function<std::vector<AssetUsage>()> probe,
+        std::function<std::uint64_t()> revisionProbe = {});
     AssetReferenceIndexInput referenceIndexInput(const SceneDocument* active=nullptr) const;
     std::uint64_t referenceReportRevision(const SceneDocument* active=nullptr) const;
     AssetDeletionPlan planDeletion(const std::vector<std::string>& ids,const SceneDocument* active=nullptr);
@@ -238,6 +244,7 @@ public:
     // Queue external file delivery through the same worker/publication path as
     // the Import dialog. Copies paths and the destination before returning.
     void queueImportFiles(std::span<const std::filesystem::path> sources,const std::string& destinationFolder = {});
+    static bool canImportFile(const std::filesystem::path&);
     void processImports();
     const TextureAsset* importTexture(const std::filesystem::path& source,const std::string& destinationFolder = {});
     std::shared_ptr<const ModelAsset> importModel(const std::filesystem::path& source,const std::string& destinationFolder = {});
@@ -303,6 +310,8 @@ private:
     std::vector<std::string> particleDocumentReferences_,particleDocumentHistory_,materialDocumentReferences_,materialDocumentHistory_;
     std::vector<std::string> blendDocumentReferences_,blendDocumentHistory_;
     ResourceManager* resources_{};
+    std::function<std::vector<AssetUsage>()> externalAssetRetentionProbe_;
+    std::function<std::uint64_t()> externalAssetRetentionRevision_;
     std::uint64_t referenceSourceRevision_{1};
     std::unique_ptr<AsyncImports> asyncImports_;
     std::unique_ptr<TextureStreamer> textureStreamer_;
@@ -357,15 +366,7 @@ private:
     std::vector<std::shared_ptr<const ModelAsset>> models_;
     std::vector<std::shared_ptr<const MaterialAsset>> materials_;
     std::vector<AssetEntry> catalog_;
-    std::unordered_set<std::string> inactiveQuaderModels_;
-    std::unordered_set<std::string> retainedQuaderModels_;
-    // Authored model ownership changes independently of browser/catalog
-    // hydration. Loading an existing model must not restart project-wide GC.
     std::uint64_t modelOwnershipRevision_{1};
-    std::unordered_map<std::string,std::uint64_t> quaderBundleFingerprints_;
-    std::vector<std::string> quaderDocumentModelReferences_;
-    std::array<std::uint64_t,8> quaderCollectionState_{};
-    bool quaderCollectionInitialized_{};
     std::string status_;
     std::vector<std::filesystem::path> ownWrites_;
     TextureAsset* findMutable(const std::string& id) const;
@@ -420,7 +421,6 @@ private:
     std::string placeImportedAssets(std::span<const std::string> ids,const std::string& destinationFolder);
     void addTexture(TextureAsset asset);
     void refreshReferenceIndex(const SceneDocument* active);
-    void refreshQuaderModelCatalog();
 };
 
 } // namespace crimson

@@ -8,6 +8,7 @@
 
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
+#include "api/quader_editor_mode_api.hpp"
 #include "core/localization_service.hpp"
 #include "core/release_features.hpp"
 #include "editor/metadata/release_feature_requirements.hpp"
@@ -1472,6 +1473,36 @@ struct QtMainMenu::Impl {
     action.setChecked(checked);
   }
 
+  void refresh_workspace_presentation() {
+    const bool modeling = context.editor.get().mode().workspace_mode() ==
+                          QuaderWorkspaceMode::Modeling;
+    for (const auto &menu : top_level_menus) {
+      if (menu == nullptr) continue;
+      const auto name = menu->objectName();
+      if (name == QStringLiteral("menu_mesh") || name == QStringLiteral("menu_vertex") ||
+          name == QStringLiteral("menu_edge") || name == QStringLiteral("menu_face") ||
+          name == QStringLiteral("menu_uv")) {
+        if (menu->menuAction()->isVisible() != modeling) menu->menuAction()->setVisible(modeling);
+      }
+    }
+    for (const auto &entry : command_actions) {
+      const bool visible = context.editor.get().commands().workspace_allows(entry.command_id.string());
+      if (entry.action->isVisible() != visible) entry.action->setVisible(visible);
+    }
+    for (const auto &entry : tool_actions) {
+      const bool visible = context.editor.get().commands().workspace_allows(entry.command_id);
+      if (entry.action->isVisible() != visible) entry.action->setVisible(visible);
+    }
+    for (const auto &entry : panel_actions) {
+      const bool visible = modeling || (entry.panel != UIPanelId::FaceTexture &&
+                                       entry.panel != UIPanelId::CommandsLibrary);
+      if (entry.action->isVisible() != visible) entry.action->setVisible(visible);
+    }
+    for (QAction *action : {texture_toolbar_action, tool_toolbar_action}) {
+      if (action != nullptr && action->isVisible() != modeling) action->setVisible(modeling);
+    }
+  }
+
   void refresh_menu(QMenu &menu, ModelingSelectionMode selection_mode) {
     QDR_PROFILE_SCOPE("Qt main menu refresh owning menu");
 
@@ -1644,6 +1675,7 @@ void QtMainMenu::rebuild() {
     impl_->build_uv_menu();
     impl_->build_window_menu();
     impl_->build_help_menu();
+    impl_->refresh_workspace_presentation();
   }
   {
     QDR_PROFILE_SCOPE("Qt main menu connect aboutToShow");
@@ -1671,6 +1703,7 @@ void QtMainMenu::refresh() {
   if (!impl_ || impl_->menu_bar == nullptr) {
     return;
   }
+  impl_->refresh_workspace_presentation();
   const ModelingSelectionMode selection_mode =
       impl_->context.modeling.get().selection_mode();
   for (const QPointer<QMenu> &menu : impl_->top_level_menus) {

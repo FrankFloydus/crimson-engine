@@ -18,7 +18,6 @@
 #include <crimson/renderer/forward/MaterialProcedural.h>
 #include <crimson/renderer/core/Profiler.hpp>
 #include "ContentStorage.h"
-#include "QuaderSceneBundle.h"
 #include "ModelMaterialSlots.h"
 #include "ModelBlendSettings.h"
 #include "resources/AssetId.h"
@@ -301,12 +300,13 @@ void discoverContentFiles(const std::filesystem::path& root) {
             throw std::runtime_error("A copied content file uses an existing asset identity: "+id);
         registerAssetPath(root,id,file);indexed.insert(utf8(std::filesystem::weakly_canonical(file)));
     };
-    const auto content=root/"Content";if(!std::filesystem::is_directory(content))return;
+    const auto content=root;if(!std::filesystem::is_directory(content))return;
     for(auto iterator=std::filesystem::recursive_directory_iterator(content);iterator!=std::filesystem::recursive_directory_iterator{};++iterator) {
         const auto& entry=*iterator;
-        if(entry.is_directory()&&std::filesystem::is_regular_file(entry.path()/"manifest.json")) {
+        if(entry.is_directory()&&(entry.path().filename()==".crimson"||entry.path().filename()==".git"||entry.is_symlink())){iterator.disable_recursion_pending();continue;}
+        if(entry.is_directory()&&extension(entry.path())==".crimson-model"&&std::filesystem::is_regular_file(entry.path()/"manifest.json")) {
             const auto manifest=entry.path()/"manifest.json";auto id=assetIdAtPath(root,manifest);
-            if(id.empty())id=canonicalAssetId("assets/models/"+utf8(entry.path().filename())+"/manifest.json");
+            if(id.empty())id=newAssetId();
             add(id,manifest);
             std::ifstream input(manifest);const auto data=nlohmann::json::parse(input);
             for(const auto& dependency:data.at("dependencies"))if(dependency.at("kind")=="image") {
@@ -324,11 +324,11 @@ void discoverContentFiles(const std::filesystem::path& root) {
             iterator.disable_recursion_pending();continue;
         }
         if(!entry.is_regular_file()||indexed.contains(utf8(std::filesystem::weakly_canonical(entry.path()))))continue;
-        const auto extension=entry.path().extension();
-        if(extension==".crimson-material"||extension==".crimson-particle"||extension==".crimson-decal"||extension==".crimson-agent-profile"||extension==".crimson-effect"||extension==".crimson-animation"||extension==".crimson-ragdoll"||extension==".crimson-scene") {
+        const auto suffix=extension(entry.path());
+        if(suffix==".crimson-material"||suffix==".crimson-particle"||suffix==".crimson-decal"||suffix==".crimson-agent-profile"||suffix==".crimson-effect"||suffix==".crimson-animation"||suffix==".crimson-ragdoll"||suffix==".crimson-scene") {
             std::ifstream input(entry.path());const auto data=nlohmann::json::parse(input);
             auto id=data.value("id",std::string{});
-            if(id.empty())id="assets/scenes/"+utf8(entry.path().filename());
+            if(id.empty())throw std::runtime_error("Native project assets require a UUID: "+utf8(entry.path()));
             add(id,entry.path());
         } else if(textureFile(entry.path())) {
             add(newAssetId(),entry.path());
@@ -353,7 +353,6 @@ AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources
     ensureEngineMaterialAssets(projectRoot_);
     ensureEngineNavigationAgentProfile(projectRoot_);
     ensureEngineGameplayEffects(projectRoot_);
-    refreshQuaderModelCatalog();
     std::vector<std::filesystem::path> files;
     for(const auto& entry:storedAssetPaths(projectRoot_))if(std::filesystem::is_regular_file(entry.file)) {
         if(textureFile(entry.file)&&!references_.deleted(entry.id)) {
@@ -367,15 +366,11 @@ AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources
             const auto id=assetIdAtPath(projectRoot_,file);
             if(references_.deleted(id)) continue;
             if(resources_) {
-                if(inactiveQuaderModels_.contains(id))continue;
                 std::ifstream input(file); const auto manifest=nlohmann::json::parse(input);
                 catalog_.push_back({id,manifest.value("name",utf8(file.parent_path().filename())),AssetKind::Model}); ++catalogRevision_;
-                // Quader packages contain static geometry. Ordinary imported
-                // packages receive one worker scan; warm native clips avoid
-                // geometry decoding and the main thread only publishes files.
-                if(!quaderBundleSource(projectRoot_,id)) {
+                {
                     const auto packageRoot=projectRoot_;std::unordered_set<std::string> known;
-                    for(const auto& entry:storedAssetPaths(projectRoot_))if(entry.file.extension()==".crimson-animation")known.insert(entry.id);
+                    for(const auto& entry:storedAssetPaths(projectRoot_))if(extension(entry.file)==".crimson-animation")known.insert(entry.id);
                     const auto policy=modelResolutionPolicy();const auto resolvers=modelResolvers();
                     ResourceRequestOptions animationOptions;animationOptions.variant="animation-catalog";animationOptions.priority=ResourcePriority::Background;
                     animationOptions.dependencies={file,file.parent_path()/"model.gltf"};
@@ -407,7 +402,6 @@ AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources
                 const auto packageRoot=projectRoot_;const auto resolvers=modelResolvers();
                 ResourceRequestOptions metadataOptions;metadataOptions.variant="material-catalog";metadataOptions.priority=ResourcePriority::Background;
                 metadataOptions.dependencies={file,file.parent_path()/"model.gltf"};
-                if(const auto bundle=quaderBundleSource(projectRoot_,id))metadataOptions.dependencies.push_back(*bundle);
                 materialCatalogResources_[id]=resources_->request<ModelAsset>(AssetRef<ModelAsset>{id},[file,packageRoot,resolvers](std::stop_token token){
                     if(token.stop_requested())throw std::runtime_error("Material catalog scan canceled.");
                     auto data=loadModelMaterialMetadata(file,packageRoot,resolvers);
@@ -465,7 +459,7 @@ void AssetLibrary::refreshParticles() {
     std::erase_if(catalog_,[](const AssetEntry& entry){return entry.kind==AssetKind::Particle;});
     std::unordered_set<std::string> present;
     for(const auto& file:storedAssetPaths(projectRoot_)) {
-        if(!std::filesystem::is_regular_file(file.file) || file.file.extension()!=".crimson-particle") continue;
+        if(!std::filesystem::is_regular_file(file.file) || extension(file.file)!=".crimson-particle") continue;
         const auto& id=file.id;
         if(references_.deleted(id)) continue;
         present.insert(id);
@@ -483,7 +477,7 @@ void AssetLibrary::refreshNavigationAgentProfiles() {
     std::erase_if(catalog_,[](const auto& entry){return entry.kind==AssetKind::NavigationAgentProfile;});
     navigationProfiles_[DefaultNavigationAgentProfileId]={defaultNavigationAgentProfile(),1,{}};
     std::unordered_set<std::string> present{DefaultNavigationAgentProfileId};
-    for(const auto& file:storedAssetPaths(projectRoot_))if(file.file.extension()==".crimson-agent-profile"&&!references_.deleted(file.id)) {
+    for(const auto& file:storedAssetPaths(projectRoot_))if(extension(file.file)==".crimson-agent-profile"&&!references_.deleted(file.id)) {
         present.insert(file.id);auto& entry=navigationProfiles_[file.id];
         if(file.id!=navigationProfileDocumentId_)try {
             auto profile=std::make_shared<const NavigationAgentProfile>(loadNavigationAgentProfile(projectRoot_,file.id));
@@ -535,7 +529,7 @@ void AssetLibrary::refreshGameplayEffects() {
         if(!entry.definition){entry.definition=builtin;entry.revision=nextGameplayEffectRevision_++;}
         present.insert(builtin->id);
     }
-    for(const auto& file:storedAssetPaths(projectRoot_))if(file.file.extension()==".crimson-effect"&&!references_.deleted(file.id)) {
+    for(const auto& file:storedAssetPaths(projectRoot_))if(extension(file.file)==".crimson-effect"&&!references_.deleted(file.id)) {
         present.insert(file.id);auto& entry=gameplayEffects_[file.id];
         if(file.id!=gameplayEffectDocumentId_)try {
             auto profile=std::make_shared<const GameplayEffectAsset>(loadGameplayEffectAsset(projectRoot_,file.id));
@@ -583,7 +577,7 @@ void AssetLibrary::refreshAnimations() {
     ++modelOwnershipRevision_;
     std::erase_if(catalog_,[](const auto& entry){return entry.kind==AssetKind::Animation;});
     std::unordered_set<std::string> present;
-    for(const auto& file:storedAssetPaths(projectRoot_))if(file.file.extension()==".crimson-animation"&&!references_.deleted(file.id)) {
+    for(const auto& file:storedAssetPaths(projectRoot_))if(extension(file.file)==".crimson-animation"&&!references_.deleted(file.id)) {
         present.insert(file.id);auto& entry=animations_[file.id];
         if(file.id!=animationDocumentId_||!entry.definition)try {
             auto definition=std::make_shared<const AnimationAsset>(loadAnimationAsset(projectRoot_,file.id));
@@ -627,7 +621,7 @@ void AssetLibrary::refreshRagdolls() {
     ++modelOwnershipRevision_;
     std::erase_if(catalog_,[](const auto& entry){return entry.kind==AssetKind::Ragdoll;});
     std::unordered_set<std::string> present;
-    for(const auto& file:storedAssetPaths(projectRoot_))if(file.file.extension()==".crimson-ragdoll"&&!references_.deleted(file.id)) {
+    for(const auto& file:storedAssetPaths(projectRoot_))if(extension(file.file)==".crimson-ragdoll"&&!references_.deleted(file.id)) {
         present.insert(file.id);auto& entry=ragdolls_[file.id];
         if(file.id!=ragdollDocumentId_||!entry.definition)try {
             auto definition=std::make_shared<const RagdollAsset>(loadRagdollAsset(projectRoot_,file.id));
@@ -765,8 +759,7 @@ std::shared_ptr<const ModelAsset> AssetLibrary::findModel(const std::string& id,
             const auto root=projectRoot_; const auto resolvers=modelResolvers();
             const auto forceCold=modelCacheRebuilds_.erase(resolved)!=0;
             const auto policy=modelResolutionPolicy();
-            ResourceRequestOptions options; options.dependencies={file,file.parent_path()/"model.gltf",resolveAssetPath(root,"assets/references.json")};
-            if(const auto bundle=quaderBundleSource(root,resolved))options.dependencies.push_back(*bundle);
+            ResourceRequestOptions options; options.dependencies={file,file.parent_path()/"model.gltf",resolveAssetPath(root,".crimson/references.json")};
             // Missing optional policy files are not source dependencies.
             std::erase_if(options.dependencies,[](const auto& dependency){return !std::filesystem::is_regular_file(dependency);});
             std::ifstream manifestInput(file); if(manifestInput) try {
@@ -1057,6 +1050,51 @@ void AssetLibrary::updateResources(std::uint32_t bgfxFrame) {
     textureStreamer_->advance(); textureStreamer_->beginFrame();nodeImageStarts_=0;
     const auto message=textureStreamer_->diagnostic(); if(!message.empty()) status_=message;
 }
+void AssetLibrary::validatePhysicalAssetMutation(std::span<const std::string> ids,bool deleting) const {
+    if(deletionPending())throw std::runtime_error("Finish the pending asset deletion before organizing project files.");
+    if(!deleting)return;
+    for(const auto& id:ids) {
+        if(isEngineAssetId(id))throw std::runtime_error("Private default assets are protected.");
+        if(id==materialDocumentId_||id==particleDocumentId_||id==decalDocumentId_||id==navigationProfileDocumentId_||
+            id==gameplayEffectDocumentId_||id==animationDocumentId_||id==ragdollDocumentId_)
+            throw std::runtime_error("Close the asset document before deleting its containing folder.");
+    }
+}
+void AssetLibrary::publishPhysicalAssetMutation(std::span<const StoredAssetPath> before,std::span<const StoredAssetPath> after) {
+    (void)refreshContentStorage(projectRoot_);
+    references_=AssetReferenceManager(projectRoot_);
+    if(!references_.valid())throw std::runtime_error(references_.status());
+    std::unordered_set<std::string> present,changed;
+    for(const auto& entry:storedAssetPaths(projectRoot_))present.insert(entry.id);
+    for(const auto& entry:before) {
+        changed.insert(entry.id);
+        if(resources_)resources_->invalidatePath(entry.file);
+    }
+    for(const auto& entry:after) {
+        changed.insert(entry.id);
+        if(resources_)resources_->invalidatePath(entry.file);
+        if(textureFile(entry.file)&&!references_.deleted(entry.id)&&!findMutable(entry.id))addTexture(makeAsset(entry.file));
+        if(entry.file.filename()=="manifest.json"&&std::ranges::none_of(catalog_,[&](const auto& asset){return asset.id==entry.id;})) {
+            std::ifstream input(entry.file);const auto manifest=nlohmann::json::parse(input);
+            catalog_.push_back({entry.id,manifest.value("name",utf8(entry.file.parent_path().filename())),AssetKind::Model});
+        }
+    }
+    std::erase_if(catalog_,[&](const auto& entry){return changed.contains(entry.id)&&!present.contains(entry.id);});
+    for(auto iterator=assets_.begin();iterator!=assets_.end();) {
+        if(changed.contains(iterator->id)&&!present.contains(iterator->id)) {
+            retiredTextures_.push_back(std::move(*iterator));iterator=assets_.erase(iterator);
+        } else ++iterator;
+    }
+    std::erase_if(models_,[&](const auto& model){return changed.contains(model->id);});
+    for(const auto& id:changed) {
+        if(resources_)resources_->invalidate(id);
+        if(textureStreamer_)textureStreamer_->invalidate(id);
+        modelResources_.erase(id);materialResources_.erase(id);materialCatalogResources_.erase(id);animationCatalogResources_.erase(id);
+        registeredModelRevisions_.erase(id);preparedParticleMaterials_.erase(id);preparedDecalMaterials_.erase(id);
+    }
+    refreshMaterials();refreshScenes();refreshParticles();refreshDecals();refreshNavigationAgentProfiles();refreshGameplayEffects();refreshAnimations();refreshRagdolls();
+    browserCatalog_=BrowserCatalog(projectRoot_);browserRevision_=0;++catalogRevision_;++referenceSourceRevision_;
+}
 void AssetLibrary::onFileChanged(const std::filesystem::path& changed) {
     ++referenceSourceRevision_;
     // These small durable files may retain a model without a scene/catalog
@@ -1064,37 +1102,13 @@ void AssetLibrary::onFileChanged(const std::filesystem::path& changed) {
     const auto filename=changed.filename();
     if(filename=="references.json"||filename=="material.json"||filename=="environment.json"||
         filename=="preview.json"||filename=="editor-session.json")++modelOwnershipRevision_;
-    if(changed.extension()==".crimson-quader") {
-        try {
-            // Rebuild derived files before any request can observe the source
-            // notification. Cache writes themselves are excluded by the watcher.
-            initializeQuaderSceneBundles(projectRoot_);
-            refreshQuaderModelCatalog();
-            const auto source=std::filesystem::weakly_canonical(changed);
-            for(const auto& entry:storedAssetPaths(projectRoot_)) {
-                if(entry.file.filename()!="manifest.json")continue;
-                const auto bundle=quaderBundleSource(projectRoot_,entry.id);
-                if(!bundle||std::filesystem::weakly_canonical(*bundle)!=source)continue;
-                if(resources_)resources_->invalidate(entry.id);
-                modelResources_.erase(entry.id);materialCatalogResources_.erase(entry.id);registeredModelRevisions_.erase(entry.id);
-                std::erase_if(models_,[&](const auto& model){return model->id==entry.id;});
-                if(references_.deleted(entry.id))continue;
-                if(!resources_)registerModel(loadModelPackage(entry.file,projectRoot_,modelResolvers()),false);
-                else if(!inactiveQuaderModels_.contains(entry.id)) {
-                    std::ifstream input(entry.file);const auto manifest=nlohmann::json::parse(input);
-                    const auto item=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& asset){return asset.id==entry.id;});
-                    if(item==catalog_.end())catalog_.push_back({entry.id,manifest.at("name").get<std::string>(),AssetKind::Model});
-                    else item->name=manifest.at("name").get<std::string>();
-                }
-            }
-            if(materialCatalogDirty_)refreshMaterials();
-            if(resources_)resources_->invalidatePath(changed);
-            ++catalogRevision_;
-        }catch(const std::exception& error){status_="Quader bundle refresh failed: "+std::string(error.what());}
+    const auto relative=std::filesystem::absolute(changed).lexically_normal().lexically_relative(projectRoot_);
+    if(relative.empty()||relative=="."||relative.has_root_path()||*relative.begin()==".."||*relative.begin()==".git")return;
+    if(*relative.begin()==".crimson") {
+        if(filename=="asset-locations.json"){try{refreshContentStorage(projectRoot_);++catalogRevision_;}catch(const std::exception& error){status_=error.what();}}
         return;
     }
-    const auto relative=std::filesystem::absolute(changed).lexically_normal().lexically_relative(projectRoot_);
-    if(!relative.empty()&&!relative.has_root_path()&&(*relative.begin()=="Content"||*relative.begin()=="Engine")) {
+    if(!relative.empty()&&!relative.has_root_path()&&*relative.begin()!=".."&&*relative.begin()!=".crimson"&&*relative.begin()!=".git") {
         std::error_code error;const auto state=std::filesystem::status(changed,error);
         // Directory notifications have no asset identity/index mutation. Their
         // disappearance also needs one browser rescan, including empty folders.
@@ -1111,14 +1125,14 @@ void AssetLibrary::onFileChanged(const std::filesystem::path& changed) {
         if(textureStreamer_)textureStreamer_->reload(id);
         if(!references_.deleted(id) && !findMutable(id) && std::filesystem::is_regular_file(changed)) addTexture(makeAsset(changed));
     }
-    if(changed.extension()==".crimson-scene") refreshScenes();
-    if(changed.extension()==".crimson-material") refreshMaterials();
-    if(changed.extension()==".crimson-particle") refreshParticles();
-    if(changed.extension()==".crimson-decal")refreshDecals();
-    if(changed.extension()==".crimson-agent-profile")refreshNavigationAgentProfiles();
-    if(changed.extension()==".crimson-effect")refreshGameplayEffects();
-    if(changed.extension()==".crimson-animation")refreshAnimations();
-    if(changed.extension()==".crimson-ragdoll")refreshRagdolls();
+    if(extension(changed)==".crimson-scene") refreshScenes();
+    if(extension(changed)==".crimson-material") refreshMaterials();
+    if(extension(changed)==".crimson-particle") refreshParticles();
+    if(extension(changed)==".crimson-decal")refreshDecals();
+    if(extension(changed)==".crimson-agent-profile")refreshNavigationAgentProfiles();
+    if(extension(changed)==".crimson-effect")refreshGameplayEffects();
+    if(extension(changed)==".crimson-animation")refreshAnimations();
+    if(extension(changed)==".crimson-ragdoll")refreshRagdolls();
 }
 std::uint64_t AssetLibrary::materialShaderRevision()const {return graphPrograms_?graphPrograms_->revision():0;}
 std::vector<std::filesystem::path> AssetLibrary::materialShaderDependencies() const {return graphPrograms_?graphPrograms_->sourceDependencies():std::vector<std::filesystem::path>{};}
@@ -1171,7 +1185,7 @@ void AssetLibrary::refreshMaterials() {
     for(const auto& entry:catalog_)if(entry.kind==AssetKind::Material)previous.emplace(entry.id,entry.name);
     std::erase_if(catalog_,[](const auto& e){return e.kind==AssetKind::Material;});materials_.clear();
     std::unordered_set<std::string> present;
-    for(const auto& file:storedAssetPaths(projectRoot_))if(std::filesystem::is_regular_file(file.file)&&file.file.extension()==".crimson-material") {
+    for(const auto& file:storedAssetPaths(projectRoot_))if(std::filesystem::is_regular_file(file.file)&&extension(file.file)==".crimson-material") {
         const auto& id=file.id;if(references_.deleted(id))continue;
         present.insert(id);std::string name=previous.contains(id)?previous.at(id):utf8(file.file.stem());
         const auto working=authoredMaterials_.find(id);
@@ -1183,7 +1197,7 @@ void AssetLibrary::refreshMaterials() {
         catalog_.push_back({id,std::move(name),AssetKind::Material});
     }
     std::erase_if(authoredMaterials_,[&](const auto& entry){return !present.contains(entry.first)&&entry.first!=materialDocumentId_;});
-    for(const auto& file:storedAssetPaths(projectRoot_))if(file.file.extension()==".crimson-decal"&&!references_.deleted(file.id))try {
+    for(const auto& file:storedAssetPaths(projectRoot_))if(extension(file.file)==".crimson-decal"&&!references_.deleted(file.id))try {
         const auto decal=loadDecalAsset(projectRoot_,file.id);
         if(!references_.deleted(decal.material.id)&&decal.material.id!=materialDocumentId_)if(const auto staged=stagedDecalMaterial(projectRoot_,decal))publishMaterial(staged);
     }catch(const std::exception& e){status_+=std::string(e.what())+'\n';}
@@ -1237,7 +1251,7 @@ void AssetLibrary::ensureModelAnimations(const ModelAsset& model) {
 void AssetLibrary::registerModel(std::shared_ptr<const ModelAsset> model,bool refreshMaterialCatalog) {
     if(!model)return;
     if(std::any_of(models_.begin(),models_.end(),[&](const auto& existing){return existing->id==model->id;})){
-        if(!inactiveQuaderModels_.contains(model->id)&&std::none_of(catalog_.begin(),catalog_.end(),[&](const auto& entry){return entry.id==model->id;})){
+        if(std::none_of(catalog_.begin(),catalog_.end(),[&](const auto& entry){return entry.id==model->id;})){
             catalog_.push_back({model->id,model->name,AssetKind::Model});++catalogRevision_;
         }
         return;
@@ -1283,7 +1297,7 @@ void AssetLibrary::registerModel(std::shared_ptr<const ModelAsset> model,bool re
         throw;
     }
     for (auto& image : pending) addTexture(std::move(image));
-    if(!inactiveQuaderModels_.contains(model->id)&&std::none_of(catalog_.begin(),catalog_.end(),[&](const auto& existing){return existing.id==model->id;})) catalog_.push_back({model->id, model->name, AssetKind::Model});
+    if(std::none_of(catalog_.begin(),catalog_.end(),[&](const auto& existing){return existing.id==model->id;})) catalog_.push_back({model->id, model->name, AssetKind::Model});
     ++catalogRevision_;
     if(resources_ && !modelResources_.contains(model->id)) {
         auto compact=std::make_shared<ModelAsset>();
@@ -1302,7 +1316,6 @@ void AssetLibrary::registerModel(std::shared_ptr<const ModelAsset> model,bool re
         }
         if(model->stream) {
             ResourceRequestOptions options;options.dependencies={resolveAssetPath(projectRoot_,model->id),resolveAssetPath(projectRoot_,model->id).parent_path()/"model.gltf"};
-            if(const auto bundle=quaderBundleSource(projectRoot_,model->id))options.dependencies.push_back(*bundle);
             resources_->seed<ModelAsset>(AssetRef<ModelAsset>{model->id},{compact,modelCpuBytes(*compact),0,{}},std::move(options));
             const auto root=projectRoot_;ResourceRequestOptions indexOptions;indexOptions.variant="metadata-index";indexOptions.priority=ResourcePriority::Background;indexOptions.retainLoader=false;
             (void)resources_->request<streaming::ModelStream>(AssetRef<streaming::ModelStream>{model->id},[compact,root](std::stop_token token){
@@ -1316,11 +1329,6 @@ void AssetLibrary::registerModel(std::shared_ptr<const ModelAsset> model,bool re
     // Publish clip files after fallible image/resource preparation, so an
     // import preparation failure cannot leave source-dependent sidecars.
     ensureModelAnimations(*model);
-}
-void AssetLibrary::publishManagedModels(std::span<const std::shared_ptr<const ModelAsset>> models) {
-    refreshQuaderModelCatalog();
-    for(const auto& model:models)registerModel(model,false);
-    if(materialCatalogDirty_)refreshMaterials();
 }
 std::vector<std::string> AssetLibrary::newModelImportAssets(const ModelAsset& model,bool reused) const {
     std::set<std::string> candidates;
@@ -1344,14 +1352,14 @@ std::vector<std::string> AssetLibrary::newModelImportAssets(const ModelAsset& mo
 std::string AssetLibrary::placeImportedAssets(std::span<const std::string> ids,const std::string& destinationFolder) {
     if(ids.empty())return {};
     auto& browser=browserCatalog();
-    std::string destination=destinationFolder.empty()?BrowserCatalog::ContentFolder:destinationFolder,warning;
+    std::string destination=destinationFolder.empty()?BrowserCatalog::RootFolder:destinationFolder,warning;
     if(!browser.writableFolder(destination)) {
-        destination=BrowserCatalog::ContentFolder;warning="Assets imported into Content: The destination folder no longer exists or is read-only.";
+        destination=BrowserCatalog::RootFolder;warning="Assets imported into the project root: The destination folder no longer exists or is read-only.";
     }
     std::vector<std::string> available;available.reserve(ids.size());
     for(const auto& id:ids)if(browser.contains(id))available.push_back(id);
     if(available.empty())return {};
-    try{browser.move(available,destination,true);noteAssetWrite("assets/browser.json");return warning;}
+    try{browser.move(available,destination,true);noteAssetWrite(".crimson/browser.json");return warning;}
     catch(const std::exception& error){return "Assets imported into the browser root: "+std::string(error.what());}
 }
 
@@ -1380,7 +1388,7 @@ const TextureAsset* AssetLibrary::importTexture(const std::filesystem::path& sou
             auto image=decodeManagedImage(source);
             return Pixels{image.width,image.height,std::move(image.rgba)};
         }();
-        const auto folder = resolveAssetPath(projectRoot_,"assets/textures");
+        const auto folder = projectRoot_;
         std::filesystem::create_directories(folder);
         auto destination = folder / source.filename();
         if (std::filesystem::exists(destination) && std::filesystem::equivalent(source, destination)) {
@@ -1451,6 +1459,7 @@ void AssetLibrary::queueImportFiles(std::span<const std::filesystem::path> sourc
     for(const auto& source:sources)batch.paths.push_back(utf8(source));
     std::lock_guard lock(imports_->mutex);imports_->batches.push_back(std::move(batch));
 }
+bool AssetLibrary::canImportFile(const std::filesystem::path& file){const auto type=extension(file);return type==".gltf"||type==".glb"||textureFile(file);}
 
 void AssetLibrary::processImports() {
     if(!textureStreamer_) for(const auto& asset:retiredTextures_){destroyTexture(asset.thumbnail);destroyTexture(asset.colorTexture);destroyTexture(asset.dataTexture);}
@@ -1472,7 +1481,7 @@ void AssetLibrary::processImports() {
 }
 
 std::string AssetLibrary::loadPreview() {
-    const auto file = resolveAssetPath(projectRoot_,"assets/preview.json");
+    const auto file = resolveAssetPath(projectRoot_,".crimson/preview.json");
     if (!std::filesystem::exists(file)) return {};
     try {
         std::ifstream input(file);
@@ -1488,7 +1497,7 @@ std::string AssetLibrary::loadPreview() {
 bool AssetLibrary::savePreview(const std::string& modelId) {
     try {
         const nlohmann::json json{{"version", 1}, {"model", modelId}};
-        std::ofstream output(resolveAssetPath(projectRoot_,"assets/preview.json"));
+        std::ofstream output(resolveAssetPath(projectRoot_,".crimson/preview.json"));
         output << json.dump(2) << '\n';
         if (!output) throw std::runtime_error("Could not write preview.json.");
         return true;
@@ -1916,6 +1925,13 @@ ModelMaterialTextures AssetLibrary::materialPreviewBindings(const MaterialAsset&
     validateMaterialAsset(material);
     return materialBindings(material.surface,std::max(1u,textureEdge),ResourcePriority::Selected);
 }
+ModelMaterial AssetLibrary::nativeMaterialSurface(const MaterialAsset& material,const SceneBlendMaterialSettings* appearance) const {
+    auto surface=material.surface;
+    if(surface.graph&&appearance&&appearance->material.id==material.id)
+        surface.graph=blendGraphVariant(surface.graph,appearance->layers);
+    return surface;
+}
+ModelMaterialTextures AssetLibrary::nativeMaterialBindings(const ModelMaterial& material) const {return materialBindings(material);}
 void AssetLibrary::releaseMaterialNodeImagePreviews(const std::string& documentId) const {
     for(auto i=nodeImagePreviews_.begin();i!=nodeImagePreviews_.end();) {
         if(i->second.document==documentId) {
@@ -2137,7 +2153,7 @@ ModelMaterialTextures AssetLibrary::materialNodePreviewBindings(MaterialGraphPro
 }
 
 void AssetLibrary::loadMaterial(Material& material) {
-    const auto file = resolveAssetPath(projectRoot_,"assets/material.json");
+    const auto file = resolveAssetPath(projectRoot_,".crimson/material.json");
     if (!std::filesystem::exists(file)) return;
     try {
         std::ifstream input(file);
@@ -2171,7 +2187,7 @@ void AssetLibrary::saveMaterial(const Material& material) {
         const nlohmann::json json{{"version", 2}, {"baseColor", material.baseColor}, {"roughness", material.roughness}, {"metallic", material.metallic},
             {"albedoMap", material.albedoMap}, {"roughnessMap", material.roughnessMap}, {"metallicMap", material.metallicMap},
             {"normalMap", material.normalMap}, {"normalStrength", material.normalStrength}};
-        std::ofstream output(resolveAssetPath(projectRoot_,"assets/material.json"));
+        std::ofstream output(resolveAssetPath(projectRoot_,".crimson/material.json"));
         output << json.dump(2) << '\n';
         if (!output) throw std::runtime_error("Could not write material.json.");
     } catch (const std::exception& error) { status_ = error.what(); }
@@ -2190,7 +2206,7 @@ void AssetLibrary::clearEnvironment(EnvironmentSettings& environment,bool persis
 }
 
 void AssetLibrary::loadEnvironment(EnvironmentSettings& environment) {
-    const auto file = resolveAssetPath(projectRoot_,"assets/environment.json");
+    const auto file = resolveAssetPath(projectRoot_,".crimson/environment.json");
     if (!std::filesystem::exists(file)) return;
     try {
         std::ifstream input(file);
@@ -2213,7 +2229,7 @@ void AssetLibrary::loadEnvironment(EnvironmentSettings& environment) {
 void AssetLibrary::saveEnvironment(const EnvironmentSettings& environment) {
     try {
         auto json=environmentSettingsJson(environment);json["version"]=4;
-        writeFileAtomically(resolveAssetPath(projectRoot_,"assets/environment.json"),json.dump(2)+'\n');
+        writeFileAtomically(resolveAssetPath(projectRoot_,".crimson/environment.json"),json.dump(2)+'\n');
     } catch (const std::exception& error) { status_ = error.what(); }
 }
 
@@ -2230,7 +2246,7 @@ std::vector<SceneSnapshot> savedScenes(const std::filesystem::path& root,std::st
 }
 uint64_t mix(uint64_t value,uint64_t input){return (value^input)*1099511628211ull;}
 std::optional<std::string> referencePolicyBytes(const std::filesystem::path& root){
-    const auto file=resolveAssetPath(root,"assets/references.json");
+    const auto file=resolveAssetPath(root,".crimson/references.json");
     if(!std::filesystem::exists(file))return {};
     std::ifstream input(file,std::ios::binary);if(!input)throw std::runtime_error("Cannot read the asset reference policy.");
     std::string bytes{std::istreambuf_iterator<char>(input),{}};
@@ -2249,11 +2265,10 @@ uint64_t deletionRevision(const std::filesystem::path& root,const AssetReference
     const auto policy=referencePolicyBytes(root);result=mix(result,policy.has_value());
     if(policy)for(const auto c:*policy)result=mix(result,static_cast<uint8_t>(c));
     if(active){result=mix(result,active->scene().revision());result=mix(result,active->scene().generation());result=mix(result,active->history().size());}
-    for(const auto& directory:{root/"Content",root/"Engine"})if(std::filesystem::exists(directory))
-        for(const auto& item:std::filesystem::recursive_directory_iterator(directory))if(item.is_regular_file()){
-            for(const auto c:utf8(item.path().lexically_relative(root)))result=mix(result,static_cast<uint8_t>(c));
-            result=mix(result,item.file_size());result=mix(result,static_cast<uint64_t>(item.last_write_time().time_since_epoch().count()));}
-    const auto browser=resolveAssetPath(root,"assets/browser.json");if(std::filesystem::exists(browser)){std::ifstream input(browser,std::ios::binary);for(char c;input.get(c);)result=mix(result,static_cast<uint8_t>(c));}
+    for(const auto& item:storedAssetPaths(root))if(std::filesystem::is_regular_file(item.file)){
+        for(const auto c:utf8(item.file.lexically_relative(root)))result=mix(result,static_cast<uint8_t>(c));
+        result=mix(result,std::filesystem::file_size(item.file));result=mix(result,static_cast<uint64_t>(std::filesystem::last_write_time(item.file).time_since_epoch().count()));}
+    const auto browser=resolveAssetPath(root,".crimson/browser.json");if(std::filesystem::exists(browser)){std::ifstream input(browser,std::ios::binary);for(char c;input.get(c);)result=mix(result,static_cast<uint8_t>(c));}
     return result;
 }
 size_t removeDeletedModels(SceneSnapshot& snapshot,const AssetReferenceManager& previous,const AssetReferenceManager& next,const std::unordered_set<std::string>& deletedModels){
@@ -2393,7 +2408,7 @@ void appendSceneAssetUsages(std::vector<AssetUsage>& usages,std::span<const Enti
 
 std::vector<AssetUsage> collectAssetReferenceUsages(const AssetReferenceIndexInput& input,std::stop_token stop) {
     const auto& projectRoot_=input.root;const auto& catalog_=input.catalog;const auto& materials_=input.materials;
-    const auto& materialDocumentId_=input.materialDocumentId;const auto& retainedQuaderModels_=input.retainedModels;
+    const auto& materialDocumentId_=input.materialDocumentId;
     const auto& references_=*input.policy;
     const auto modelResolvers=[&]{return input.resolvers;};
     const auto check=[&]{if(stop.stop_requested())throw std::runtime_error("Asset reference request cancelled.");};
@@ -2429,7 +2444,6 @@ std::vector<AssetUsage> collectAssetReferenceUsages(const AssetReferenceIndexInp
     for(const auto& entry:catalog_)if(entry.kind==AssetKind::Model)referencedModels.insert(entry.id);
     // Hidden old geometry still owns material/image dependencies while saved
     // scenes, live entities or history can load that generation.
-    for(const auto& id:retainedQuaderModels_)if(!references_.deleted(id))referencedModels.insert(id);
     for(const auto& id:referencedModels) {check();
         const auto model=loadModelMaterialMetadata(resolveAssetPath(projectRoot_,id),projectRoot_,modelResolvers());
         for(size_t index=0;index<model->materials.size();++index) {
@@ -2447,25 +2461,31 @@ std::vector<AssetUsage> collectAssetReferenceUsages(const AssetReferenceIndexInp
     }
     for(const auto& scene:savedScenes(projectRoot_,stop)){check();appendSceneAssetUsages(usages,scene.records,scene.id,scene.name,false);}
     usages.insert(usages.end(),input.liveUsages.begin(),input.liveUsages.end());
-    for(const auto& file:{"material.json","environment.json","preview.json","editor-session.json"}){
-        const auto source=resolveAssetPath(projectRoot_,"assets/"+std::string(file));if(!std::filesystem::exists(source))continue;
-        try{std::ifstream stream(source);const auto j=nlohmann::json::parse(stream);
-            for(const auto* slot:{"albedoMap","roughnessMap","metallicMap","normalMap","map","model","scene"})if(j.contains(slot)&&j[slot].is_string()){
-                // These preserved files belong to the retired sphere/preview
-                // workflow or editor session. They remain resolvable history,
-                // rather than surviving scene-editor resource owners.
-                const auto id=j[slot].get<std::string>();if(!id.empty())usages.push_back({id,"assets/"+std::string(file),file,slot,false,false,true});}}
-        catch(const std::exception& e){throw std::runtime_error("Cannot inspect legacy resource references in "+std::string(file)+": "+e.what());}
-    }
+
     check();return usages;
+}
+
+void AssetLibrary::setExternalAssetRetentionProbe(std::function<std::vector<AssetUsage>()> probe,
+    std::function<std::uint64_t()> revisionProbe) {
+    externalAssetRetentionProbe_=std::move(probe);
+    externalAssetRetentionRevision_=std::move(revisionProbe);
+    ++referenceSourceRevision_;
+}
+void AssetLibrary::validateExternalAssetRetention(std::span<const std::string> ids) const {
+    if(!externalAssetRetentionProbe_ || ids.empty())return;
+    std::unordered_set<std::string> removed;
+    for(const auto& id:ids)removed.insert(canonicalAssetId(id));
+    for(const auto& usage:externalAssetRetentionProbe_())if(removed.contains(canonicalAssetId(usage.targetId)))
+        throw std::runtime_error("A native scene or its undo / redo history still references this asset: "+usage.ownerName+".");
 }
 
 AssetReferenceIndexInput AssetLibrary::referenceIndexInput(const SceneDocument* active) const {
     AssetReferenceIndexInput result;result.root=projectRoot_;result.catalog=catalog_;result.locations=storedAssetPaths(projectRoot_);
-    result.materials=materials_;result.retainedModels.assign(retainedQuaderModels_.begin(),retainedQuaderModels_.end());
+    result.materials=materials_;
     result.materialDocumentId=materialDocumentId_;result.policy=references_.resolutionSnapshot();result.resolvers=modelResolvers();
-    result.storageRevision=contentStorageRevision(projectRoot_);result.requestRevision=referenceReportRevision(active);
+    result.storageRevision=contentStorageRevision(projectRoot_);
     auto& usages=result.liveUsages;
+    if(externalAssetRetentionProbe_){auto roots=externalAssetRetentionProbe_();usages.insert(usages.end(),std::make_move_iterator(roots.begin()),std::make_move_iterator(roots.end()));}
     for(const auto& id:decalDocumentReferences_)if(!id.empty())usages.push_back({id,decalDocumentId_,"Open decal surface","Decal material",true,false});
     for(const auto& id:decalDocumentHistory_)if(!id.empty())usages.push_back({id,decalDocumentId_,"Open decal surface","Decal material undo / redo history",true,true});
     for(const auto& id:animationDocumentReferences_)if(!id.empty())usages.push_back({id,animationDocumentId_,"Open animation","Animation source model",true,false});
@@ -2487,6 +2507,7 @@ AssetReferenceIndexInput AssetLibrary::referenceIndexInput(const SceneDocument* 
     if(active)for(const auto& id:active->historicalAnimationReferences())usages.push_back({id,active->assetId(),active->displayName(),"Animation undo / redo history",true,true});
     if(active)for(const auto& id:active->historicalRagdollReferences())usages.push_back({id,active->assetId(),active->displayName(),"Ragdoll undo / redo history",true,true});
     if(active)for(const auto& id:active->historicalDecalReferences())usages.push_back({id,active->assetId(),active->displayName(),"Decal undo / redo history",true,true});
+    result.requestRevision=referenceReportRevision(active);
     return result;
 }
 std::uint64_t AssetLibrary::referenceReportRevision(const SceneDocument* active) const {
@@ -2494,6 +2515,7 @@ std::uint64_t AssetLibrary::referenceReportRevision(const SceneDocument* active)
     auto revision=mix(referenceSourceRevision_,references_.revision());revision=mix(revision,modelOwnershipRevision_);
     for(const auto value:{nextMaterialRevision_,nextParticleRevision_,nextDecalRevision_,nextAnimationRevision_,nextRagdollRevision_})revision=mix(revision,value);
     revision=mix(revision,contentStorageRevision(projectRoot_));
+    if(externalAssetRetentionRevision_)revision=mix(revision,externalAssetRetentionRevision_());
     if(active){revision=mix(revision,active->documentGeneration());revision=mix(revision,active->scene().generation());revision=mix(revision,active->scene().revision());revision=mix(revision,active->history().size());revision=mix(revision,active->loadedFingerprint());}
     return revision;
 }
@@ -2527,116 +2549,6 @@ AssetReferenceReport makeAssetReferenceReport(const AssetReferenceIndexInput& in
     return report;
 }
 
-void AssetLibrary::refreshQuaderModelCatalog(){
-    CRIMSON_PROFILE_ZONE("Quader bundle catalog refresh");
-    // Keep pruned IDs retired for this session as well: a completed background
-    // snapshot must not republish a card after its unused source was reclaimed.
-    auto inactive=inactiveQuaderModels_;std::unordered_set<std::string> retained;
-    std::unordered_map<std::string,std::uint64_t> fingerprints;
-    for(const auto& entry:storedAssetPaths(projectRoot_)){
-        if(entry.file.extension()!=".crimson-quader"||!std::filesystem::is_regular_file(entry.file))continue;
-        std::ifstream input(entry.file,std::ios::binary);if(!input)throw std::runtime_error("Cannot read Quader bundle catalog.");
-        const std::string bytes{std::istreambuf_iterator<char>(input),{}};const auto bundle=decodeQuaderSceneBundle(bytes);
-        if(bundle.id!=entry.id)throw std::runtime_error("Quader bundle catalog identity mismatch.");
-        auto fingerprint=streaming::detail::HashSeed;streaming::detail::hash(fingerprint,bytes.data(),bytes.size());
-        fingerprints.emplace(entry.id,fingerprint);
-        for(const auto& model:bundle.models)if(model.current)inactive.erase(model.id);else {inactive.insert(model.id);retained.insert(model.id);}
-    }
-    const auto count=catalog_.size();std::erase_if(catalog_,[&](const auto& entry){return entry.kind==AssetKind::Model&&inactive.contains(entry.id);});
-    if(inactive!=inactiveQuaderModels_||count!=catalog_.size())++catalogRevision_;
-    if(retained!=retainedQuaderModels_||fingerprints!=quaderBundleFingerprints_)++modelOwnershipRevision_;
-    inactiveQuaderModels_=std::move(inactive);
-    retainedQuaderModels_=std::move(retained);
-    quaderBundleFingerprints_=std::move(fingerprints);
-}
-void AssetLibrary::collectUnusedQuaderModels(const SceneDocument& active){
-    if(active.transactionActive())return;
-    const auto state=std::array<std::uint64_t,8>{modelOwnershipRevision_,contentStorageRevision(projectRoot_),active.documentGeneration(),
-        active.scene().revision(),active.scene().generation(),active.loadedFingerprint(),static_cast<std::uint64_t>(active.history().size()),references_.revision()};
-    if(quaderCollectionInitialized_&&state==quaderCollectionState_)return;
-    // Most scene revisions are poses/properties. Rescan saved dependencies only
-    // when model references/history or an authored ownership boundary changed.
-    auto documentReferences=active.historicalModelReferences();
-    for(const auto& record:active.scene().records()){
-        if(record.model)documentReferences.push_back(record.model->id);
-        if(record.collider&&!record.collider->source.empty())documentReferences.push_back(record.collider->source.id);
-        if(record.decal&&!record.decal->seed.modelId.empty())documentReferences.push_back(record.decal->seed.modelId);
-    }
-    std::sort(documentReferences.begin(),documentReferences.end());documentReferences.erase(std::unique(documentReferences.begin(),documentReferences.end()),documentReferences.end());
-    const bool unchanged=quaderCollectionInitialized_&&documentReferences==quaderDocumentModelReferences_&&state[0]==quaderCollectionState_[0]&&
-        state[1]==quaderCollectionState_[1]&&state[2]==quaderCollectionState_[2]&&state[5]==quaderCollectionState_[5]&&state[7]==quaderCollectionState_[7];
-    quaderCollectionInitialized_=true;quaderCollectionState_=state;
-    quaderDocumentModelReferences_=std::move(documentReferences);
-    if(unchanged||retainedQuaderModels_.empty())return;
-    try{
-        // Failure to read any scene/material/legacy reference leaves every
-        // retained generation intact. Runtime residency is not authored usage.
-        // Read the durable policy again at this destructive boundary. An
-        // external edit cannot silently discard replacement-only owners.
-        std::vector<std::string> referenced;
-        {
-            CRIMSON_PROFILE_ZONE("Quader retained model ownership proof");
-            AssetReferenceManager persistedPolicy(projectRoot_);
-            if(!references_.valid()||!persistedPolicy.valid())throw std::runtime_error("Asset reference policy is invalid; retained meshes were preserved.");
-            referenced=references_.replacementTargets();
-            const auto persistedTargets=persistedPolicy.replacementTargets();referenced.insert(referenced.end(),persistedTargets.begin(),persistedTargets.end());
-            // If direct scene/history/policy owners retain every old model,
-            // no package can be pruned. Avoid rebuilding unrelated material,
-            // image, animation and document usage metadata on catalog hydration.
-            std::unordered_set<std::string> protectedModels;
-            const auto protect=[&](const std::string& id) {
-                if(id.empty())return;
-                protectedModels.insert(id);
-                const auto current=references_.resolve(id),persisted=persistedPolicy.resolve(id);
-                if(!current.empty())protectedModels.insert(current);
-                if(!persisted.empty())protectedModels.insert(persisted);
-            };
-            for(const auto& id:quaderDocumentModelReferences_)protect(id);
-            for(const auto& id:referenced)protect(id);
-            const auto allProtected=[&]{return std::all_of(retainedQuaderModels_.begin(),retainedQuaderModels_.end(),[&](const auto& id){return protectedModels.contains(id);});};
-            if(allProtected())return;
-            // A directory rename outside the editor can arrive before its
-            // location index is corrected. Missing indexed scenes are not
-            // proof that their authored model owners were deleted. Managed
-            // deletion records a durable tombstone, including external policy
-            // changes which the live policy has not observed yet.
-            for(const auto& entry:storedAssetPaths(projectRoot_))if(entry.file.extension()==".crimson-scene"&&!persistedPolicy.deleted(entry.id)){
-                std::error_code error;
-                if(!std::filesystem::is_regular_file(entry.file,error))
-                    throw std::runtime_error("Saved scene source is unavailable; refresh its asset location before mesh cleanup: "+utf8(entry.file));
-            }
-            {
-                CRIMSON_PROFILE_ZONE("Quader retained model saved scene scan");
-                for(const auto& scene:savedScenes(projectRoot_))for(const auto& record:scene.records) {
-                    if(record.model)protect(record.model->id);
-                    if(record.collider)protect(record.collider->source.id);
-                    if(record.decal)protect(record.decal->seed.modelId);
-                }
-            }
-            if(allProtected())return;
-        }
-        {CRIMSON_PROFILE_ZONE("Quader full reference index");refreshReferenceIndex(&active);}
-        for(const auto& usage:references_.usages()){
-            referenced.push_back(usage.targetId);const auto resolved=references_.resolve(usage.targetId);if(!resolved.empty())referenced.push_back(resolved);
-        }
-        std::unordered_map<std::string,std::filesystem::path> sources;std::vector<std::string> removed;
-        {CRIMSON_PROFILE_ZONE("Quader bundle pruning");
-        for(const auto& id:retainedQuaderModels_)if(const auto source=quaderBundleSource(projectRoot_,id))sources.emplace(id,*source);
-        removed=pruneUnusedQuaderBundleModels(projectRoot_,referenced);}
-        if(removed.empty())return;
-        std::set<std::filesystem::path> writtenSources;
-        for(const auto& id:removed){
-            inactiveQuaderModels_.insert(id);retainedQuaderModels_.erase(id);modelResources_.erase(id);materialCatalogResources_.erase(id);registeredModelRevisions_.erase(id);modelInterest_.erase(id);
-            if(resources_)resources_->discard(id);
-            if(const auto source=sources.find(id);source!=sources.end())writtenSources.insert(source->second);
-        }
-        for(const auto& source:writtenSources)ownWrites_.push_back(source);
-        std::erase_if(models_,[&](const auto& model){return std::find(removed.begin(),removed.end(),model->id)!=removed.end();});
-        ++catalogRevision_;++modelOwnershipRevision_;
-        quaderCollectionState_={modelOwnershipRevision_,contentStorageRevision(projectRoot_),active.documentGeneration(),active.scene().revision(),
-            active.scene().generation(),active.loadedFingerprint(),static_cast<std::uint64_t>(active.history().size()),references_.revision()};
-    }catch(const std::exception& error){status_="Quader mesh cleanup deferred: "+std::string(error.what());}
-}
 AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids,const SceneDocument* active){
     AssetDeletionPlan plan;plan.selectedIds=ids;
     try{(void)currentReferencePolicy(projectRoot_,references_);auto& browser=browserCatalog();std::unordered_set<std::string> expanded;
@@ -2646,6 +2558,7 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
         for(const auto& id:expanded){if(browser.isFolder(id)){plan.folderIds.push_back(id);continue;}
             const auto entry=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& a){return a.id==id;});if(entry==catalog_.end())throw std::runtime_error("Asset deletion target is unavailable.");
             plan.assetIds.push_back(id);if(entry->kind==AssetKind::Model)models.insert(id);if(entry->kind==AssetKind::Particle)particles.insert(id);if(entry->kind==AssetKind::Material)materials.insert(id);if(entry->kind==AssetKind::NavigationAgentProfile)profiles.insert(id);if(entry->kind==AssetKind::GameplayEffect)effects.insert(id);if(entry->kind==AssetKind::Animation)animations.insert(id);if(entry->kind==AssetKind::Decal)decals.insert(id);if(entry->kind==AssetKind::Ragdoll)ragdolls.insert(id);}
+        validateExternalAssetRetention(plan.assetIds);
         for(const auto& entry:catalog_)if(entry.kind==AssetKind::Animation&&!expanded.contains(entry.id)) {
             const auto animation=loadAnimationAsset(projectRoot_,entry.id);
             if(models.contains(animation.sourceModel.id))throw std::runtime_error("Delete the model's Animation assets in the same batch to preserve their imported source tracks.");
@@ -2661,7 +2574,6 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
         refreshReferenceIndex(active);
         std::unordered_set<std::string> usableOwners;
         for(const auto& entry:catalog_)if(std::filesystem::is_regular_file(resolveAssetPath(projectRoot_,entry.id)))usableOwners.insert(entry.id);
-        for(const auto& id:retainedQuaderModels_)if(!references_.deleted(id)&&std::filesystem::is_regular_file(resolveAssetPath(projectRoot_,id)))usableOwners.insert(id);
         // A valid saved scene can arrive from disk before the browser's watcher
         // refresh. Its actual authored dependencies must still be protected.
         const auto scenes=savedScenes(projectRoot_);for(const auto& scene:scenes)usableOwners.insert(scene.id);
@@ -2702,7 +2614,7 @@ std::vector<AssetEntry> AssetLibrary::fallbackCandidates(const std::string& id)c
     if(source->kind==AssetKind::Material)if(const auto original=findMaterial(id))decal=decalMaterialCompatible(*original);
     if(source->kind==AssetKind::Material)for(const auto& usage:references_.users(id))if(usage.targetId==id||references_.resolve(usage.targetId)==id){
         const auto owner=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& e){return e.id==usage.ownerId;});
-        decal|=owner!=catalog_.end()&&owner->kind==AssetKind::Decal;sprite|=owner!=catalog_.end()&&owner->kind==AssetKind::Particle;model|=(owner!=catalog_.end()&&owner->kind==AssetKind::Model)||retainedQuaderModels_.contains(usage.ownerId)||usage.slot.find(" / Material slot")!=std::string::npos;}
+        decal|=owner!=catalog_.end()&&owner->kind==AssetKind::Decal;sprite|=owner!=catalog_.end()&&owner->kind==AssetKind::Particle;model|=(owner!=catalog_.end()&&owner->kind==AssetKind::Model)||usage.slot.find(" / Material slot")!=std::string::npos;}
     for(const auto& entry:catalog_)if(entry.id!=id&&(entry.kind==source->kind||(source->kind==AssetKind::Environment&&entry.kind==AssetKind::Texture))){
         if(source->kind==AssetKind::Material){const auto material=findMaterial(entry.id);if(!material||(sprite&&!particleMaterialCompatible(*material))||(model&&!modelMaterialCompatible(*material))||(decal?!decalMaterialCompatible(*material):!modelMaterialCompatible(*material)))continue;}
         if(source->kind==AssetKind::Animation){const auto original=findAnimation(id),candidate=findAnimation(entry.id);if(!original||!candidate||original->bindingSignature!=candidate->bindingSignature)continue;}
@@ -2732,6 +2644,7 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
     bool durable=false;
     try{
         if(!plan.error.empty())throw std::runtime_error(plan.error);
+        validateExternalAssetRetention(plan.assetIds);
         if(plan.revision!=deletionRevision(projectRoot_,references_,catalogRevision_,active))throw std::runtime_error("Assets or scenes changed while deletion was pending. Review the updated deletion list.");
         const auto policyBaseline=currentReferencePolicy(projectRoot_,references_);
         if(active&&active->transactionActive())throw std::runtime_error("Finish the active scene edit before deleting assets.");
@@ -2769,7 +2682,6 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         for(const auto& id:deletedRagdolls){const auto target=nextReferences.resolveRagdoll(id);if(!target.empty())(void)loadRagdollAsset(projectRoot_,target);}
         std::vector<std::shared_ptr<const ModelAsset>> nextModels;
         std::vector<AssetEntry> surviving;for(const auto& entry:catalog_)if(entry.kind==AssetKind::Model&&!deletedModels.contains(entry.id))surviving.push_back(entry);
-        for(const auto& id:retainedQuaderModels_)if(!references_.deleted(id)&&!deletedModels.contains(id))surviving.push_back({id,id,AssetKind::Model});
         std::vector<AssetEntry> survivingParticles;for(const auto& entry:catalog_)if(entry.kind==AssetKind::Particle&&!deletedParticles.contains(entry.id))survivingParticles.push_back(entry);
         std::vector<AssetEntry> survivingDecals;for(const auto& entry:catalog_)if(entry.kind==AssetKind::Decal&&!deletedDecals.contains(entry.id))survivingDecals.push_back(entry);
         if(resources_){
@@ -2790,10 +2702,7 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
             if(!deletionValidationCurrent(*validation))throw std::runtime_error("Resource files changed while deletion was validating. Review the deletion again.");
             nextModels=validation->models;
         }else nextModels=validateAssetDeletion(projectRoot_,surviving,nextReferences,{}, {},survivingParticles,survivingDecals)->models;
-        const std::vector<std::string> deletedModelIds(deletedModels.begin(),deletedModels.end());
-        auto bundleRemoval=prepareQuaderBundleModelRemoval(projectRoot_,deletedModelIds);
-        const std::unordered_set<std::string> deletedBundleModels(bundleRemoval.modelIds.begin(),bundleRemoval.modelIds.end());
-        std::vector<AssetFileChange> changes=std::move(bundleRemoval.files);
+        std::vector<AssetFileChange> changes;
         std::vector<StoredAssetPath> profileRegistrations;
         auto preparedMaterials=materials_;auto preparedAuthoredMaterials=authoredMaterials_;auto preparedParticles=particles_;auto preparedDecals=decals_;
         auto preparedMaterialRevision=nextMaterialRevision_,preparedParticleRevision=nextParticleRevision_,preparedDecalRevision=nextDecalRevision_;
@@ -2891,8 +2800,7 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         if(active&&!activeDeleted)for(const auto& id:active->historicalAnimationReferences())if(deletedAnimations.contains(references_.resolveAnimation(id)))clearHistory=true;
         if(active&&!activeDeleted)for(const auto& id:active->historicalRagdollReferences())if(deletedRagdolls.contains(references_.resolveRagdoll(id)))clearHistory=true;
         std::vector<std::filesystem::path> removedDirectories,selectedDirectories;
-        removedDirectories.insert(removedDirectories.end(),bundleRemoval.emptyDirectories.begin(),bundleRemoval.emptyDirectories.end());
-        const auto contentRoot=std::filesystem::weakly_canonical(projectRoot_/"Content");
+        const auto contentRoot=std::filesystem::weakly_canonical(projectRoot_);
         const auto addEmptyAncestors=[&](std::filesystem::path directory){
             directory=std::filesystem::weakly_canonical(directory);const auto relative=directory.lexically_relative(contentRoot);
             if(relative.empty()||relative=="."||relative.has_root_path()||*relative.begin()=="..")return;
@@ -2906,7 +2814,7 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
             const auto directory=browserCatalog().folderPath(id);selectedDirectories.push_back(directory);removedDirectories.push_back(directory);
             if(std::filesystem::is_directory(directory))for(const auto& item:std::filesystem::recursive_directory_iterator(directory))if(item.is_directory())removedDirectories.push_back(item.path());
         }
-        for(const auto& entry:deleted){if(deletedBundleModels.contains(entry.id))continue;
+        for(const auto& entry:deleted){
             if(entry.kind==AssetKind::Model){const auto package=checkedManagedAssetPath(projectRoot_,entry.id).parent_path();removedDirectories.push_back(package);
                 for(const auto& file:std::filesystem::recursive_directory_iterator(package))if(file.is_regular_file()){
                     const auto independent=assetIdAtPath(projectRoot_,file.path());if(!independent.empty()&&independent!=entry.id&&!deletedIds.contains(independent)&&std::any_of(catalog_.begin(),catalog_.end(),[&](const auto& card){return card.id==independent;}))continue;
@@ -2915,17 +2823,15 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
             else changes.push_back({entry.id,std::nullopt});}
         // Delete may explicitly include an image also found in a model's package list; unique file targets only.
         std::vector<AssetFileChange> unique;std::set<std::filesystem::path> files;for(auto& change:changes)if(files.insert(checkedManagedAssetPath(projectRoot_,change.id)).second)unique.push_back(std::move(change));
-        unique.push_back({"assets/references.json",nextReferences.serialize()});auto browserIds=plan.assetIds;browserIds.insert(browserIds.end(),plan.folderIds.begin(),plan.folderIds.end());
-        unique.push_back({"assets/browser.json",browserCatalog().serializeWithout(browserIds)});
-        auto removedLocations=bundleRemoval.memberIds;removedLocations.insert(removedLocations.end(),bundleRemoval.removedBundleIds.begin(),bundleRemoval.removedBundleIds.end());
+        unique.push_back({".crimson/references.json",nextReferences.serialize()});auto browserIds=plan.assetIds;browserIds.insert(browserIds.end(),plan.folderIds.begin(),plan.folderIds.end());
+        unique.push_back({".crimson/browser.json",browserCatalog().serializeWithout(browserIds)});
+        std::vector<std::string> removedLocations;
         const bool locationsChanged=!profileRegistrations.empty()||!removedLocations.empty();
         if(locationsChanged)unique.push_back({".crimson/asset-locations.json",prepareAssetPathRegistration(projectRoot_,profileRegistrations,removedLocations)});
         auto preparedBrowser=browserCatalog().prepareErase(browserIds);auto preparedCatalog=catalog_;
-        for(const auto& registration:profileRegistrations)if(registration.file.extension()==".crimson-material") {
+        for(const auto& registration:profileRegistrations)if(extension(registration.file)==".crimson-material") {
             const auto m=preparedAuthoredMaterials.find(registration.id);if(m!=preparedAuthoredMaterials.end()&&std::none_of(preparedCatalog.begin(),preparedCatalog.end(),[&](const auto& e){return e.id==registration.id;}))preparedCatalog.push_back({registration.id,m->second.definition->name,AssetKind::Material});
         }
-        auto preparedInactiveQuaderModels=inactiveQuaderModels_,preparedRetainedQuaderModels=retainedQuaderModels_;
-        for(const auto& id:deletedBundleModels){preparedInactiveQuaderModels.insert(id);preparedRetainedQuaderModels.erase(id);}
         std::erase_if(preparedCatalog,[&](const auto& entry){return deletedIds.contains(entry.id);});
         std::erase_if(preparedMaterials,[&](const auto& entry){return deletedIds.contains(entry->id);});
         std::erase_if(preparedParticles,[&](const auto& entry){return deletedIds.contains(entry.first);});
@@ -2947,8 +2853,8 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         std::vector<std::filesystem::path> writtenPaths;writtenPaths.reserve(unique.size());
         for(const auto& change:unique)writtenPaths.push_back(checkedManagedAssetPath(projectRoot_,change.id));
         ownWrites_.reserve(ownWrites_.size()+writtenPaths.size());
-        validateQuaderBundleModelRemoval(projectRoot_,bundleRemoval);
         if(referencePolicyBytes(projectRoot_)!=policyBaseline)throw std::runtime_error("The asset reference policy changed while deletion was preparing. Review the deletion again.");
+        validateExternalAssetRetention(plan.assetIds);
         commitAssetTransaction(projectRoot_,unique);
         durable=true;
         // All data/registry/catalog allocations were prepared above. Install the
@@ -2956,7 +2862,7 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         if(preparedScene) { const auto committed=active->commitExternalAssetChanges(std::move(*preparedScene));if(!committed)std::terminate(); }
         references_=std::move(nextReferences);models_=std::move(nextModels);
         browserCatalog_=std::move(preparedBrowser);catalog_=std::move(preparedCatalog);materials_=std::move(preparedMaterials);particles_=std::move(preparedParticles);decals_=std::move(preparedDecals);
-        inactiveQuaderModels_=std::move(preparedInactiveQuaderModels);retainedQuaderModels_=std::move(preparedRetainedQuaderModels);++modelOwnershipRevision_;
+        ++modelOwnershipRevision_;
         authoredMaterials_=std::move(preparedAuthoredMaterials);nextMaterialRevision_=preparedMaterialRevision;nextParticleRevision_=preparedParticleRevision;nextDecalRevision_=preparedDecalRevision;
         ownWrites_.insert(ownWrites_.end(),std::make_move_iterator(writtenPaths.begin()),std::make_move_iterator(writtenPaths.end()));
         if(locationsChanged)refreshContentStorage(projectRoot_);

@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -72,6 +73,13 @@ void write_text_file(const std::filesystem::path &path,
   stream.write(text.data(), static_cast<std::streamsize>(text.size()));
   stream.close();
   ASSERT_TRUE(stream.good()) << path.string();
+}
+
+std::string read_text_file(const std::filesystem::path &path) {
+  std::ifstream stream(path, std::ios::binary);
+  EXPECT_TRUE(stream.is_open()) << path.string();
+  return {std::istreambuf_iterator<char>(stream),
+          std::istreambuf_iterator<char>()};
 }
 
 TEST(ProjectIoResultTests, VoidSuccessCarriesNonFatalWarning) {
@@ -177,6 +185,65 @@ TEST(ProjectManifestStore, CreatesOnlyInsideAnExactlyEmptyFolder) {
   ASSERT_FALSE(rejected.ok());
   EXPECT_EQ(rejected.error().code, ProjectIoErrorCode::RootNotEmpty);
   EXPECT_TRUE(std::filesystem::is_regular_file(occupied_root / "keep.txt"));
+}
+
+TEST(ProjectManifestStore, AdoptsChosenFolderWithoutReplacingExistingContent) {
+  ScopedProjectTestDirectory temporary("adopt-folder");
+  const auto root = temporary.path() / "Existing Assets";
+  ASSERT_TRUE(std::filesystem::create_directory(root));
+  ASSERT_TRUE(std::filesystem::create_directory(root / "Scenes"));
+  write_text_file(root / "source.obj", "authored model bytes");
+  write_text_file(root / "Scenes" / "notes.txt", "authored scene notes");
+
+  const auto created = ProjectManifestStore::create_in_directory(root, true);
+  ASSERT_TRUE(created.ok()) << created.error().message;
+  EXPECT_EQ(created.value().file_system.root(), std::filesystem::canonical(root));
+  EXPECT_EQ(created.value().manifest_path, root / "Existing Assets.qproj");
+  EXPECT_FALSE(created.value().created_scenes_directory);
+  EXPECT_EQ(read_text_file(root / "source.obj"), "authored model bytes");
+  EXPECT_EQ(read_text_file(root / "Scenes" / "notes.txt"), "authored scene notes");
+
+  const auto found = ProjectManifestStore::manifest_in_directory(root);
+  ASSERT_TRUE(found.ok()) << found.error().message;
+  ASSERT_TRUE(found.value().has_value());
+  EXPECT_EQ(*found.value(), created.value().manifest_path);
+  const auto duplicate = ProjectManifestStore::create_in_directory(root, true);
+  EXPECT_FALSE(duplicate.ok());
+  EXPECT_EQ(duplicate.error().code, ProjectIoErrorCode::DuplicateAsset);
+}
+
+TEST(ProjectManifestStore, FolderDiscoveryRejectsAmbiguousAndNonFileManifests) {
+  ScopedProjectTestDirectory temporary("folder-manifests");
+  const auto root = temporary.path();
+  auto found = ProjectManifestStore::manifest_in_directory(root);
+  ASSERT_TRUE(found.ok()) << found.error().message;
+  EXPECT_FALSE(found.value().has_value());
+  write_text_file(root / "first.qproj", "keep first");
+  write_text_file(root / "second.QPROJ", "keep second");
+  found = ProjectManifestStore::manifest_in_directory(root);
+  ASSERT_FALSE(found.ok());
+  EXPECT_EQ(found.error().code, ProjectIoErrorCode::DuplicateAsset);
+  EXPECT_FALSE(ProjectManifestStore::create_in_directory(root, true).ok());
+  EXPECT_FALSE(std::filesystem::exists(root / "Scenes"));
+  ASSERT_TRUE(std::filesystem::remove(root / "second.QPROJ"));
+  ASSERT_TRUE(std::filesystem::remove(root / "first.qproj"));
+  ASSERT_TRUE(std::filesystem::create_directory(root / "directory.qproj"));
+  found = ProjectManifestStore::manifest_in_directory(root);
+  ASSERT_FALSE(found.ok());
+  EXPECT_EQ(found.error().code, ProjectIoErrorCode::FileNotRegular);
+}
+
+TEST(ProjectManifestStore, InitialPublicationNeverReplacesCompetingManifest) {
+  ScopedProjectTestDirectory temporary("manifest-create-new");
+  const auto created = ProjectManifestStore::create_in_directory(temporary.path(), true);
+  ASSERT_TRUE(created.ok()) << created.error().message;
+  write_text_file(created.value().manifest_path, "external replacement");
+  const auto refused = ProjectManifestStore::save_atomic(created.value(), true);
+  ASSERT_FALSE(refused.ok());
+  std::ifstream input(created.value().manifest_path, std::ios::binary);
+  const std::string retained{std::istreambuf_iterator<char>(input),
+                             std::istreambuf_iterator<char>()};
+  EXPECT_EQ(retained, "external replacement");
 }
 
 TEST(ProjectFileSystem, RejectsPortableCaseCollisionsAndLinkEscapes) {

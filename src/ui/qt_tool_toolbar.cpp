@@ -7,6 +7,7 @@
 #include "ui/qt_tool_toolbar.hpp"
 
 #include "api/quader_editor_api.hpp"
+#include "api/quader_editor_mode_api.hpp"
 #include "core/localization_service.hpp"
 #include "editor/metadata/release_feature_requirements.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
@@ -34,6 +35,9 @@
 
 namespace quader {
 namespace {
+
+constexpr int kToolButtonHeight = 30;
+constexpr QSize kToolIconSize(20, 20);
 
 /// Retains all tool sources while choosing the fixed modeling toolbar contents.
 struct ToolIconSpec {
@@ -184,7 +188,7 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
   setAllowedAreas(Qt::AllToolBarAreas);
   setMovable(true);
   setFloatable(true);
-  setIconSize(QSize(32, 32));
+  setIconSize(kToolIconSize);
   setToolButtonStyle(Qt::ToolButtonIconOnly);
 
   auto *action_group = new QActionGroup(this);
@@ -301,6 +305,9 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
     }
     configure_native_toolbar_button_face(*this, *entry.action,
                                          button_presentation);
+    if (auto *button = qobject_cast<QToolButton *>(widgetForAction(entry.action))) {
+      button->setFixedHeight(kToolButtonHeight);
+    }
   }
 }
 
@@ -337,8 +344,7 @@ void QtToolToolbar::refresh_stairs_tool_icon() {
 }
 
 void QtToolToolbar::apply_ui_scale(const QtUiScaleMetrics &metrics) {
-  constexpr QSize kToolbarIconSize(32, 32);
-  const QSize scaled_icon_size = metrics.size(kToolbarIconSize);
+  const QSize scaled_icon_size = metrics.size(kToolIconSize);
   if (iconSize() != scaled_icon_size) {
     setIconSize(scaled_icon_size);
   }
@@ -348,6 +354,10 @@ void QtToolToolbar::apply_ui_scale(const QtUiScaleMetrics &metrics) {
       continue;
     }
     apply_native_toolbar_button_face_ui_scale(*this, *entry.action, metrics);
+    if (auto *button = qobject_cast<QToolButton *>(widgetForAction(entry.action));
+        button != nullptr && button->height() != metrics.px(kToolButtonHeight)) {
+      button->setFixedHeight(metrics.px(kToolButtonHeight));
+    }
   }
 }
 
@@ -396,6 +406,7 @@ void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
   const auto primitive_shape = editor.tools().preferred_primitive_shape();
   const auto keybindings_revision = editor.commands().keybindings_revision();
   const auto revisions = editor.revisions();
+  const auto mode_revision = editor.mode().revision();
   const std::array<std::uint64_t, 8> availability_revisions{
       revisions.project_revision, revisions.scene_revision,
       revisions.scene_layer_revision, revisions.asset_revision,
@@ -411,6 +422,7 @@ void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
       synchronized_selection_revision_ == selection.selection_revision &&
       synchronized_primitive_shape_ == primitive_shape &&
       synchronized_keybindings_revision_ == keybindings_revision &&
+      synchronized_editor_mode_revision_ == mode_revision &&
       synchronized_availability_revisions_ == availability_revisions) {
     return;
   }
@@ -424,12 +436,20 @@ void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
   synchronized_selection_revision_ = selection.selection_revision;
   synchronized_primitive_shape_ = primitive_shape;
   synchronized_keybindings_revision_ = keybindings_revision;
+  synchronized_editor_mode_revision_ = mode_revision;
+  const bool modeling = editor.mode().workspace_mode() == QuaderWorkspaceMode::Modeling;
+  for (QAction *action : actions()) {
+    if (action->isSeparator() && action->isVisible() != modeling) action->setVisible(modeling);
+  }
   synchronized_availability_revisions_ = availability_revisions;
 
   for (const ToolAction &entry : tool_actions_) {
     if (entry.action == nullptr) {
       continue;
     }
+    const bool visible = editor.commands().workspace_allows(
+        editor.commands().command_id_for_tool_activation(entry.tool_id));
+    if (entry.action->isVisible() != visible) entry.action->setVisible(visible);
     const bool checked = selected_tool == entry.tool;
     if (entry.action->isChecked() != checked) {
       const QSignalBlocker blocker(entry.action);
@@ -462,6 +482,8 @@ void QtToolToolbar::synchronize(const QuaderEditorApi &editor,
     if (entry.action == nullptr) {
       continue;
     }
+    const bool visible = editor.commands().workspace_allows(entry.command_id.string());
+    if (entry.action->isVisible() != visible) entry.action->setVisible(visible);
     const auto command = editor.commands().descriptor(entry.command_id);
     const bool enabled = command.has_value() && command->enabled;
     const bool preferred = entry.shape == primitive_shape;

@@ -1748,6 +1748,7 @@ void QuaderToolsApi::rebind_session(QuaderApiSession session) {
 }
 
 QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
+  if(!scene_session(session_).editor_mode().permits_tool(tool_id))return quader_api_failure_status(scene_session(session_),"The tool requires Modeling workspace mode.");
   if (!release_allows_tool(tool_id)) {
     return quader_api_failure_status(scene_session(session_),
                                      release_feature_unavailable_message());
@@ -1950,6 +1951,7 @@ QuaderApiVoidResult QuaderToolsApi::activate_extrude(QuaderExtrudeMode mode) {
 }
 
 bool QuaderToolsApi::can_activate(std::string_view tool_id) const {
+  if(!scene_session(session_).editor_mode().permits_tool(tool_id))return false;
   if (!release_allows_tool(tool_id)) {
     return false;
   }
@@ -1970,6 +1972,7 @@ bool QuaderToolsApi::can_activate(ViewportToolId tool) const {
 
 QuaderApiVoidResult QuaderToolsApi::begin_primitive_creation(
     QuaderPrimitiveCreationShape shape) {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return quader_api_failure_status(scene_session(session_),"The operation requires Modeling workspace mode.");
   const QuaderSettingsOperationOriginCapture origin(session_);
   QuaderApiMutationRunner mutations(session_);
   SceneSession &session = scene_session(session_);
@@ -2038,6 +2041,7 @@ std::optional<QuaderStairsCreationState> QuaderToolsApi::stairs_creation_state()
 }
 
 QuaderApiVoidResult QuaderToolsApi::begin_new_curve_creation() {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return quader_api_failure_status(scene_session(session_),"The operation requires Modeling workspace mode.");
   if (!release_has_feature(ReleaseFeature::Curves)) {
     return quader_api_failure_status(scene_session(session_),
                                      release_feature_unavailable_message());
@@ -3634,6 +3638,7 @@ QuaderApiVoidResult QuaderToolsApi::commit_active_tool_preview() {
 }
 
 QuaderApiVoidResult QuaderToolsApi::commit_modeling_tool(ViewportToolId tool) {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return quader_api_failure_status(scene_session(session_),"The operation requires Modeling workspace mode.");
   if (!release_allows_tool(viewport_tool_catalog_id(tool))) {
     return quader_api_failure_status(scene_session(session_),
                                      release_feature_unavailable_message());

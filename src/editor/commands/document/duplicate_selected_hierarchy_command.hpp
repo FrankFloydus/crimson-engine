@@ -39,6 +39,19 @@ public:
     [[nodiscard]] const std::vector<EntityId> &duplicate_roots() const {
       return duplicate_roots_;
     }
+    [[nodiscard]] const std::vector<EngineEntityClone> &engine_clones() const { return engine_clones_; }
+    /// A compound clipboard import resolves cross-command references before
+    /// committing its one history transaction, then retains that exact state.
+    bool retain_remapped_engine_components() {
+      std::vector<DocumentEntitySnapshot> snapshots;
+      for (const auto root : duplicate_roots_) {
+        auto snapshot = document_command_capture_entity_snapshot(scene(), root);
+        if (!snapshot) return false;
+        snapshots.push_back(std::move(*snapshot));
+      }
+      duplicate_snapshots_ = std::move(snapshots);
+      return true;
+    }
 
     DocumentCommandResult undo() override {
         QDR_PROFILE_FUNCTION();
@@ -112,6 +125,7 @@ private:
     QDR_PROFILE_FUNCTION();
     duplicate_snapshots_.clear();
     duplicate_snapshots_.reserve(source_snapshots_.size());
+    engine_clones_.clear();
     SceneEntityNameAllocator name_allocator(scene(), name_policy_);
     for (const DocumentEntitySnapshot &snapshot : source_snapshots_) {
       QDR_PROFILE_SCOPE("Duplicate snapshot tree");
@@ -124,13 +138,16 @@ private:
               scene(), snapshot, parent, false,
               existing_clones_by_source_.empty() ? nullptr
                                                  : &existing_clones_by_source_,
-              &name_allocator);
+              &name_allocator, &engine_clones_);
       if (duplicate == kInvalidEntityId) {
         return document_command_invalid_request_result(
             "Selected hierarchy could not be duplicated");
       }
       duplicate_roots_.push_back(duplicate);
     }
+
+    if (!scene().remap_engine_entity_references(engine_clones_))
+      return document_command_invalid_request_result("Duplicated entity references could not be remapped");
 
     for (const EntityId duplicate : duplicate_roots_) {
       QDR_PROFILE_SCOPE("Capture duplicate snapshot");
@@ -217,6 +234,7 @@ private:
 
   bool captured_sources_ = false;
   std::vector<DocumentEntitySnapshot> source_snapshots_;
+  std::vector<EngineEntityClone> engine_clones_;
   std::unordered_map<EntityId, EntityId> existing_clones_by_source_;
   SceneEntityNamePolicy name_policy_ = SceneEntityNamePolicy::DuplicateFamily;
   std::vector<DocumentEntitySnapshot> duplicate_snapshots_;

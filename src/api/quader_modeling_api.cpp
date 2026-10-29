@@ -778,6 +778,7 @@ void inject_native_modeling_actions(QuaderActionSet &action_set,
     }
     QuaderActionItem action = native_modeling_action(
         session, summary, execution_is_available, descriptor);
+    if(action.visibility!=QuaderActionVisibility::Hidden&&!session.editor_mode().permits_action(descriptor.action_id)){action.visibility=QuaderActionVisibility::Disabled;action.disabled_reason_key.clear();action.disabled_reason="The operation requires Modeling workspace mode.";}
     if (!action_is_included(action, query)) {
       continue;
     }
@@ -1654,6 +1655,7 @@ QuaderModelingApi::QuaderModelingApi(QuaderApiSession session,
 
 QuaderApiResult<QuaderModelingObjectRef>
 QuaderModelingApi::create_box(const QuaderCreateBoxArgs &args) {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return result_from_create(invalid_api_status(session_,"Geometry authoring requires Modeling workspace mode."),{});
   if (!release_has_feature(ReleaseFeature::Materials) && args.material.has_value()) {
     return result_from_create(
         invalid_api_status(session_, release_feature_unavailable_message()), {});
@@ -1710,6 +1712,7 @@ QuaderModelingApi::create_box_mesh(QuaderBounds bounds, std::string name) {
 QuaderApiResult<QuaderModelingObjectRef>
 QuaderModelingApi::commit_box_preview(std::string name,
                                       AssetId default_material) {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return result_from_create(invalid_api_status(session_,"Geometry authoring requires Modeling workspace mode."),{});
   if (!release_has_feature(ReleaseFeature::Materials) &&
       default_material != kInvalidAssetId) {
     return result_from_create(
@@ -1736,6 +1739,7 @@ QuaderModelingApi::commit_box_preview(std::string name,
 QuaderApiResult<QuaderModelingObjectRef>
 QuaderModelingApi::create_mesh(QuaderPolygonDocument document,
                                QuaderCreateMeshArgs args) {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return result_from_create(invalid_api_status(session_,"Geometry authoring requires Modeling workspace mode."),{});
   if (!release_has_feature(ReleaseFeature::Materials) && args.material.has_value()) {
     return result_from_create(
         invalid_api_status(session_, release_feature_unavailable_message()), {});
@@ -1768,6 +1772,7 @@ QuaderModelingApi::create_mesh(QuaderPolygonDocument document,
 
 QuaderApiResult<QuaderModelingObjectRef>
 QuaderModelingApi::create_curve(const QuaderCreateCurveArgs &args) {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return quader_api_result_from_status<QuaderModelingObjectRef>(invalid_api_status(session_,"Geometry authoring requires Modeling workspace mode."));
   if (!release_has_feature(ReleaseFeature::Curves)) {
     return quader_api_result_from_status<QuaderModelingObjectRef>(invalid_api_status(session_, release_feature_unavailable_message()));
   }
@@ -1824,6 +1829,7 @@ QuaderApiResult<QuaderCurveSnapshot> QuaderModelingApi::curve_snapshot(
 
 QuaderApiVoidResult QuaderModelingApi::replace_curve(
     QuaderModelingObjectRef object, modeling::CurveDocument document) {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return invalid_api_status(session_,"Geometry authoring requires Modeling workspace mode.");
   if (!release_has_feature(ReleaseFeature::Curves)) {
     return invalid_api_status(session_, release_feature_unavailable_message());
   }
@@ -1895,6 +1901,7 @@ QuaderApiVoidResult QuaderModelingApi::set_curve_closed(
 }
 
 QuaderApiVoidResult QuaderModelingApi::begin_curve_preview(QuaderModelingObjectRef object) {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return invalid_api_status(session_,"Curve editing requires Modeling workspace mode.");
   if (!release_has_feature(ReleaseFeature::Curves)) {
     return invalid_api_status(session_, release_feature_unavailable_message());
   }
@@ -1957,6 +1964,7 @@ QuaderApiVoidResult QuaderModelingApi::cancel_curve_preview() {
 
 QuaderApiResult<QuaderLinearArrayResult>
 QuaderModelingApi::create_linear_array(const QuaderLinearArrayArgs &args) {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return quader_api_result_from_status<QuaderLinearArrayResult>(invalid_api_status(session_,"Geometry authoring requires Modeling workspace mode."));
   if (!release_has_feature(ReleaseFeature::LinearArray)) {
     return quader_api_result_from_status<QuaderLinearArrayResult>(invalid_api_status(session_, release_feature_unavailable_message()));
   }
@@ -2027,6 +2035,7 @@ QuaderModelingApi::create_linear_array(const QuaderLinearArrayArgs &args) {
 
 QuaderApiResult<QuaderRadialArrayResult>
 QuaderModelingApi::create_radial_array(const QuaderRadialArrayArgs &args) {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return quader_api_result_from_status<QuaderRadialArrayResult>(invalid_api_status(session_,"Geometry authoring requires Modeling workspace mode."));
   if (!release_has_feature(ReleaseFeature::RadialArray)) {
     return quader_api_result_from_status<QuaderRadialArrayResult>(invalid_api_status(session_, release_feature_unavailable_message()));
   }
@@ -2288,6 +2297,7 @@ QuaderApiVoidResult QuaderModelingApi::remove_doubles() {
 }
 
 bool QuaderModelingApi::can_copy_pivot_from_active() const {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return false;
   if (!release_has_feature(ReleaseFeature::Pivot)) {
     return false;
   }
@@ -2296,6 +2306,7 @@ bool QuaderModelingApi::can_copy_pivot_from_active() const {
 }
 
 QuaderApiVoidResult QuaderModelingApi::copy_pivot_from_active() {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return invalid_api_status(session_,"The operation requires Modeling workspace mode.");
   if (!release_has_feature(ReleaseFeature::Pivot)) {
     return invalid_api_status(session_, release_feature_unavailable_message());
   }
@@ -2313,6 +2324,7 @@ QuaderApiVoidResult QuaderModelingApi::copy_pivot_from_active() {
 }
 
 bool QuaderModelingApi::can_set_origin_to_center() const {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return false;
   if (!release_has_feature(ReleaseFeature::Pivot)) {
     return false;
   }
@@ -2322,6 +2334,7 @@ bool QuaderModelingApi::can_set_origin_to_center() const {
 }
 
 QuaderApiVoidResult QuaderModelingApi::set_origin_to_center() {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return invalid_api_status(session_,"The operation requires Modeling workspace mode.");
   if (!release_has_feature(ReleaseFeature::Pivot)) {
     return invalid_api_status(session_, release_feature_unavailable_message());
   }
@@ -2338,6 +2351,7 @@ QuaderApiVoidResult QuaderModelingApi::set_origin_to_center() {
 }
 
 bool QuaderModelingApi::can_set_origin_to_pivot() const {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return false;
   if (!release_has_feature(ReleaseFeature::Pivot)) {
     return false;
   }
@@ -2347,6 +2361,7 @@ bool QuaderModelingApi::can_set_origin_to_pivot() const {
 }
 
 QuaderApiVoidResult QuaderModelingApi::set_origin_to_pivot() {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return invalid_api_status(session_,"The operation requires Modeling workspace mode.");
   if (!release_has_feature(ReleaseFeature::Pivot)) {
     return invalid_api_status(session_, release_feature_unavailable_message());
   }
@@ -2363,6 +2378,7 @@ QuaderApiVoidResult QuaderModelingApi::set_origin_to_pivot() {
 }
 
 bool QuaderModelingApi::can_bake_transforms(QuaderTransformBakeMode mode) const {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return false;
   if (!release_has_feature(ReleaseFeature::TransformBaking)) {
     return false;
   }
@@ -2376,6 +2392,7 @@ bool QuaderModelingApi::can_bake_transforms(QuaderTransformBakeMode mode) const 
 
 QuaderApiVoidResult
 QuaderModelingApi::bake_transforms(QuaderTransformBakeMode mode) {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return invalid_api_status(session_,"The operation requires Modeling workspace mode.");
   if (!release_has_feature(ReleaseFeature::TransformBaking)) {
     return invalid_api_status(session_, release_feature_unavailable_message());
   }
@@ -2418,6 +2435,7 @@ QuaderApiVoidResult QuaderModelingApi::snap_selected_meshes_to_floor() {
 }
 
 bool QuaderModelingApi::can_snap_selected_vertices_to_floor() const {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return false;
   if (!release_has_feature(ReleaseFeature::SnapToFloor)) {
     return false;
   }
@@ -2427,6 +2445,7 @@ bool QuaderModelingApi::can_snap_selected_vertices_to_floor() const {
 }
 
 QuaderApiVoidResult QuaderModelingApi::snap_selected_vertices_to_floor() {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return invalid_api_status(session_,"The operation requires Modeling workspace mode.");
   if (!release_has_feature(ReleaseFeature::SnapToFloor)) {
     return invalid_api_status(session_, release_feature_unavailable_message());
   }
@@ -2634,6 +2653,7 @@ QuaderModelingApi::update_transform_matrix(const QuaderTransform3 &transform,
 QuaderApiVoidResult
 QuaderModelingApi::update_transform_extrude(QVec3 offset,
                                             float closed_edge_ledge_size) {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return invalid_api_status(session_,"The operation requires Modeling workspace mode.");
   if (!release_has_feature(ReleaseFeature::ExtrudeTool)) {
     return invalid_api_status(session_, release_feature_unavailable_message());
   }
@@ -2646,6 +2666,7 @@ QuaderModelingApi::update_transform_extrude(QVec3 offset,
 QuaderApiVoidResult
 QuaderModelingApi::update_transform_inset(const QuaderTransform3 &transform,
                                           QVec3 pivot) {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return invalid_api_status(session_,"The operation requires Modeling workspace mode.");
   return mutations_.run_modeling_result(
       scene_session(session_).modeling().update_transform_inset_preview(
           to_modeling_transform3(transform), pivot),
@@ -2684,6 +2705,10 @@ QuaderModelingApi::begin_transform_drag(
             "starting a transform drag."));
   }
   SceneSession &session = scene_session(session_);
+  if (request.bounds_resize_reference && session.editor_mode().workspace_mode() != EditorWorkspaceMode::Modeling) {
+    return quader_api_result_from_status<QuaderTransformDragPreview>(
+        {.ok = false, .message = "Mesh bounds editing requires Modeling workspace mode."});
+  }
   const ModelingStructuralDuplicate structural_duplicate =
       structural_duplicate_for_transform(session);
   return result_from_transform_drag_preview(
@@ -2695,6 +2720,7 @@ QuaderModelingApi::begin_transform_drag(
 
 std::optional<QuaderBoundsResizeState>
 QuaderModelingApi::selection_resize_bounds(QuaderTransformSpace space) const {
+  if (QuaderApiSessionInternalAccess::read_scene_session(session_).editor_mode().workspace_mode() != EditorWorkspaceMode::Modeling) return std::nullopt;
   if (space != QuaderTransformSpace::Global && space != QuaderTransformSpace::Local) {
     return std::nullopt;
   }
@@ -2940,6 +2966,7 @@ QuaderModelingApi::flatten_selected_instances() {
 }
 
 bool QuaderModelingApi::can_enter_instance_edit(EntityId occurrence) const {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return false;
   const SceneSession &session = scene_session(session_);
   return !session.native_tools().has_pending_tool() &&
          session.instances().can_enter_instance_edit(occurrence);
@@ -2947,6 +2974,7 @@ bool QuaderModelingApi::can_enter_instance_edit(EntityId occurrence) const {
 
 QuaderApiVoidResult
 QuaderModelingApi::enter_instance_edit(EntityId occurrence) {
+  if(scene_session(session_).editor_mode().workspace_mode()!=EditorWorkspaceMode::Modeling)return invalid_api_status(session_,"Instance definition editing requires Modeling workspace mode.");
   if (!release_has_feature(ReleaseFeature::Instancing)) {
     return invalid_api_status(session_, release_feature_unavailable_message());
   }

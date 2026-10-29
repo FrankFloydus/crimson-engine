@@ -14,6 +14,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace quader {
 
@@ -21,6 +22,7 @@ namespace quader {
     const RenderToolPreviewSceneSnapshot&,const RenderToolPreviewSceneSnapshot&);
 
 /** Pins one complete translation, including original Quader stream owners. */
+struct CrimsonNativeInstance {std::string entity_uuid;crimson::shared::Matrix4 entity_from_local;std::uint64_t source_instance_id{};std::string member_uuid;std::uint32_t index_offset{},index_count{};};
 struct CrimsonSceneProjection final {
   std::uint64_t generation = 0u;
   std::shared_ptr<const RenderSceneSnapshot> source;
@@ -31,6 +33,7 @@ struct CrimsonSceneProjection final {
   // transport, so Rendered can reuse exact source identities and all four maps.
   std::vector<std::pair<std::uint64_t,RenderMaterialAssetSnapshot>> source_materials;
   std::vector<crimson::shared::InstanceUpdate> instances;
+  std::unordered_map<std::uint64_t,CrimsonNativeInstance> native_instances;
   std::vector<std::pair<std::uint64_t,bool>> instance_cast_shadows;
   // Accepted and transient lights use the same immutable publication as mesh
   // coverage. Replaced sources never illuminate alongside their preview.

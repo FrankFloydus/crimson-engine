@@ -1,5 +1,11 @@
 #include "LevelAssetBrowser.h"
 #include "QtAssetBrowser.h"
+#include "ui/qt_asset_browser.hpp"
+#include "resources/Paths.h"
+#include <QFileDialog>
+#include <QMimeData>
+#include <QPixmap>
+#include <nlohmann/json.hpp>
 #include "integration/LevelSession.h"
 #include "assets/AssetLibrary.h"
 #include "resources/ResourceManager.h"
@@ -116,11 +122,17 @@ struct LevelAssetBrowser::Impl {
     std::unordered_set<std::string> imageAssets;
     std::uint64_t imageCatalogRevision{};
     bool modal{},deletionOwned{};
+    std::shared_ptr<const int> lifetime=std::make_shared<const int>(0);
+    std::shared_ptr<quader::QtAssetBrowserExtension> external;
+    std::vector<std::string> external_visible;
+    std::string pending_reveal,last_status;
+    std::unordered_map<std::string,std::string> external_ids;
+
     std::vector<std::string> deferredDeletion;
 
-    Impl(LevelAssetBrowser& adapter,QMainWindow& main,std::function<void()> frame)
-        :owner(adapter),window(main),requestFrame(std::move(frame)),browser(new QtAssetBrowser(&main)) {
-        browser->setObjectName(QStringLiteral("CrimsonEngineAssetBrowser"));
+    Impl(LevelAssetBrowser& adapter,QMainWindow& main,std::function<void()> frame,bool create_view)
+        :owner(adapter),window(main),requestFrame(std::move(frame)),browser(create_view?new QtAssetBrowser(&main):nullptr) {
+        if(browser)browser->setObjectName(QStringLiteral("CrimsonEngineAssetBrowser"));
         references=new QDockWidget(QStringLiteral("Asset References"),&window);
         references->setObjectName(QStringLiteral("CrimsonEngineAssetReferences"));
         auto body=new QWidget(references);auto layout=new QVBoxLayout(body);
@@ -197,7 +209,7 @@ struct LevelAssetBrowser::Impl {
     }
 };
 
-LevelAssetBrowser::LevelAssetBrowser(QMainWindow& main,std::function<void()> frame):impl_(std::make_unique<Impl>(*this,main,std::move(frame))){}
+LevelAssetBrowser::LevelAssetBrowser(QMainWindow& main,std::function<void()> frame,bool create_view):impl_(std::make_unique<Impl>(*this,main,std::move(frame),create_view)){}
 LevelAssetBrowser::~LevelAssetBrowser(){bind(nullptr);}
 QWidget* LevelAssetBrowser::widget()const{return impl_->browser.data();}
 void LevelAssetBrowser::bind(LevelSession* session) {
@@ -205,19 +217,20 @@ void LevelAssetBrowser::bind(LevelSession* session) {
     cancelReferences();
     if(state.session){state.session->setAssetPreviewPublisher({});if(state.deletionOwned)state.session->assets().cancelDeletion();}
     if(state.browser)state.browser->detach();state.session=session;state.actions={};state.deferredDeletion.clear();state.deletionOwned=false;
-    state.imageRevisions.clear();state.imageAssets.clear();state.imageCatalogRevision=0;
+    state.imageRevisions.clear();state.imageAssets.clear();state.imageCatalogRevision=0;state.external_visible.clear();state.external_ids.clear();state.pending_reveal.clear();state.last_status.clear();
     state.report.reset();state.target.clear();state.referenceRevision=0;
     if(state.references){state.usesModel->setReport({});state.dependencyModel->setReport({});state.referenceStatus->clear();}
     qtClearThumbnails();
     if(session) {
         session->setAssetPreviewPublisher(qtPublishThumbnail,[](const std::string& id){return !qtThumbnail(id).isNull();});
-        state.browser->synchronize(session->assets(),128);
+        if(state.browser)state.browser->synchronize(session->assets(),128);
     }
 }
 void LevelAssetBrowser::update(std::uint32_t frame,bool pauseThumbnails,int previewSize,
     std::span<const std::string> materialPreviews) {
     auto& state=*impl_;if(!state.session)return;
     auto& session=*state.session;auto& assets=session.assets();
+    if(state.last_status!=assets.status()){state.last_status=assets.status();if(!state.last_status.empty())state.notify(state.last_status);}
     if(state.deletionOwned) {
         if(!assets.deletionPending()||assets.pumpDeletion(&session.document()))state.deletionOwned=false;
         if(!assets.deletionPending()&&!assets.status().empty())state.notify(assets.status());
@@ -225,13 +238,13 @@ void LevelAssetBrowser::update(std::uint32_t frame,bool pauseThumbnails,int prev
     if(!session.playing()&&!state.deferredDeletion.empty()) {
         auto ids=std::exchange(state.deferredDeletion,{});requestDeletion(ids);
     }
-    state.browser->synchronize(assets,std::clamp(previewSize,16,512));
-    auto actions=state.browser->takeActions();
+    if(state.browser)state.browser->synchronize(assets,std::clamp(previewSize,16,512));
+    auto actions=state.browser?state.browser->takeActions():BrowserActions{};
     if(!actions.findReferences.empty())requestReferences(actions.findReferences);
     if(!actions.deleteAssetIds.empty())requestDeletion(actions.deleteAssetIds);
     if(!actions.duplicateAsset.empty())requestDuplicate(actions.duplicateAsset,actions.duplicateFolder);
     mergeActions(state.actions,std::move(actions));state.updateReferences();
-    auto visible=state.browser->visibleIds();
+    auto visible=state.browser?state.browser->visibleIds():state.external_visible;
     // Publish one demand set so off-browser paint swatches and browser cards
     // retain their existing shared preparation and thumbnail owners.
     for(const auto& id:materialPreviews)if(!id.empty()&&std::find(visible.begin(),visible.end(),id)==visible.end())visible.push_back(id);
@@ -249,8 +262,81 @@ void LevelAssetBrowser::update(std::uint32_t frame,bool pauseThumbnails,int prev
             }
     }
 }
+std::shared_ptr<quader::QtAssetBrowserExtension> LevelAssetBrowser::extension(){
+    auto& state=*impl_;if(state.external)return state.external;
+    auto extension=std::make_shared<quader::QtAssetBrowserExtension>();state.external=extension;
+    const std::weak_ptr<const int> lifetime=state.lifetime;
+    extension->accepts_import=[](const QStringList& files){return !files.empty()&&std::all_of(files.begin(),files.end(),[](const auto& file){return AssetLibrary::canImportFile(std::filesystem::path(file.toStdWString()));});};
+    extension->can_create_ragdoll=[this,lifetime](const quader::QtAssetBrowserItem& item){if(lifetime.expired()||!impl_->session||item.extension_id.isEmpty())return false;const auto& catalog=impl_->session->assets().catalog();return std::any_of(catalog.begin(),catalog.end(),[&](const auto& asset){return asset.id==item.extension_id.toStdString()&&asset.kind==AssetKind::Model;});};
+    extension->revision=[this,lifetime]()->std::uint64_t{if(lifetime.expired()||!impl_->session)return 0;auto& assets=impl_->session->assets();return assets.catalogRevision()*1099511628211ull+assets.browserCatalog().revision();};
+    extension->take_reveal=[this,lifetime](){if(lifetime.expired()||impl_->pending_reveal.empty())return QString{};const auto id=std::exchange(impl_->pending_reveal,{});for(const auto& [display,asset]:impl_->external_ids)if(asset==id)return QString::fromStdString(display);return QStringLiteral("engine:")+QString::fromStdString(id);};
+    extension->thumbnail_revision=[lifetime](){return lifetime.expired()?0:qtThumbnailRevision();};
+    extension->append_snapshot=[this,lifetime](quader::QtAssetBrowserSnapshot& snapshot){
+        if(lifetime.expired()||!impl_->session)return;auto& state=*impl_;auto& assets=state.session->assets();auto& catalog=assets.browserCatalog();state.external_ids.clear();
+        const auto kind=[](AssetKind value){using Kind=quader::QtAssetBrowserKind;switch(value){case AssetKind::Texture:return Kind::Texture;case AssetKind::Environment:return Kind::Environment;case AssetKind::Model:return Kind::Model;case AssetKind::Scene:return Kind::Scene;case AssetKind::Material:return Kind::Material;case AssetKind::Particle:return Kind::Particle;case AssetKind::NavigationAgentProfile:return Kind::NavigationProfile;case AssetKind::GameplayEffect:return Kind::GameplayEffect;case AssetKind::Animation:return Kind::Animation;case AssetKind::Ragdoll:return Kind::Ragdoll;case AssetKind::Decal:return Kind::Decal;}return Kind::File;};
+        for(const auto& asset:assets.catalog()){
+            if(asset.kind==AssetKind::Scene)continue;
+            std::filesystem::path relative;try{relative=resolveAssetPath(state.session->projectRoot(),asset.id).lexically_relative(state.session->projectRoot());}catch(const std::exception&){continue;}
+            if(relative.empty()||relative.is_absolute()||*relative.begin()==".."||*relative.begin()==".crimson")continue;
+            const auto path=QString::fromStdWString(relative.generic_wstring());const auto identity=QString::fromStdString(asset.id);
+            if(asset.kind==AssetKind::Model&&relative.filename()=="manifest.json"){
+                const auto package=QString::fromStdWString(relative.parent_path().generic_wstring());
+                const auto folder=std::find_if(snapshot.items.begin(),snapshot.items.end(),[&](const auto& item){return item.kind==quader::QtAssetBrowserKind::Folder&&item.relative_path.compare(package,Qt::CaseInsensitive)==0;});
+                if(folder!=snapshot.items.end()){folder->extension_id=identity;state.external_ids[folder->id.toStdString()]=asset.id;continue;}
+            }
+            auto existing=std::find_if(snapshot.items.begin(),snapshot.items.end(),[&](const auto& item){return item.relative_path.compare(path,Qt::CaseInsensitive)==0;});
+            if(existing!=snapshot.items.end()&&existing->kind!=quader::QtAssetBrowserKind::File){existing->extension_id=identity;state.external_ids[existing->id.toStdString()]=asset.id;continue;}
+            quader::QtAssetBrowserItem item;item.id=QStringLiteral("engine:")+identity;item.relative_path=path;item.name=QString::fromStdWString(relative.stem().wstring());item.kind=kind(asset.kind);item.content_revision=assets.catalogRevision();item.editable=catalog.mutableItem(asset.id);item.external=true;item.extension_id=identity;
+            item.openable=asset.kind!=AssetKind::Model&&asset.kind!=AssetKind::Texture&&asset.kind!=AssetKind::Environment;
+            item.duplicable=item.editable;
+            state.external_ids[item.id.toStdString()]=asset.id;if(existing!=snapshot.items.end())*existing=std::move(item);else snapshot.items.push_back(std::move(item));
+        }
+    };
+    extension->thumbnail=[lifetime](const quader::QtAssetBrowserItem& item,QSize,qreal){if(lifetime.expired()||!item.external)return QIcon{};const auto image=qtThumbnail(item.extension_id.toStdString());return image.isNull()?QIcon{}:QIcon(QPixmap::fromImage(image));};
+    extension->visible_items=[this,lifetime](const std::vector<QString>& ids){if(lifetime.expired())return;std::vector<std::string> visible;for(const auto& id:ids)if(const auto found=impl_->external_ids.find(id.toStdString());found!=impl_->external_ids.end())visible.push_back(found->second);impl_->external_visible=std::move(visible);};
+    extension->augment_mime=[this,lifetime](QMimeData& mime,const std::vector<quader::QtAssetBrowserItem>& items){
+        if(lifetime.expired()||!impl_->session)return;auto rows=nlohmann::json::array();const auto& catalog=impl_->session->assets().catalog();
+        for(const auto& item:items)if(!item.extension_id.isEmpty()){const auto id=item.extension_id.toStdString();const auto found=std::find_if(catalog.begin(),catalog.end(),[&](const auto& asset){return asset.id==id;});if(found!=catalog.end())rows.push_back({{"id",id},{"kind",unsigned(found->kind)},{"folder",false}});}
+        if(!rows.empty())mime.setData(QtAssetMime,QByteArray::fromStdString(rows.dump()));
+    };
+    extension->handle_action=[this,lifetime](const quader::QtAssetBrowserActionRequest& request){
+        if(lifetime.expired()||!impl_->session)return false;using Action=quader::QtAssetBrowserAction;auto& state=*impl_;auto& session=*state.session;auto& assets=session.assets();
+        const bool create=request.action==Action::CreateGraphMaterial||request.action==Action::CreateBlendMaterial||request.action==Action::CreateParticle||request.action==Action::CreateNavigationProfile||request.action==Action::CreateGameplayEffect||request.action==Action::CreateDecal;
+        const bool selected=!request.selected_items.empty()&&std::all_of(request.selected_items.begin(),request.selected_items.end(),[](const auto& item){return item.external;});
+        const bool reference=request.action==Action::FindReferences||request.action==Action::CreateRagdoll;
+        const bool consume=create||request.action==Action::Import||reference||(selected&&(request.action==Action::Open||request.action==Action::Delete));
+        if(!consume)return false;if(!state.external||!state.external->revision||request.dependency_revision!=state.external->revision())return true;
+        if(reference&&request.selected_items.size()==1){const auto id=request.selected_items.front().extension_id.toStdString();if(request.action==Action::FindReferences){requestReferences(id);return true;}}
+        if(selected&&request.action==Action::Delete){std::vector<std::string> ids;for(const auto& item:request.selected_items)ids.push_back(item.extension_id.toStdString());requestDeletion(ids);return true;}
+        if(commandPending()||(session.playing()&&request.action!=Action::Import)||(state.prepareCommand&&!state.prepareCommand()))return true;
+        auto folder=std::string(BrowserCatalog::RootFolder);auto destination=request.destination_folder.toStdString();
+        if(request.action==Action::CreateRagdoll&&request.selected_items.size()==1&&request.selected_items.front().kind==quader::QtAssetBrowserKind::Folder&&request.destination_folder==request.selected_items.front().relative_path)
+            destination=QString::fromStdWString(std::filesystem::path(request.selected_items.front().relative_path.toStdWString()).parent_path().generic_wstring()).toStdString();
+        if(!destination.empty())try{
+            const auto resolve_folder=[&](){for(const auto& id:assets.browserCatalog().descendants(BrowserCatalog::RootFolder))if(assets.browserCatalog().isFolder(id)&&assets.browserCatalog().folderPath(id).lexically_relative(session.projectRoot()).generic_string()==destination){folder=id;return true;}return false;};
+            if(!resolve_folder()){assets.browserCatalog().synchronize(assets.catalog());if(!resolve_folder()){state.notify("The selected destination folder is unavailable.");return true;}}
+        }catch(const std::exception& error){state.notify(error.what());return true;}
+        const auto id=request.selected_items.size()==1?request.selected_items.front().extension_id.toStdString():std::string{};
+        if(request.action==Action::CreateRagdoll&&(id.empty()||!state.external->can_create_ragdoll(request.selected_items.front()))){state.notify("Choose a skinned model to create a Ragdoll.");return true;}
+        switch(request.action){
+        case Action::Open:if(!id.empty()){const auto found=std::find_if(assets.catalog().begin(),assets.catalog().end(),[&](const auto& asset){return asset.id==id;});if(found!=assets.catalog().end())switch(found->kind){case AssetKind::Scene:state.actions.openScene=id;break;case AssetKind::Material:state.actions.openMaterial=id;break;case AssetKind::Particle:state.actions.openParticle=id;break;case AssetKind::NavigationAgentProfile:state.actions.openNavigationAgentProfile=id;break;case AssetKind::GameplayEffect:state.actions.openGameplayEffect=id;break;case AssetKind::Animation:state.actions.openAnimation=id;break;case AssetKind::Ragdoll:state.actions.openRagdoll=id;break;case AssetKind::Decal:state.actions.openDecal=id;break;default:break;}}break;
+        case Action::Delete:{std::vector<std::string> ids;for(const auto& item:request.selected_items)ids.push_back(item.extension_id.toStdString());requestDeletion(ids);break;}
+        case Action::CreateGraphMaterial:state.actions.createMaterial=true;state.actions.materialFolder=folder;break;
+        case Action::CreateBlendMaterial:state.actions.createBlendMaterial=true;state.actions.materialFolder=folder;break;
+        case Action::CreateParticle:state.actions.createParticle=true;state.actions.particleFolder=folder;break;
+        case Action::CreateNavigationProfile:state.actions.createNavigationAgentProfile=true;state.actions.navigationAgentProfileFolder=folder;break;
+        case Action::CreateGameplayEffect:state.actions.createGameplayEffect=true;state.actions.gameplayEffectFolder=folder;break;
+        case Action::CreateDecal:state.actions.createDecal=true;state.actions.decalFolder=folder;break;
+        case Action::CreateRagdoll:state.actions.createRagdollModel=id;state.actions.ragdollFolder=folder;break;
+        case Action::Import:{std::vector<std::filesystem::path> paths;for(const auto& source:request.source_files)paths.emplace_back(source.toStdWString());if(paths.empty()){const auto names=QFileDialog::getOpenFileNames(&state.window,QStringLiteral("Import assets"),QString::fromStdWString(session.projectRoot().wstring()));for(const auto& name:names)paths.emplace_back(name.toStdWString());}if(!paths.empty())assets.queueImportFiles(paths,folder);break;}
+        default:break;
+        }
+        if(state.requestFrame)state.requestFrame();return true;
+    };
+    return extension;
+}
 BrowserActions LevelAssetBrowser::takeActions(){return std::exchange(impl_->actions,{});}
-bool LevelAssetBrowser::reveal(const std::string& id){return impl_->session&&impl_->browser->reveal(id,impl_->session->assets());}
+bool LevelAssetBrowser::reveal(const std::string& id){if(!impl_->session)return false;if(impl_->browser)return impl_->browser->reveal(id,impl_->session->assets());if(impl_->external&&impl_->external->reveal){QString display=QStringLiteral("engine:")+QString::fromStdString(id);for(const auto& [candidate,asset]:impl_->external_ids)if(asset==id){display=QString::fromStdString(candidate);break;}if(impl_->external->reveal(display))return true;}impl_->pending_reveal=id;if(impl_->requestFrame)impl_->requestFrame();return true;}
 bool LevelAssetBrowser::ownsInput()const {
     if(impl_->browser&&impl_->browser->ownsInput())return true;
     const auto focus=QApplication::focusWidget();const auto popup=QApplication::activePopupWidget();const auto dock=impl_->references.data();
@@ -312,7 +398,7 @@ bool LevelAssetBrowser::requestDuplicate(const std::string& id,const std::string
             if(assets.browserCatalog().writableFolder(folder)) {
                 const std::array<std::string,1> ids{copy->id};assets.browserCatalog().move(ids,folder);
             }
-            assets.select(copy->id);state.browser->reveal(copy->id,assets);open_action=copy->id;
+            assets.select(copy->id);reveal(copy->id);open_action=copy->id;
             if(state.requestFrame)state.requestFrame();return true;
         };
         switch(kind) {

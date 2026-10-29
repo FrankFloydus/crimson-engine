@@ -12,13 +12,79 @@
 #include "math/types.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
 namespace quader {
+
+inline constexpr std::uint32_t kEngineComponentsEnvelopeVersion = 1u;
+inline constexpr std::size_t kMaximumEngineComponentsBytes = 64u * 1024u * 1024u;
+
+struct EngineEntityReference {
+  std::string slot;
+  std::string entity_uuid;
+  [[nodiscard]] bool operator==(const EngineEntityReference &) const = default;
+};
+struct EngineEntityUuidRemap {
+  std::string source;
+  std::string destination;
+};
+struct EngineEntityClone {
+  std::string source_uuid;
+  EntityId destination = kInvalidEntityId;
+};
+
+/// Immutable host-authored components on the same native entity. Identity,
+/// hierarchy and transform remain owned by the ordinary native components.
+struct EngineComponentsComponent {
+  std::uint32_t version = kEngineComponentsEnvelopeVersion;
+  std::shared_ptr<const std::string> serialized_components;
+  std::vector<EngineEntityReference> entity_references;
+  std::vector<std::string> asset_references;
+  /// Missing inventory remains opaque; only the typed host can prove completeness.
+  bool asset_references_complete = false;
+
+  EngineComponentsComponent() = default;
+  EngineComponentsComponent(std::uint32_t envelope_version, std::string contents)
+      : version(envelope_version),
+        serialized_components(std::make_shared<const std::string>(std::move(contents))) {}
+  [[nodiscard]] std::string_view text() const {
+    return serialized_components ? std::string_view(*serialized_components) : std::string_view{};
+  }
+  [[nodiscard]] bool operator==(const EngineComponentsComponent &other) const {
+    return version == other.version && entity_references == other.entity_references &&
+           asset_references == other.asset_references &&
+           asset_references_complete == other.asset_references_complete &&
+           (serialized_components == other.serialized_components || text() == other.text());
+  }
+};
+
+[[nodiscard]] bool engine_components_is_valid(const EngineComponentsComponent &value);
+[[nodiscard]] bool engine_components_metadata_is_valid(
+    std::uint32_t version, std::size_t payload_bytes,
+    std::span<const EngineEntityReference> references,
+    std::span<const std::string> asset_references = {});
+void remap_engine_entity_references(EngineComponentsComponent &value,
+                                   std::span<const EngineEntityUuidRemap> remaps);
+
+/// Scene-wide host settings and native entity UUID selectors; no foreign IDs.
+struct EngineSceneSettings {
+  std::uint32_t version = kEngineComponentsEnvelopeVersion;
+  std::string serialized_settings;
+  std::string active_camera_uuid;
+  std::string player_uuid;
+  std::string environment_uuid;
+  [[nodiscard]] bool operator==(const EngineSceneSettings &) const = default;
+};
+[[nodiscard]] bool engine_scene_settings_is_valid(const EngineSceneSettings &value);
 
 using ModelingObjectId = std::int32_t;
 inline constexpr ModelingObjectId kInvalidModelingObjectId = -1;
@@ -547,10 +613,11 @@ struct SceneSettings {
     SceneCameraSettings camera;
     ScenePostProcessSettings post_process;
     SceneFogSettings fog;
+    std::optional<EngineSceneSettings> engine;
 
     [[nodiscard]] bool operator==(const SceneSettings& other) const {
       return environment == other.environment && camera == other.camera &&
-             post_process == other.post_process && fog == other.fog;
+             post_process == other.post_process && fog == other.fog && engine == other.engine;
     }
 };
 

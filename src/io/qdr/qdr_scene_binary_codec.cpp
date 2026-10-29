@@ -56,7 +56,7 @@ namespace {
 namespace fb = ::quader::qdr::fb;
 
 constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
-constexpr std::uint16_t kSceneChunkSchemaVersion = 20u;
+constexpr std::uint16_t kSceneChunkSchemaVersion = 21u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 /**
@@ -953,8 +953,16 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
       settings.fog.height, settings.fog.height_falloff, &fog_color,
       settings.fog.density, settings.fog.in_scattering_start,
       settings.fog.in_scattering_size, settings.fog.color_from_environment);
+  flatbuffers::Offset<fb::EngineSceneSettings> engine;
+  if (settings.engine) {
+    const auto &value = *settings.engine;
+    if (!engine_scene_settings_is_valid(value)) throw std::runtime_error("QDR Engine scene settings envelope is invalid.");
+    engine = fb::CreateEngineSceneSettings(builder, value.version,
+        builder.CreateString(value.serialized_settings), builder.CreateString(value.active_camera_uuid),
+        builder.CreateString(value.player_uuid), builder.CreateString(value.environment_uuid));
+  }
   return fb::CreateSceneSettingsComponent(builder, environment, camera,
-                                          post_process, fog);
+                                          post_process, fog, engine);
 }
 
 void validate_write_snapshot_roots(const QdrProjectWriteSnapshot &snapshot) {
@@ -1164,13 +1172,26 @@ void validate_write_snapshot_roots(const QdrProjectWriteSnapshot &snapshot) {
       texture_mapping = fb::CreateTextureMappingComponent(
           builder, builder.CreateVector(values.data(), values.size()));
     }
+    flatbuffers::Offset<fb::EngineComponentsComponent> engine_components;
+    if (entity.engine_components) {
+      const auto &value = *entity.engine_components;
+      if (!engine_components_is_valid(value)) throw std::runtime_error("QDR Engine entity components envelope is invalid.");
+      std::vector<flatbuffers::Offset<fb::EngineEntityReference>> references;
+      references.reserve(value.entity_references.size());
+      for (const auto &reference : value.entity_references)
+        references.push_back(fb::CreateEngineEntityReference(builder, builder.CreateString(reference.slot), builder.CreateString(reference.entity_uuid)));
+      flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffers::String>>> asset_references;
+      if (value.asset_references_complete) asset_references = builder.CreateVectorOfStrings(value.asset_references);
+      engine_components = fb::CreateEngineComponentsComponent(builder, value.version,
+          builder.CreateString(value.text().data(), value.text().size()), builder.CreateVector(references), asset_references);
+    }
     entities.push_back(fb::CreateEntity(
         builder, entity.id, builder.CreateString(entity.uuid),
         entity.editor_object_id, builder.CreateString(entity.name),
         to_fb(entity.kind), entity.parent, transform, visibility, lock,
         modeling_object, mesh, material, light, false, {},
         instance_definition, instance_occurrence, entity.layer_id,
-        texture_mapping, curve));
+        texture_mapping, curve, engine_components));
   }
 
   std::vector<ProjectAssetReference> sorted_dependencies =
@@ -1285,6 +1306,30 @@ require_scene_metadata_chunk(
     throw std::runtime_error("QDR scene metadata FlatBuffer is invalid.");
   }
   const auto *payload = fb::GetScenePayload(bytes.data());
+  if (payload->entities() != nullptr) for (const auto *entity : *payload->entities()) {
+    const auto *engine = entity->engine_components();
+    if (engine == nullptr) continue;
+    if (schema_version < 21u || engine->serialized_components() == nullptr ||
+        (engine->entity_references() != nullptr && engine->entity_references()->size() > 256u))
+      throw std::runtime_error("QDR Engine entity components envelope is invalid.");
+    std::vector<EngineEntityReference> references;
+    if (engine->entity_references() != nullptr) for (const auto *reference : *engine->entity_references()) {
+      if (reference == nullptr || reference->slot() == nullptr || reference->slot()->size() > 128u ||
+          reference->entity_uuid() == nullptr || reference->entity_uuid()->size() > 38u)
+        throw std::runtime_error("QDR Engine entity reference is invalid.");
+      references.push_back({reference->slot()->str(), reference->entity_uuid()->str()});
+    }
+    std::vector<std::string> asset_references;
+    if (engine->asset_references() != nullptr) {
+      if (engine->asset_references()->size() > 4096u) throw std::runtime_error("QDR Engine asset reference limit exceeded.");
+      for (const auto *reference : *engine->asset_references()) {
+        if (reference == nullptr || reference->size() > 38u) throw std::runtime_error("QDR Engine asset reference is invalid.");
+        asset_references.push_back(reference->str());
+      }
+    }
+    if (!engine_components_metadata_is_valid(engine->version(), engine->serialized_components()->size(), references, asset_references))
+      throw std::runtime_error("QDR Engine entity components envelope is invalid.");
+  }
   if (schema_version >= 19u && payload->entities() != nullptr) {
     for (const auto *entity : *payload->entities()) {
       if (const auto *mesh = entity->mesh();
@@ -1948,6 +1993,20 @@ decode_scene_settings(const fb::SceneSettingsComponent &value,
       throw std::runtime_error("QDR scene contains invalid fog settings.");
     }
   }
+  if (value.engine() != nullptr) {
+    if (schema_version < 21u) throw std::runtime_error("QDR Engine scene settings require schema 21.");
+    const auto &engine = *value.engine();
+    if (engine.serialized_settings() == nullptr || engine.serialized_settings()->size() > kMaximumEngineComponentsBytes)
+      throw std::runtime_error("QDR Engine scene settings envelope exceeds its bounds.");
+    for (const auto *uuid : {engine.active_camera_uuid(), engine.player_uuid(), engine.environment_uuid()})
+      if (uuid != nullptr && uuid->size() > 38u) throw std::runtime_error("QDR Engine scene selector UUID is invalid.");
+    settings.engine = EngineSceneSettings{.version = engine.version(),
+        .serialized_settings = string_from_fb(engine.serialized_settings()),
+        .active_camera_uuid = string_from_fb(engine.active_camera_uuid()),
+        .player_uuid = string_from_fb(engine.player_uuid()),
+        .environment_uuid = string_from_fb(engine.environment_uuid())};
+    if (!engine_scene_settings_is_valid(*settings.engine)) throw std::runtime_error("QDR Engine scene settings envelope is invalid.");
+  }
   return settings;
 }
 
@@ -2564,6 +2623,23 @@ decode_entity_state(const SceneContentDocument &document,
   }
   if (schema_version >= 4u) {
     state.layer_id = stored.layer_id();
+  }
+  if (const auto *engine = stored.engine_components()) {
+    if (schema_version < 21u || engine->serialized_components() == nullptr ||
+        engine->serialized_components()->size() > kMaximumEngineComponentsBytes)
+      throw std::runtime_error("QDR Engine entity components envelope is invalid.");
+    state.engine_components = EngineComponentsComponent{engine->version(), engine->serialized_components()->str()};
+    if (engine->entity_references() != nullptr) {
+      if (engine->entity_references()->size() > 256u) throw std::runtime_error("QDR Engine entity reference limit exceeded.");
+      for (const auto *reference : *engine->entity_references()) {
+        if (reference == nullptr) throw std::runtime_error("QDR Engine entity reference is missing.");
+        state.engine_components->entity_references.push_back({string_from_fb(reference->slot()), string_from_fb(reference->entity_uuid())});
+      }
+    }
+    state.engine_components->asset_references_complete = engine->asset_references() != nullptr;
+    if (engine->asset_references() != nullptr)
+      for (const auto *reference : *engine->asset_references()) state.engine_components->asset_references.push_back(reference->str());
+    if (!engine_components_is_valid(*state.engine_components)) throw std::runtime_error("QDR Engine entity components envelope is invalid.");
   }
   return state;
 }
@@ -3272,6 +3348,31 @@ SceneContentDocument decode_qdr_scene_binary(
   return decode_qdr_scene_binary_with_stats(container).document;
 }
 
+QdrSceneBinaryDependencyDecodeResult decode_qdr_scene_binary_engine_asset_dependencies(
+    const quader_io::QdrBinaryContainerReadResult &container) {
+  if (!container.ok) throw std::runtime_error(container.message);
+  const auto started = std::chrono::steady_clock::now();
+  const auto &metadata = require_scene_metadata_chunk(container);
+  const auto *payload = verify_scene_payload(metadata.bytes(), metadata.schema_version);
+  QdrSceneBinaryDependencyDecodeResult result;
+  result.scene_name = string_from_fb(payload->scene_name(), "Untitled Scene");
+  std::set<ProjectAssetId> asset_ids;
+  if (payload->entities() != nullptr) for (const auto *entity : *payload->entities()) {
+    const auto *engine = entity->engine_components();
+    if (engine == nullptr) continue;
+    if (engine->asset_references() == nullptr) { result.engine_asset_ids_complete = false; continue; }
+    for (const auto *reference : *engine->asset_references()) {
+      const auto id = ProjectAssetId::parse(reference->string_view());
+      if (!id) throw std::runtime_error("QDR Engine asset UUID is invalid.");
+      asset_ids.insert(*id);
+    }
+  }
+  result.engine_asset_ids.assign(asset_ids.begin(), asset_ids.end());
+  result.stats.metadata_access_ms = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - started).count();
+  return result;
+}
+
 QdrSceneBinaryDependencyDecodeResult decode_qdr_scene_binary_dependencies(
     const quader_io::QdrBinaryContainerReadResult &container) {
   QDR_PROFILE_FUNCTION();
@@ -3302,6 +3403,9 @@ QdrSceneBinaryDependencyDecodeResult decode_qdr_scene_binary_dependencies(
   QdrSceneBinaryDependencyDecodeResult result;
   result.scene_name = string_from_fb(payload->scene_name(), "Untitled Scene");
   result.project_asset_dependencies = decode_project_asset_dependencies(*payload);
+  const auto engine_dependencies = decode_qdr_scene_binary_engine_asset_dependencies(container);
+  result.engine_asset_ids = engine_dependencies.engine_asset_ids;
+  result.engine_asset_ids_complete = engine_dependencies.engine_asset_ids_complete;
 
   std::set<ProjectAssetId> material_ids;
   for (const ProjectAssetReference &reference :

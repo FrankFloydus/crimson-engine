@@ -207,6 +207,18 @@ TEST_F(PublicReleaseUiTests, MeshMarkingMenuExposesInstancesPlacementAndFlips) {
   EXPECT_TRUE(inspected);
 }
 
+TEST_F(PublicReleaseUiTests, WorkspaceSelectorRoutesNativeCapabilitiesIndependentlyOfSelectionMode){
+  SceneSession scene;QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(scene));QtSelectionToolbar toolbar;
+  toolbar.set_workspace_requested_callback([&](QuaderWorkspaceMode mode){EXPECT_TRUE(editor.mode().set_workspace_mode(mode).ok());toolbar.synchronize(editor,editor.selection().summary().mode,true);});
+  toolbar.synchronize(editor,QuaderSelectionMode::Object,true);auto* selector=toolbar.findChild<QComboBox*>(QStringLiteral("workspaceModeSelector"));ASSERT_NE(selector,nullptr);
+  ASSERT_EQ(selector->count(),2);EXPECT_EQ(selector->currentText(),QStringLiteral("Modeling"));selector->setCurrentIndex(0);
+  EXPECT_EQ(editor.mode().workspace_mode(),QuaderWorkspaceMode::Default);EXPECT_EQ(editor.mode().current(),QuaderEditorMode::Object);
+  for(const auto* name:{"selectionModeVertex","selectionModeEdge","selectionModeFace"}){auto* action=toolbar.findChild<QAction*>(QString::fromLatin1(name));ASSERT_NE(action,nullptr);EXPECT_FALSE(action->isEnabled());}
+  auto* objects=toolbar.findChild<QAction*>(QStringLiteral("selectionModeMesh"));ASSERT_NE(objects,nullptr);EXPECT_TRUE(objects->isEnabled());
+  selector->setCurrentIndex(1);EXPECT_EQ(editor.mode().workspace_mode(),QuaderWorkspaceMode::Modeling);EXPECT_EQ(editor.mode().current(),QuaderEditorMode::Object);
+  EXPECT_TRUE(toolbar.findChild<QAction*>(QStringLiteral("selectionModeVertex"))->isEnabled());
+}
+
 TEST_F(PublicReleaseUiTests, SelectionToolbarExposesAllModesWithoutAnEditorModeDropdown) {
   SceneSession scene;
   QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(scene));
@@ -260,7 +272,7 @@ TEST_F(PublicReleaseUiTests, SelectionToolbarExposesAllModesWithoutAnEditorModeD
     toolbar.adjustSize();
     QCoreApplication::processEvents();
     EXPECT_EQ(toolbar.actions(), retained_actions);
-    EXPECT_EQ(toolbar.actions().size(), 5);
+    EXPECT_EQ(toolbar.actions().size(), 7);
     EXPECT_EQ(toolbar.findChildren<QToolButton *>(), retained_buttons);
     int visible_separators = 0;
     for (const auto *action : toolbar.actions()) {
@@ -268,7 +280,7 @@ TEST_F(PublicReleaseUiTests, SelectionToolbarExposesAllModesWithoutAnEditorModeD
         ++visible_separators;
       }
     }
-    EXPECT_EQ(visible_separators, 0);
+    EXPECT_EQ(visible_separators, 1);
     for (const auto *label : toolbar.findChildren<QLabel *>()) {
       EXPECT_FALSE(label->isVisible());
     }

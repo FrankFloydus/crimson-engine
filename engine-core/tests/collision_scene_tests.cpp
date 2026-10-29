@@ -42,7 +42,7 @@ void roundTripHistoryAndMigration() {
     require(!legacy.dirty()&&read(file)==old,"Legacy collision conversion wrote on load or marked the scene dirty.");
     require(legacy.save(),legacy.status());require(Json::parse(read(sceneAssetPath(project.root,legacy.assetId()))).at("version")==25,"Explicit save retained the old collision schema.");
 }
-void validationAndQuaderRetention() {
+void collisionValidation() {
     Project project;SceneDocument document(project.root);const auto enemy=document.createEnemy(),id=document.createCollider();const auto body=*document.scene().find(enemy),before=*document.scene().find(id);
     auto invalid=body;invalid.controller->collision.layers|=WorldCollisionLayer;require(!document.updateEntity(enemy,invalid),"Controller was allowed to belong to World.");invalid=body;invalid.controller->collision.mask&=~WorldCollisionLayer;require(!document.updateEntity(enemy,invalid),"Controller could disable shared World blocking.");
     invalid=before;invalid.collider->collision.layers=EnemyCollisionLayer;require(!document.updateEntity(id,invalid),"Solid Collider could leave World.");invalid=before;invalid.collider->collision.mask=EnemyCollisionLayer;require(!document.updateEntity(id,invalid),"Solid Collider could select actor-specific blocking.");
@@ -53,10 +53,6 @@ void validationAndQuaderRetention() {
         auto malformed=valid;for(auto& entity:malformed["entities"])if(entity.contains("controller"))entity["controller"]["collision"]["layers"]=bits;
         writeFileAtomically(file,malformed.dump());SceneDocument rejected(project.root);require(!rejected.load(document.assetId()),"Collision reader accepted a non-uint32 layers value.");
     }
-    const auto owner=document.createQuader();EntityRecord generated;generated.id=1;generated.name="Generated collision";generated.collider.emplace();generated.quaderGenerated=QuaderGenerated{owner,"collision/fixture"};
-    require(document.replaceQuaderImport(owner,QuaderLink{},{generated}),document.status());EntityId collider{};for(const auto& record:document.scene().records())if(record.quaderGenerated&&record.quaderGenerated->sourceKey=="collision/fixture")collider=record.id;
-    auto authored=*document.scene().find(collider);authored.collider->mode=ColliderMode::Trigger;authored.collider->collision={TriggerCollisionLayer|(1u<<31),PlayerCollisionLayer};require(document.updateEntity(collider,authored),document.status());
-    generated.collider->size={2,3,4};require(document.replaceQuaderImport(owner,QuaderLink{},{generated})&&document.scene().find(collider)->collider->mode==ColliderMode::Trigger&&document.scene().find(collider)->collider->collision==authored.collider->collision,"Quader refresh replaced authored Collider mode or filtering.");
 }
 }
-int main(){try{roundTripHistoryAndMigration();validationAndQuaderRetention();std::cout<<"Collision scene checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{roundTripHistoryAndMigration();collisionValidation();std::cout<<"Collision scene checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

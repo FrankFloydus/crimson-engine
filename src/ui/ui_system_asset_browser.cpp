@@ -32,6 +32,8 @@
 #include <QSet>
 #include <QVBoxLayout>
 
+#include <QDesktopServices>
+#include <QUrl>
 #include <algorithm>
 #include <cmath>
 
@@ -84,7 +86,7 @@ QtAssetBrowserKind browser_kind(QuaderProjectAssetKind kind) {
   case QuaderProjectAssetKind::Material: return QtAssetBrowserKind::Material;
   case QuaderProjectAssetKind::Texture: return QtAssetBrowserKind::Texture;
   }
-  return QtAssetBrowserKind::Folder;
+  return QtAssetBrowserKind::File;
 }
 
 QString native_path_text(const std::filesystem::path &path) {
@@ -102,11 +104,17 @@ QIcon asset_preview_icon(const QPixmap &pixmap) {
 
 } // namespace
 
+void UISystem::set_asset_browser_extension(std::shared_ptr<QtAssetBrowserExtension> value){
+  asset_browser_extension_=std::move(value);asset_browser_extension_revision_=asset_browser_extension_thumbnails_=0;
+  if(asset_browser_){asset_browser_->set_extension(asset_browser_extension_);if(asset_browser_extension_){const QPointer<QtAssetBrowser> browser=asset_browser_;asset_browser_extension_->reveal=[browser](const QString& id){if(!browser)return false;for(auto* parent=browser->parentWidget();parent;parent=parent->parentWidget())if(auto* dock=qobject_cast<QDockWidget*>(parent)){dock->show();dock->raise();break;}browser->focus_browser();return browser->reveal_item(id);};}refresh_asset_browser(true);}
+}
+
 void UISystem::configure_asset_browser() {
   if (asset_browser_ == nullptr || render_system_ == nullptr) {
     return;
   }
   asset_browser_->set_labels(asset_labels(localization_));
+  asset_browser_->set_extension(asset_browser_extension_);
   asset_thumbnails_ = std::make_unique<QtAssetThumbnailCache>();
   asset_thumbnails_->initialize(*render_system_, [this](ProjectAssetId id)
       -> std::optional<RenderMaterialEvaluationSnapshot> {
@@ -125,6 +133,7 @@ void UISystem::configure_asset_browser() {
         if (editor_ == nullptr || !editor_->project().has_project()) {
           return {};
         }
+        if(asset_browser_extension_&&asset_browser_extension_->thumbnail){const auto icon=asset_browser_extension_->thumbnail(item,logical_size,dpr);if(!icon.isNull()||item.external)return icon;}
         const auto id = ProjectAssetId::parse(item.id.toStdString());
         if (!id) {
           return {};
@@ -169,6 +178,7 @@ void UISystem::configure_asset_browser() {
   asset_browser_->set_thumbnail_provider(asset_thumbnail_provider_);
   asset_browser_->set_visible_items_changed_callback(
       [this](const std::vector<QString> &ids) {
+        if(asset_browser_extension_&&asset_browser_extension_->visible_items)asset_browser_extension_->visible_items(ids);
         asset_browser_visible_thumbnail_ids_.clear();
         asset_browser_visible_thumbnail_ids_.reserve(ids.size());
         for (const auto &id : ids) {
@@ -201,6 +211,11 @@ void UISystem::refresh_asset_thumbnails() {
     asset_thumbnail_picker_.clear();
   }
   const bool dock_visible = panel_presented(UIPanelId::AssetBrowser);
+  if(asset_browser_extension_){
+    if(!dock_visible&&asset_browser_extension_->visible_items)asset_browser_extension_->visible_items({});
+    const auto revision=asset_browser_extension_->thumbnail_revision?asset_browser_extension_->thumbnail_revision():0;
+    if(revision!=asset_browser_extension_thumbnails_){asset_browser_extension_thumbnails_=revision;if(dock_visible&&asset_browser_)asset_browser_->invalidate_thumbnail();}
+  }
   const bool picker_visible = asset_thumbnail_picker_ &&
                              asset_thumbnail_picker_->isVisible();
   const bool visibility_changed = asset_thumbnail_dock_presented_ != dock_visible ||
@@ -230,7 +245,7 @@ void UISystem::refresh_asset_browser_labels() {
 }
 
 QtAssetBrowserSnapshot UISystem::asset_browser_snapshot(
-    bool refresh_files, bool passive_refresh) {
+    bool refresh_files, bool passive_refresh,bool include_extension) {
   QtAssetBrowserSnapshot snapshot;
   if (editor_ == nullptr || !editor_->project().has_project()) {
     return snapshot;
@@ -285,6 +300,7 @@ QtAssetBrowserSnapshot UISystem::asset_browser_snapshot(
           .kind = QtAssetBrowserKind::Folder});
     }
   }
+  if(include_extension&&asset_browser_extension_&&asset_browser_extension_->append_snapshot){asset_browser_extension_->append_snapshot(snapshot);snapshot.dependency_revision=asset_browser_extension_->revision?asset_browser_extension_->revision():0;}
   return snapshot;
 }
 
@@ -317,7 +333,8 @@ void UISystem::refresh_asset_browser(bool force, bool prepare_reveal) {
       asset_browser_discovery_pending_ && asset_browser_->has_completed_visible_paint();
   const bool refresh_files = force || reveal_ready;
   if (reveal_ready) asset_browser_discovery_pending_ = false;
-  const bool changed = refresh_files || asset_browser_revision_ != revision.value().revision ||
+  const auto extension_revision=asset_browser_extension_&&asset_browser_extension_->revision?asset_browser_extension_->revision():0;
+  const bool changed = refresh_files || asset_browser_extension_revision_!=extension_revision || asset_browser_revision_ != revision.value().revision ||
       asset_browser_generation_ != revision.value().project_generation;
   if (changed) {
     // The pending reveal was consumed before discovery, including failed
@@ -325,19 +342,20 @@ void UISystem::refresh_asset_browser(bool force, bool prepare_reveal) {
     const bool initialize_catalog = prepare_reveal &&
         asset_browser_generation_ != revision.value().project_generation;
     auto snapshot = asset_browser_snapshot(
-        refresh_files, !force && (reveal_ready || initialize_catalog));
+        refresh_files, !force && (reveal_ready || initialize_catalog),true);
     if (snapshot.generation == 0u) return;
     if (asset_browser_generation_ != snapshot.generation) {
       asset_clipboard_paths_.clear();
       asset_browser_->set_paste_available(false);
     }
     asset_browser_generation_ = snapshot.generation;
-    asset_browser_revision_ = snapshot.revision;
+    asset_browser_revision_ = snapshot.revision;asset_browser_extension_revision_=snapshot.dependency_revision;
     if (asset_thumbnails_) {
       asset_thumbnails_->set_project_generation(snapshot.generation);
       asset_thumbnails_->set_catalog_revision(snapshot.revision);
     }
     (void)asset_browser_->set_snapshot(std::move(snapshot));
+    if(asset_browser_extension_&&asset_browser_extension_->take_reveal){const auto id=asset_browser_extension_->take_reveal();if(!id.isEmpty())asset_browser_->reveal_item(id);}
   }
 }
 
@@ -550,6 +568,7 @@ void UISystem::handle_asset_browser_action(QtAssetBrowserActionRequest request) 
     refresh_asset_browser(true);
     return;
   }
+  if(asset_browser_extension_&&asset_browser_extension_->handle_action&&asset_browser_extension_->handle_action(request)){refresh_asset_browser(false);return;}
   const auto generation = request.generation;
   const auto binding = runtime_binding_generation_;
   const auto still_current = [this, generation, binding,
@@ -589,6 +608,7 @@ void UISystem::handle_asset_browser_action(QtAssetBrowserActionRequest request) 
         present_lifecycle_result(result);
         refresh_project_workspace();
       }
+    } else if(request.selected_items.front().kind==QtAssetBrowserKind::File){const auto path=ProjectRelativePath::parse_portable(paths.front());if(path.ok())QDesktopServices::openUrl(QUrl::fromLocalFile(native_path_text(editor_->project().root()/path.value().native_path())));
     } else if (const auto id = ProjectAssetId::parse(request.selected_items.front().id.toStdString())) {
       if (request.selected_items.front().kind == QtAssetBrowserKind::Material) open_standard_material_document(*id);
       else if (request.selected_items.front().kind == QtAssetBrowserKind::Texture) show_asset_texture_info(*id);

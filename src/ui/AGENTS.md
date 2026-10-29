@@ -140,23 +140,20 @@ file except through prior written authorization from Francesco Di Blasi.
   Object selection does not own or interrupt these edits. Gate retained refresh on the document
   settings revision before copying values; runtime replacement abandons dialogs and numeric
   gestures without accessing the old owners. See `tests/qt_environment_settings_popup_tests.cpp`.
-- Its single retained settings overlay stays in the pane that initiated the shared operation and
-  queries that origin's settings without activating it. If that pane is hidden by the layout,
-  temporarily host it in a visible pane and restore its anchor when the origin returns.
-  It shows only actual settings controls and their actions, with the
-  operation title in the disclosure header. No descriptions or empty shell are shown. Expansion
-  starts expanded for each activation; an explicit collapse lasts for that activation. Scene-owned
-  origin metadata pins the overlay's visual position and fences its controls. Visible panes project
-  the same active operation and handles; each camera owns only its projected presentation.
-  Focus changes neither settle nor acquire a tool; editing from another pane preserves the operation
-  and its settings origin. Drafts retain their originating operation/session fence.
-  Collapse settles field drafts without terminating the operation. See
-  `tests/qt_viewport_settings_overlay_tests.cpp` and the settings-control tests.
-  Each value uses one label-left, field-right row. Measure localized labels with the active font
-  for a shared width, bounded so long labels wrap; size checkbox fields to their contents.
-  Recompute measurements only when layout inputs change, never on unchanged refreshes. Composite
-  fields keep their controls in the field column and actions align with fields. The overlay has
-  no Reset Settings action or numeric limit labels.
+- `QtToolSettingsPanel` is an ordinary dock, alongside Commands Library. Its controls
+  query the originating operation's settings without activating another pane. Changing
+  focused panes does not settle or acquire the tool. Explicit bind/unbind and operation
+  identity fence delayed property drafts. Flat section headers retain collapse state,
+  label-left/field-right layout and native numeric input. Asset document previews and
+  pane geometry do not own or reparent this dock. See
+  `tests/qt_viewport_settings_overlay_tests.cpp` for the current dock fixtures.
+- Default/Modeling is a project-owned workspace capability. Default hides geometry
+  launchers, component selectors, geometry menus/palette rows, Face Texture and
+  Commands Library. Object selection, transforms, lights and assets remain available.
+  Tool Settings may present ordinary transform properties. Modeling reveals the retained
+  controls in the same scene/layout. UIPanelManager suppression preserves requested
+  visibility, and persisted toolbar preferences remain independent of forced hiding.
+  Native command/gesture gates remain authoritative; hidden actions are not the gate.
 - `main.cpp` selects Fusion; `qt_application_theme.*` supplies the dark palette and live system
   High Contrast fallback. Preserve native control behavior and accessible default, hover, selected,
   pressed, focused, inactive, and disabled states when styling.

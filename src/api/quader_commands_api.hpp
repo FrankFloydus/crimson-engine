@@ -157,6 +157,8 @@ public:
     [[nodiscard]] std::optional<QuaderCommandDescriptor>
     descriptor(QuaderCommandId command_id) const;
     [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
+    /// Workspace capability only; independent of transient operand availability.
+    [[nodiscard]] bool workspace_allows(std::string_view command_id) const;
     [[nodiscard]] std::string
     command_id_for_modeling_action(std::string_view action_id) const;
     [[nodiscard]] std::string

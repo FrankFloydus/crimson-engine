@@ -330,7 +330,7 @@ texture_color_space_name(TextureColorSpace color_space) {
 
 [[nodiscard]] Json
 scene_settings_json(const SceneSettings &settings) {
-  return {
+  Json result = {
       {"environment",
        {
            {"environmentId", settings.environment.environment_id},
@@ -380,6 +380,11 @@ scene_settings_json(const SceneSettings &settings) {
            {"colorFromEnvironment", settings.fog.color_from_environment},
        }},
   };
+  if (settings.engine) result["engine"] = {
+      {"version", settings.engine->version}, {"serializedSettings", settings.engine->serialized_settings},
+      {"activeCameraUuid", settings.engine->active_camera_uuid}, {"playerUuid", settings.engine->player_uuid},
+      {"environmentUuid", settings.engine->environment_uuid}};
+  return result;
 }
 
 [[nodiscard]] std::string uuid_hex(
@@ -563,6 +568,13 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
   }
   if (entity.light) {
     value["light"] = light_json(*entity.light);
+  }
+  if (entity.engine_components) {
+    Json references = Json::array();
+    for (const auto &reference : entity.engine_components->entity_references)
+      references.push_back({{"slot", reference.slot}, {"entityUuid", reference.entity_uuid}});
+    value["engineComponents"] = {{"version", entity.engine_components->version},
+        {"serializedComponents", std::string(entity.engine_components->text())}, {"entityReferences", std::move(references)}};
   }
   if (entity.layer_id != 0u) {
     value["layerId"] = entity.layer_id;

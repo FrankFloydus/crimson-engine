@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_dock_title_presentation.hpp"
+#include "ui/qt_multiresolution_icon.hpp"
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -21,6 +22,14 @@
 #include <cmath>
 #include <utility>
 
+static void initialize_panel_title_icons() {
+  static const bool kInitialized = [] {
+    Q_INIT_RESOURCE(quader_panel_title_icons);
+    return true;
+  }();
+  (void)kInitialized;
+}
+
 namespace quader {
 namespace {
 
@@ -28,6 +37,7 @@ constexpr QRgb kDarkDockGlyphRgb = qRgb(16, 16, 16);
 constexpr QRgb kLightDockGlyphRgb = qRgb(242, 242, 242);
 constexpr auto kDockUiScaleFactorProperty =
     "quaderDockTitleUiScaleFactor";
+constexpr auto kDockTitleIconSourceProperty = "quaderDockTitleIconSource";
 constexpr auto kDockCloseButtonObjectName =
     "qt_dockwidget_closebutton";
 constexpr auto kDockFloatButtonObjectName =
@@ -209,6 +219,10 @@ void apply_palette_aware_dock_title_presentation(
     dock.setStyleSheet(style_sheet);
   }
   apply_programmatic_dock_title_glyphs(dock, application_palette);
+  if (!dock.property(kDockTitleIconSourceProperty).toString().isEmpty()) {
+    dock.setWindowIcon(qt_dock_title_panel_icon(
+        dock, application_palette, QPalette::Active));
+  }
 }
 
 QtUiScaleMetrics dock_title_ui_scale(const QDockWidget &dock) {
@@ -301,6 +315,24 @@ void install_palette_aware_dock_title_presentation(QDockWidget &dock) {
   apply_palette_aware_dock_title_presentation(dock,
                                                QApplication::palette(),
                                                QtUiScaleMetrics{});
+}
+
+void set_palette_aware_dock_title_icon(QDockWidget &dock,
+                                      const QString &resource_path) {
+  initialize_panel_title_icons();
+  dock.setProperty(kDockTitleIconSourceProperty, resource_path);
+  dock.setWindowIcon(qt_dock_title_panel_icon(
+      dock, dock.palette(), QPalette::Active));
+}
+
+QIcon qt_dock_title_panel_icon(const QDockWidget &dock,
+                               const QPalette &palette,
+                               QPalette::ColorGroup group) {
+  const QString source = dock.property(kDockTitleIconSourceProperty).toString();
+  return source.isEmpty()
+             ? QIcon{}
+             : qt_multiresolution_icon(
+                   source, palette.color(group, QPalette::WindowText));
 }
 
 void apply_ui_scale_to_palette_aware_dock_title_presentation(

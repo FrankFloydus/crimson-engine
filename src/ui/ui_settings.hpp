@@ -11,6 +11,7 @@
 #include "ui/ui_panel.hpp"
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -43,6 +44,12 @@ public:
 
     bool save(const std::filesystem::path& path) const;
 
+    std::optional<bool> modeling_tools_toolbar_visible() const { return modeling_tools_toolbar_visible_; }
+    std::optional<bool> modeling_texture_toolbar_visible() const { return modeling_texture_toolbar_visible_; }
+    void set_modeling_toolbar_visibility(bool tools, bool texture) {
+      modeling_tools_toolbar_visible_ = tools;
+      modeling_texture_toolbar_visible_ = texture;
+    }
     bool is_panel_visible(UIPanelId id) const;
     void set_panel_visible(UIPanelId id, bool visible);
     const std::string& locale() const { return locale_; }
@@ -77,6 +84,12 @@ public:
         ui_panel_default_visible(UIPanelId::FaceTexture);
     bool asset_browser_visible_ =
         ui_panel_default_visible(UIPanelId::AssetBrowser);
+    std::optional<bool> modeling_tools_toolbar_visible_;
+    std::optional<bool> modeling_texture_toolbar_visible_;
+    bool tool_settings_visible_ =
+        ui_panel_default_visible(UIPanelId::ToolSettings);
+    bool commands_library_visible_ =
+        ui_panel_default_visible(UIPanelId::CommandsLibrary);
 };
 
 } // namespace quader

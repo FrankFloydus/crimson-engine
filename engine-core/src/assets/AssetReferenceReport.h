@@ -19,7 +19,6 @@ struct AssetReferenceIndexInput {
     std::vector<AssetEntry> catalog;
     std::vector<StoredAssetPath> locations;
     std::vector<std::shared_ptr<const MaterialAsset>> materials;
-    std::vector<std::string> retainedModels;
     std::vector<AssetUsage> liveUsages;
     std::string materialDocumentId;
     std::shared_ptr<const AssetReferenceManager> policy;

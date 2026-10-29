@@ -1,5 +1,6 @@
 #include "integration/browser/LevelAssetBrowser.h"
 #include "integration/browser/QtAssetBrowser.h"
+#include "ui/qt_asset_browser.hpp"
 #include "integration/LevelSession.h"
 #include "assets/AssetLibrary.h"
 #include "assets/AtomicFile.h"
@@ -50,7 +51,9 @@ struct Fixture {
         entity=session.document().createBox("Current occurrence");
         auto record=*session.document().scene().find(entity);record.modelMaterials={AssetRef<MaterialAsset>{source}};
         require(session.document().updateEntity(entity,record,"Assign fixture material"),"Cannot assign browser reference fixture.");
-        require(session.save("Browser level"),"Cannot save the browser reference owner.");
+        SceneDocument saved(root);
+        require(saved.edit("Prepare browser fixture",[&](auto& records,auto& properties){records=session.document().scene().records();properties=session.document().scene().properties();}),"Cannot prepare the isolated reference fixture.");
+        require(saved.save("Browser level"),"Cannot save the isolated browser-domain reference fixture.");
         browser.bind(&session);browser.setPrepareCommand([this]{return !session.document().transactionActive();});
     }
     void tick(){session.resources().pump();browser.update(0,true);}
@@ -62,7 +65,7 @@ struct Fixture {
 };
 void catalogAndDetachedThumbnails(Fixture& fixture) {
     auto& assets=fixture.session.assets();
-    const auto folder=assets.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Grouped assets");
+    const auto folder=assets.browserCatalog().createFolder(BrowserCatalog::RootFolder,"Grouped assets");
     const std::array ids{fixture.source,fixture.replacement};assets.browserCatalog().move(ids,folder);
     require(fixture.browser.reveal(fixture.source),"Reveal did not follow a moved stable asset identity.");
     auto view=fixture.browser.widget()->findChild<QListView*>(QStringLiteral("CrimsonAssetList"));
@@ -114,7 +117,7 @@ void sharedSmallTextureMip() {
 }
 void duplicateRetainedKinds(Fixture& fixture) {
     auto& assets=fixture.session.assets();
-    const auto folder=assets.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Duplicate destination");
+    const auto folder=assets.browserCatalog().createFolder(BrowserCatalog::RootFolder,"Duplicate destination");
     const auto profile=assets.createNavigationAgentProfile("Duplicate profile");
     const auto decal=assets.createDecal("Duplicate decal");
     const auto effect=assets.createGameplayEffect("Duplicate effect");
@@ -179,5 +182,35 @@ void guardedDeletion(Fixture& fixture) {
         "The native deletion bypassed the accepted reference replacement policy.");
     fixture.browser.bind(nullptr);fixture.tick();
 }
+void unifiedFilesystemController(){
+    ragdoll_test::Project project;QMainWindow window;integration::LevelSession session(project.root);
+    integration::LevelAssetBrowser controller(window,[]{},false);require(controller.widget()==nullptr,"The unified controller constructed a second browser widget.");controller.bind(&session);
+    const auto profile=session.assets().createNavigationAgentProfile("Shared browser profile");require(bool(profile),"Cannot create the unified browser fixture.");
+    const auto file=resolveAssetPath(project.root,profile->id);const auto relative=QString::fromStdWString(file.lexically_relative(project.root).generic_wstring());
+    quader::QtAssetBrowser view;auto extension=controller.extension();view.set_extension(extension);
+    quader::QtAssetBrowserSnapshot snapshot;snapshot.generation=51;snapshot.revision=9;snapshot.items.push_back({.id=QStringLiteral("file:")+relative,.relative_path=relative,.name=QStringLiteral("Raw"),.kind=quader::QtAssetBrowserKind::File});extension->append_snapshot(snapshot);snapshot.dependency_revision=extension->revision();
+    require(std::count_if(snapshot.items.begin(),snapshot.items.end(),[&](const auto& item){return item.relative_path==relative;})==1,"The Engine overlay duplicated a physical filesystem row.");
+    const auto found=std::find_if(snapshot.items.begin(),snapshot.items.end(),[&](const auto& item){return item.extension_id==QString::fromStdString(profile->id);});require(found!=snapshot.items.end()&&found->external&&found->kind==quader::QtAssetBrowserKind::NavigationProfile,"The unified row lost its typed Engine identity.");
+    const auto item=*found;require(view.set_snapshot(snapshot)&&view.reveal_item(item.id),"The shared browser could not publish/reveal an Engine row.");
+    auto list=view.findChild<QListView*>(QStringLiteral("assetBrowser.grid"));require(list&&list->currentIndex().isValid(),"The unified browser has no selected visible row.");
+    std::unique_ptr<QMimeData> mime(list->model()->mimeData({list->currentIndex()}));require(mime&&mime->hasFormat(QtAssetMime),"The shared browser did not append canonical Engine drag MIME.");
+    const auto payload=nlohmann::json::parse(mime->data(QtAssetMime).toStdString());require(payload.size()==1&&payload.front().at("id")==profile->id&&payload.front().at("kind")==unsigned(AssetKind::NavigationAgentProfile),"Unified drag changed the canonical asset identity/kind.");
+    quader::QtAssetBrowserActionRequest request;request.action=quader::QtAssetBrowserAction::Open;request.selected_items={item};request.dependency_revision=snapshot.dependency_revision;
+    require(extension->handle_action(request)&&controller.takeActions().openNavigationAgentProfile==profile->id,"The shared browser Open bypassed the retained document action.");
+    controller.setPrepareCommand([]{return false;});request.action=quader::QtAssetBrowserAction::CreateGraphMaterial;request.selected_items.clear();require(extension->handle_action(request)&&!controller.takeActions().createMaterial,"A shared-browser action bypassed the active document guard.");controller.setPrepareCommand([]{return true;});
+    require(extension->handle_action(request)&&controller.takeActions().createMaterial,"The shared browser lost native material graph creation.");
+    request.action=quader::QtAssetBrowserAction::Duplicate;request.selected_items={item};require(!extension->handle_action(request),"The shared browser intercepted physical Duplicate before the project service could clone/remap identities.");
+    const auto count=snapshot.items.size();const auto copy=session.assets().copyNavigationAgentProfile(profile->id);require(bool(copy)&&controller.reveal(copy->id),"The viewless controller could not reveal the newly published physical copy.");
+    snapshot.items.clear();extension->append_snapshot(snapshot);snapshot.dependency_revision=extension->revision();require(snapshot.items.size()==count+1&&view.set_snapshot(snapshot),"An Engine-only catalog revision failed to update the shared browser model.");
+    const auto reveal=extension->take_reveal();require(!reveal.isEmpty()&&view.reveal_item(reveal),"Canonical Duplicate did not reveal/select the new shared-browser row.");
+    const auto authored_bytes=read(file);const auto renamed=file.parent_path()/(std::filesystem::path("Physical filename").native()+file.extension().native());
+    const ContentPathMove move{file,renamed};relocateContentPaths(project.root,std::span(&move,1));
+    const std::array<StoredAssetPath,1> before{{{profile->id,file}}},after{{{profile->id,renamed}}};session.assets().publishPhysicalAssetMutation(before,after);
+    snapshot.items.clear();extension->append_snapshot(snapshot);const auto renamed_row=std::find_if(snapshot.items.begin(),snapshot.items.end(),[&](const auto& value){return value.extension_id==QString::fromStdString(profile->id);});
+    require(renamed_row!=snapshot.items.end()&&renamed_row->name==QStringLiteral("Physical filename")&&renamed_row->relative_path==QString::fromStdWString(renamed.lexically_relative(project.root).generic_wstring()),"A physical rename kept the authored display name on the filesystem card.");
+    require(read(renamed)==authored_bytes,"A filesystem card rename rewrote the typed asset's authored display name.");
+    controller.bind(nullptr);require(extension->revision()==0,"Unbinding retained an Engine browser publication.");
 }
-int main(int argc,char** argv){qputenv("QT_QPA_PLATFORM","minimal");QApplication app(argc,argv);try{sharedSmallTextureMip();Fixture fixture;catalogAndDetachedThumbnails(fixture);duplicateRetainedKinds(fixture);explicitImmutableReferences(fixture);guardedDeletion(fixture);std::cout<<"Native asset catalog folders/search/MIME, retained asset duplication, detached/shared tiny thumbnails, explicit immutable async reports, stale cancellation and guarded replacement/deletion passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+
+}
+int main(int argc,char** argv){qputenv("QT_QPA_PLATFORM","minimal");QApplication app(argc,argv);try{unifiedFilesystemController();sharedSmallTextureMip();Fixture fixture;catalogAndDetachedThumbnails(fixture);duplicateRetainedKinds(fixture);explicitImmutableReferences(fixture);guardedDeletion(fixture);std::cout<<"Native asset catalog folders/search/MIME, retained asset duplication, detached/shared tiny thumbnails, explicit immutable async reports, stale cancellation and guarded replacement/deletion passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

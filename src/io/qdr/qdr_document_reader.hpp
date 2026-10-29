@@ -81,6 +81,8 @@ struct QdrProjectDependencyReadResult final {
   std::uint64_t source_byte_count = 0u;
   std::uint64_t source_content_hash = 0u;
   QdrProjectReadStats stats;
+  std::vector<ProjectAssetId> engine_asset_ids;
+  bool engine_asset_ids_complete = true;
 };
 
 /// Actual surface assignments, decoded without constructing render geometry.
@@ -121,6 +123,11 @@ public:
       std::optional<ProductRelease> authoring_release = std::nullopt);
   [[nodiscard]] static QdrProjectReleaseReadResult
   read_project_release_requirement(const std::filesystem::path &path);
+  /// Reads only native Engine reference metadata; geometry chunks remain untouched.
+  [[nodiscard]] static QdrProjectDependencyReadResult
+  deserialize_project_engine_asset_dependencies(std::span<const std::byte> bytes);
+  [[nodiscard]] static QdrProjectDependencyReadResult
+  read_project_engine_asset_dependencies(const std::filesystem::path &path);
   [[nodiscard]] static QdrProjectDependencyReadResult
   deserialize_project_dependencies(std::span<const std::byte> bytes);
   [[nodiscard]] static QdrProjectDependencyReadResult
@@ -131,7 +138,7 @@ public:
   read_project_material_usage(const std::filesystem::path &path);
   [[nodiscard]] static QdrMeshMaterialSlotsReadResult
   deserialize_mesh_material_slots(std::span<const std::byte> bytes,
-                                  std::uint16_t scene_schema_version = 20u);
+                                  std::uint16_t scene_schema_version = 21u);
 };
 
 } // namespace quader

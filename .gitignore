@@ -21,3 +21,9 @@ quader_ui.ini
 /.crimson/.resource-transactions/
 /engine-core/assets/cache/
 /engine-core/.crimson/cache/
+# The checkout is the application source, not an automatically opened project.
+# Old branch sample data is left on disk but is no longer application input.
+/Content/
+/Engine/
+/assets/
+/.crimson/

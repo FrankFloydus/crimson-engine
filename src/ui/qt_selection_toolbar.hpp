@@ -16,10 +16,12 @@
 #include <string_view>
 
 class QAction;
+class QComboBox;
 class QWidget;
 
 namespace quader {
 
+enum class QuaderWorkspaceMode;
 class LocalizationService;
 class QuaderEditorApi;
 class QtUiScaleMetrics;
@@ -40,6 +42,7 @@ public:
   void set_mode_requested_callback(
       std::function<void(QuaderSelectionMode)> callback);
   void set_group_selection_toggle_requested_callback(std::function<void()> callback);
+  void set_workspace_requested_callback(std::function<void(QuaderWorkspaceMode)> callback){workspace_requested_=std::move(callback);}
 
 private:
   /// Binds one public selection mode to its retained presentation action.
@@ -50,6 +53,8 @@ private:
     std::string_view fallback;
   };
 
+  QComboBox* workspace_selector_=nullptr;
+  std::function<void(QuaderWorkspaceMode)> workspace_requested_;
   std::array<ModeAction, 5> mode_actions_{};
   bool synchronization_valid_ = false;
   std::optional<QuaderSelectionMode> presented_mode_;

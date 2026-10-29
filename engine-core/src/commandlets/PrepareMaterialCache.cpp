@@ -28,7 +28,7 @@ int main(int argc,char** argv) {
         if(!crimson::contentStorageReady(project)&&!std::filesystem::is_directory(project/"assets")&&!std::filesystem::is_directory(project/"Content")&&!initializeContent){std::cout<<"No engine content; material cache preparation skipped.\n";return 0;}
         if(initializeContent)crimson::initializeContentStorage(project);
         crimson::ensureEngineMaterialAssets(project);
-        const crimson::ShaderCompileConfig config{bin/"shader-tools/shaderc.exe",bin/"shader-tools/shaders",bin/"shader-tools/include",crimson::resolveAssetPath(project,"assets/cache/shaders")};
+        const crimson::ShaderCompileConfig config{bin/"shader-tools/shaderc.exe",bin/"shader-tools/shaders",bin/"shader-tools/include",crimson::resolveAssetPath(project,".crimson/cache/shaders")};
         if(!std::filesystem::is_regular_file(config.compiler)||!std::filesystem::is_directory(config.sourceDirectory)||!std::filesystem::is_directory(config.includeDirectory))
             throw std::runtime_error("The paired renderer shader payload is unavailable.");
         const auto result=crimson::prepareProjectMaterialCache(project,config,[]{std::cout<<"Material cache: first-use pass finished; optimizing remaining stages.\n"<<std::flush;});

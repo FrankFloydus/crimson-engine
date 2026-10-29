@@ -368,11 +368,32 @@ table SceneFogSettings {
   color_from_environment:bool = false;
 }
 
+table EngineSceneSettings {
+  version:uint = 1;
+  serialized_settings:string;
+  active_camera_uuid:string;
+  player_uuid:string;
+  environment_uuid:string;
+}
+
 table SceneSettingsComponent {
   environment:SceneEnvironmentSettings;
   camera:SceneCameraSettings;
   post_process:ScenePostProcessSettings;
   fog:SceneFogSettings;
+  engine:EngineSceneSettings;
+}
+
+table EngineEntityReference {
+  slot:string;
+  entity_uuid:string;
+}
+
+table EngineComponentsComponent {
+  version:uint = 1;
+  serialized_components:string;
+  entity_references:[EngineEntityReference];
+  asset_references:[string];
 }
 
 table InstanceDefinitionComponent {
@@ -404,6 +425,7 @@ table Entity {
   layer_id:ulong;
   texture_mapping:TextureMappingComponent;
   curve:CurveComponent;
+  engine_components:EngineComponentsComponent;
 }
 
 table SceneLayer {

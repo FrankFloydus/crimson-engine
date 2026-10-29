@@ -319,6 +319,7 @@ void SceneSession::rebuild_services() {
                              .message = settled.message};
       });
   native_tools_->set_creation_material(creation_material_);
+  native_tools_->set_workspace_tool_policy([this](std::string_view id){return editor_mode_->permits_tool(id);});
   native_tools_->set_editor_mode_provider([this] {
     return editor_mode_->mode();
   });

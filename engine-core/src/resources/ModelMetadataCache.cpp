@@ -1,7 +1,6 @@
 #include "StreamingModel.h"
 #include "assets/ModelAnimation.h"
 #include "assets/ContentStorage.h"
-#include "assets/QuaderSceneBundle.h"
 #include "resources/AssetId.h"
 #include "CacheIO.h"
 #include "math/Json.h"
@@ -29,11 +28,11 @@ std::uint64_t fileHash(const std::filesystem::path& file) {
 }
 std::filesystem::path indexFile(const std::filesystem::path& root,const std::string& id) {
     auto key=detail::HashSeed; detail::hash(key,id.data(),id.size());
-    return resolveAssetPath(root,"assets/cache/mesh-lods/index")/(detail::hex(key)+".json");
+    return (root/".crimson/cache/mesh-lods/index")/(detail::hex(key)+".json");
 }
 Json dependencies(const std::filesystem::path& root,const std::string& id) {
     const auto manifest=std::filesystem::weakly_canonical(resolveAssetPath(root,id));
-    if (manifest.filename()!="manifest.json" || (!isAssetUuid(id) && (!id.starts_with("assets/models/") || path(id).filename()!="manifest.json"))) throw std::runtime_error("Model metadata cache asset identity is outside managed models.");
+    if (manifest.filename()!="manifest.json" || !isAssetUuid(id)) throw std::runtime_error("Model metadata cache asset identity is outside managed models.");
     std::ifstream input(manifest); const auto data=Json::parse(input);
     std::vector<std::filesystem::path> files{manifest,manifest.parent_path()/path(data.at("document").get<std::string>())};
     for (const auto& dependency:data.at("dependencies")) if (dependency.at("kind")=="buffer") files.push_back(manifest.parent_path()/path(dependency.at("path").get<std::string>()));
@@ -42,14 +41,6 @@ Json dependencies(const std::filesystem::path& root,const std::string& id) {
         const auto canonical=std::filesystem::weakly_canonical(file);
         if (!inside(canonical,manifest.parent_path())) throw std::runtime_error("Model metadata cache dependency escaped its package.");
         result.push_back({{"file",utf8(canonical.lexically_relative(root))},{"hash",fileHash(canonical)}});
-    }
-    // The expanded package is disposable. A warm metadata entry also belongs
-    // to the exact tracked bundle generation that supplied its geometry.
-    if(const auto bundle=quaderBundleSource(root,id)) {
-        const auto source=std::filesystem::weakly_canonical(*bundle);
-        if(!inside(source,std::filesystem::weakly_canonical(root/"Content"))||source.extension()!=".crimson-quader")
-            throw std::runtime_error("Model metadata cache bundle source escaped Content.");
-        result.push_back({{"file",utf8(source.lexically_relative(root))},{"hash",fileHash(source)}});
     }
     return result;
 }
@@ -175,7 +166,7 @@ std::shared_ptr<ModelAsset> loadModelMetadataCache(const std::filesystem::path& 
             descriptor.uvSpan=value.at("uvSpan").get<std::array<Vec2,2>>();
             for (const auto& item:value.at("levels")) {
                 auto file=std::filesystem::weakly_canonical(root/path(item.at("file").get<std::string>()));
-                if (!inside(file,std::filesystem::weakly_canonical(resolveAssetPath(root,"assets/cache/mesh-lods"))) || !std::filesystem::is_regular_file(file)) return {};
+                if (!inside(file,std::filesystem::weakly_canonical((root/".crimson/cache/mesh-lods"))) || !std::filesystem::is_regular_file(file)) return {};
                 descriptor.levels.push_back({file,item.at("key").get<std::uint64_t>(),item.at("vertices").get<std::uint32_t>(),item.at("indices").get<std::uint32_t>(),item.at("error").get<float>()});
             }
             if (descriptor.levels.empty()) return {}; stream->primitives.push_back(std::move(descriptor));

@@ -327,6 +327,7 @@ struct QtCommandPalette::Impl final {
         commands->available();
     snapshot.reserve(public_commands.size());
     for (const QuaderCommandDescriptor &command : public_commands) {
+      if (!commands->workspace_allows(command.id)) continue;
       const CommandPresentationDescriptor *presentation =
           find_command_presentation(command.id);
       if (!release_presents_command(command.id) || presentation == nullptr ||

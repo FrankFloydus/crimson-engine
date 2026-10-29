@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/session/project_session.hpp"
+#include "editor/modes/editor_mode_service.hpp"
 #include "quader_app_version.hpp"
 #include "editor/session/tool_session_defaults.hpp"
 #include "editor/tools/extrude_tool_service.hpp"
@@ -448,7 +449,9 @@ void rollback_new_project(
   std::error_code ignored;
   std::filesystem::remove(workspace.manifest_path, ignored);
   ignored.clear();
-  std::filesystem::remove(workspace.file_system.root() / "Scenes", ignored);
+  if (workspace.created_scenes_directory) {
+    std::filesystem::remove(workspace.file_system.root() / "Scenes", ignored);
+  }
 }
 
 } // namespace
@@ -462,6 +465,7 @@ ProjectSession::ProjectSession(std::filesystem::path recent_scene_storage)
                               ? quader_user_config_directory({}) /
                                     "recent-scenes.json"
                               : std::move(recent_scene_storage)) {
+  fallback_scene_.editor_mode().bind_workspace_mode([this]{return workspace_mode_;});
   resource_root_ = default_runtime_resource_root();
   (void)ProjectAssetBootstrapService{}.bootstrap_default_assets(fallback_scene_);
   fallback_scene_.mark_clean();
@@ -471,6 +475,16 @@ ProjectSession::ProjectSession(std::filesystem::path recent_scene_storage)
   autosave_ = std::make_unique<ProjectAutosaveService>();
   dependencies_ = std::make_unique<ProjectAssetDependencyService>(*this);
   material_usage_ = std::make_unique<ProjectMaterialUsageService>(*this);
+}
+
+CommandResult ProjectSession::set_workspace_mode(EditorWorkspaceMode requested){
+  if(requested==workspace_mode_)return command_unchanged_result();
+  if(requested!=EditorWorkspaceMode::Default&&requested!=EditorWorkspaceMode::Modeling)return command_invalid_result("Unknown workspace mode.");
+  for(const auto& scene:open_scenes_)if(scene&&scene->session){const auto result=scene->session->editor_mode().prepare_workspace_mode(requested);if(!result.ok)return result;}
+  const auto fallback=fallback_scene_.editor_mode().prepare_workspace_mode(requested);if(!fallback.ok)return fallback;
+  workspace_mode_=requested;fallback_scene_.editor_mode().workspace_mode_changed();
+  for(const auto& scene:open_scenes_)if(scene&&scene->session)scene->session->editor_mode().workspace_mode_changed();
+  return command_changed_result();
 }
 
 ProjectSession::~ProjectSession() = default;
@@ -578,13 +592,14 @@ ProjectSessionResult ProjectSession::recover_scene(
 }
 
 ProjectSessionResult ProjectSession::create(const std::filesystem::path &root,
-                                            bool discard_existing_dirty) {
+                                            bool discard_existing_dirty,
+                                            bool allow_existing_content) {
   if (has_project() && (has_dirty_scenes() || has_dirty_material()) &&
       !discard_existing_dirty) {
     return failure("Project contains unsaved document changes.");
   }
   ProjectIoResult<ProjectWorkspaceStorage> created =
-      ProjectManifestStore::create_in_empty_directory(root);
+      ProjectManifestStore::create_in_directory(root, allow_existing_content);
   if (!created.ok()) {
     return failure(created.error().message);
   }
@@ -2372,6 +2387,8 @@ std::unique_ptr<OpenSceneSession> ProjectSession::make_scene(
   auto session = std::make_unique<SceneSession>(path_array_defaults_,
                                                  std::move(document),
                                                  extrude_defaults_, tool_defaults_);
+  session->editor_mode().bind_workspace_mode([this]{return workspace_mode_;});
+  if(workspace_mode_==EditorWorkspaceMode::Default)session->editor_mode().workspace_mode_changed();
   if (const auto material = default_project_material_id()) {
     session->set_creation_material(MaterialReference::project(*material));
   }

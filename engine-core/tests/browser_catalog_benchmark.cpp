@@ -25,9 +25,9 @@ int main(int argc,char** argv) {
         };
         const auto query=[&](std::string_view text,BrowserAssetFilter filter) {
 #ifdef CC_BROWSER_VIEW_BENCHMARK
-            const auto& items=catalog.itemsView(BrowserCatalog::ContentFolder,text,filter);
+            const auto& items=catalog.itemsView(BrowserCatalog::RootFolder,text,filter);
 #else
-            const auto items=catalog.items(BrowserCatalog::ContentFolder,text,filter);
+            const auto items=catalog.items(BrowserCatalog::RootFolder,text,filter);
 #endif
             return items.size();
         };

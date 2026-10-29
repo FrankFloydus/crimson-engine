@@ -225,7 +225,8 @@ inline EntityId document_command_duplicate_entity_snapshot_tree_impl(
     const std::unordered_map<EntityId, EntityId> *existing_clones_by_source =
         nullptr,
     SceneEntityNameAllocator *name_allocator = nullptr,
-    DocumentDuplicateSnapshotRollback *rollback = nullptr) {
+    DocumentDuplicateSnapshotRollback *rollback = nullptr,
+    std::vector<EngineEntityClone> *engine_clones = nullptr) {
   EntityId duplicate = kInvalidEntityId;
   const std::string duplicate_name =
       name_allocator != nullptr
@@ -266,11 +267,12 @@ inline EntityId document_command_duplicate_entity_snapshot_tree_impl(
     }
   }
 
+  if (engine_clones != nullptr) engine_clones->push_back({snapshot.uuid, duplicate});
   for (const DocumentEntitySnapshot &child : snapshot.children) {
     const EntityId child_duplicate =
         document_command_duplicate_entity_snapshot_tree_impl(
             scene, child, duplicate, include_modeling_object,
-            existing_clones_by_source, name_allocator, rollback);
+            existing_clones_by_source, name_allocator, rollback, engine_clones);
     if (child_duplicate == kInvalidEntityId) {
       return kInvalidEntityId;
     }
@@ -283,13 +285,20 @@ inline EntityId document_command_duplicate_entity_snapshot_tree(
     EntityId parent, bool include_modeling_object = false,
     const std::unordered_map<EntityId, EntityId> *existing_clones_by_source =
         nullptr,
-    SceneEntityNameAllocator *name_allocator = nullptr) {
+    SceneEntityNameAllocator *name_allocator = nullptr,
+    std::vector<EngineEntityClone> *engine_clones = nullptr) {
   DocumentDuplicateSnapshotRollback rollback;
-  const EntityId duplicate = document_command_duplicate_entity_snapshot_tree_impl(
+  std::vector<EngineEntityClone> local_clones;
+  auto &clones = engine_clones != nullptr ? *engine_clones : local_clones;
+  const auto previous_count = clones.size();
+  EntityId duplicate = document_command_duplicate_entity_snapshot_tree_impl(
       scene, snapshot, parent, include_modeling_object,
-      existing_clones_by_source, name_allocator, &rollback);
+      existing_clones_by_source, name_allocator, &rollback, &clones);
+  if (duplicate != kInvalidEntityId && engine_clones == nullptr &&
+      !scene.remap_engine_entity_references(clones)) duplicate = kInvalidEntityId;
   if (duplicate == kInvalidEntityId) {
     document_command_rollback_duplicate_snapshot_tree(scene, rollback);
+    clones.resize(previous_count);
   }
   return duplicate;
 }

@@ -24,6 +24,8 @@ namespace quader {
 /// A native disclosure target containing both the arrow and section title.
 class QtPanelSectionHeader final : public QToolButton {
 public:
+  enum class Presentation { Rounded, Flat };
+
   explicit QtPanelSectionHeader(QWidget *parent = nullptr) : QToolButton(parent) {
     setAutoRaise(true);
     setAutoFillBackground(false);
@@ -51,6 +53,25 @@ public:
   }
 
   [[nodiscard]] int leading_spacing() const { return leading_spacing_; }
+
+  void set_presentation(Presentation presentation) {
+    if (presentation_ != presentation) {
+      presentation_ = presentation;
+      update();
+    }
+  }
+
+  [[nodiscard]] Presentation presentation() const { return presentation_; }
+
+  void set_title_emphasized(bool emphasized) {
+    if (title_emphasized_ != emphasized) {
+      title_emphasized_ = emphasized;
+      updateGeometry();
+      update();
+    }
+  }
+
+  [[nodiscard]] bool title_emphasized() const { return title_emphasized_; }
 
   [[nodiscard]] QRect content_rect() const {
     return rect().adjusted(0, metrics_.px(leading_spacing_), 0, 0);
@@ -83,7 +104,10 @@ protected:
     if (!isDown()) {
       option.state |= QStyle::State_Raised;
     }
-    option.font.setWeight(QFont::DemiBold);
+    const bool themed = qt_application_style_active(&option);
+    const bool flat = themed && presentation_ == Presentation::Flat;
+    option.font.setWeight(flat && !title_emphasized_ ? QFont::Medium
+                                                   : QFont::DemiBold);
     option.fontMetrics = QFontMetrics(option.font);
     option.rect = content_rect();
     for (const QPalette::ColorGroup group :
@@ -93,48 +117,59 @@ protected:
     }
     QStylePainter painter(this);
     painter.setFont(option.font);
-    const bool themed = qt_application_style_active(&option);
     if (themed) {
       const QPalette::ColorGroup group =
           isEnabled() ? (isActiveWindow() ? QPalette::Active
                                          : QPalette::Inactive)
                       : QPalette::Disabled;
-      QColor fill = palette().color(group, QPalette::Button);
+      QColor fill = palette().color(
+          group, flat ? QPalette::Base : QPalette::Button);
       const QColor tint = palette().color(
           group, isDown() ? QPalette::Shadow : QPalette::WindowText);
-      const qreal amount = isDown() ? 0.16 : (underMouse() ? 0.035 : 0.0);
+      const qreal amount =
+          isDown() ? 0.16
+                   : flat ? (underMouse() ? 0.06 : 0.035)
+                          : (underMouse() ? 0.035 : 0.0);
       fill = QColor::fromRgbF(
           fill.redF() + (tint.redF() - fill.redF()) * amount,
           fill.greenF() + (tint.greenF() - fill.greenF()) * amount,
           fill.blueF() + (tint.blueF() - fill.blueF()) * amount);
-      // The enclosing section owns its one outline; leave it visible beneath
-      // this child, including the rounded upper corners and the leading gap.
       const qreal inset = 1.0 / std::max<qreal>(1.0, devicePixelRatioF());
-      const QRectF surface = QRectF(option.rect).adjusted(
-          inset, inset, -inset, -inset);
-      painter.setRenderHint(QPainter::Antialiasing);
-      painter.setPen(Qt::NoPen);
-      painter.setBrush(fill);
-      QPainterPath header_surface;
-      header_surface.setFillRule(Qt::WindingFill);
-      const qreal radius = metrics_.px(6.0);
-      header_surface.addRoundedRect(surface, radius, radius);
-      if (isChecked()) {
-        header_surface.addRect(QRectF(surface.left(), surface.bottom() - radius,
-                                     surface.width(), radius));
-      }
-      painter.drawPath(header_surface.simplified());
-      if (isChecked()) {
-        painter.setPen(QPen(palette().color(group, QPalette::Midlight), inset));
-        painter.drawLine(QPointF(surface.left(), surface.bottom()),
-                         QPointF(surface.right(), surface.bottom()));
+      if (flat) {
+        painter.fillRect(option.rect, fill);
+        painter.fillRect(
+            QRectF(option.rect.left(), option.rect.bottom() + 1.0 - inset,
+                   option.rect.width(), inset),
+            palette().color(group, QPalette::Mid));
+      } else {
+        // The enclosing section owns its one outline; leave it visible beneath
+        // this child, including the rounded upper corners and the leading gap.
+        const QRectF surface = QRectF(option.rect).adjusted(
+            inset, inset, -inset, -inset);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(fill);
+        QPainterPath header_surface;
+        header_surface.setFillRule(Qt::WindingFill);
+        const qreal radius = metrics_.px(6.0);
+        header_surface.addRoundedRect(surface, radius, radius);
+        if (isChecked()) {
+          header_surface.addRect(QRectF(surface.left(), surface.bottom() - radius,
+                                       surface.width(), radius));
+        }
+        painter.drawPath(header_surface.simplified());
+        if (isChecked()) {
+          painter.setPen(QPen(palette().color(group, QPalette::Midlight), inset));
+          painter.drawLine(QPointF(surface.left(), surface.bottom()),
+                           QPointF(surface.right(), surface.bottom()));
+        }
       }
       option.rect.adjust(metrics_.px(8), 0, -metrics_.px(8), 0);
       painter.drawControl(QStyle::CE_ToolButtonLabel, option);
     } else {
       painter.drawComplexControl(QStyle::CC_ToolButton, option);
     }
-    if (hasFocus()) {
+    if (hasFocus() && option.state.testFlag(QStyle::State_KeyboardFocusChange)) {
       if (themed) {
         const qreal line_width =
             1.0 / std::max<qreal>(1.0, devicePixelRatioF());
@@ -147,8 +182,12 @@ protected:
         painter.setPen(QPen(palette().color(group, QPalette::Accent),
                             line_width));
         painter.setBrush(Qt::NoBrush);
-        painter.drawRoundedRect(focus_rect, metrics_.px(4.0),
-                                 metrics_.px(4.0));
+        if (presentation_ == Presentation::Flat) {
+          painter.drawRect(focus_rect);
+        } else {
+          painter.drawRoundedRect(focus_rect, metrics_.px(4.0),
+                                   metrics_.px(4.0));
+        }
       } else {
         QStyleOptionFocusRect focus;
         focus.initFrom(this);
@@ -205,6 +244,8 @@ private:
 
   QtUiScaleMetrics metrics_;
   int leading_spacing_ = 0;
+  Presentation presentation_ = Presentation::Rounded;
+  bool title_emphasized_ = false;
 };
 
 } // namespace quader

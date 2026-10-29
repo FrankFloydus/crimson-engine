@@ -61,6 +61,8 @@ struct QdrSceneBinaryDependencyDecodeResult final {
   std::vector<ProjectAssetId> material_ids;
   std::vector<ProjectAssetReference> project_asset_dependencies;
   QdrSceneBinaryDecodeStats stats;
+  std::vector<ProjectAssetId> engine_asset_ids;
+  bool engine_asset_ids_complete = true;
 };
 
 /// Validated face-slot usage, including the isolated retired schema-10 dialect.
@@ -81,6 +83,10 @@ encode_qdr_scene_binary(const QdrProjectWriteSnapshot &snapshot);
     const quader_io::QdrBinaryContainerReadResult &container);
 [[nodiscard]] QdrSceneBinaryDecodeResult decode_qdr_scene_binary_with_stats(
     const quader_io::QdrBinaryContainerReadResult &container);
+[[nodiscard]] QdrSceneBinaryDependencyDecodeResult
+decode_qdr_scene_binary_engine_asset_dependencies(
+    const quader_io::QdrBinaryContainerReadResult &container);
+
 [[nodiscard]] QdrSceneBinaryDependencyDecodeResult
 decode_qdr_scene_binary_dependencies(
     const quader_io::QdrBinaryContainerReadResult &container);

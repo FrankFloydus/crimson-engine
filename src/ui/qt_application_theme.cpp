@@ -42,6 +42,20 @@ QColor qt_current_item_outline_color() {
   return QColor(255, 143, 24);
 }
 
+QColor qt_muted_disabled_button_text_color(const QPalette &palette, bool themed) {
+  if (!themed) {
+    return palette.color(QPalette::Disabled, QPalette::ButtonText);
+  }
+  const QColor text = palette.color(QPalette::Disabled, QPalette::PlaceholderText);
+  const QColor surface = palette.color(QPalette::Disabled, QPalette::Button);
+  constexpr qreal kSurfaceContribution = 0.4;
+  return QColor::fromRgbF(
+      text.redF() + (surface.redF() - text.redF()) * kSurfaceContribution,
+      text.greenF() + (surface.greenF() - text.greenF()) * kSurfaceContribution,
+      text.blueF() + (surface.blueF() - text.blueF()) * kSurfaceContribution,
+      text.alphaF() + (surface.alphaF() - text.alphaF()) * kSurfaceContribution);
+}
+
 namespace {
 
 void apply_shared_obsidian_roles(QPalette &palette) {

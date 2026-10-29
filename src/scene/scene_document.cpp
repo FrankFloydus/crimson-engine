@@ -27,6 +27,47 @@
 
 namespace quader {
 
+bool engine_components_metadata_is_valid(std::uint32_t version, std::size_t payload_bytes,
+                                         std::span<const EngineEntityReference> references,
+                                         std::span<const std::string> asset_references) {
+  if (version != kEngineComponentsEnvelopeVersion || payload_bytes == 0u ||
+      payload_bytes > kMaximumEngineComponentsBytes || references.size() > 256u ||
+      asset_references.size() > 4096u) return false;
+  std::unordered_set<std::string> slots;
+  for (const auto &reference : references) {
+    if (reference.slot.empty() || reference.slot.size() > 128u ||
+        !slots.insert(reference.slot).second ||
+        !uuids::uuid::from_string(reference.entity_uuid).has_value()) return false;
+  }
+  std::unordered_set<std::string> assets;
+  for (const auto &reference : asset_references) {
+    const auto uuid = uuids::uuid::from_string(reference);
+    if (!uuid || !assets.insert(uuids::to_string(*uuid)).second) return false;
+  }
+  return true;
+}
+
+bool engine_components_is_valid(const EngineComponentsComponent &value) {
+  return (value.asset_references_complete || value.asset_references.empty()) &&
+         engine_components_metadata_is_valid(value.version, value.text().size(), value.entity_references, value.asset_references);
+}
+
+bool engine_scene_settings_is_valid(const EngineSceneSettings &value) {
+  if (value.version != kEngineComponentsEnvelopeVersion || value.serialized_settings.empty() ||
+      value.serialized_settings.size() > kMaximumEngineComponentsBytes) return false;
+  for (const auto *uuid : {&value.active_camera_uuid, &value.player_uuid, &value.environment_uuid})
+    if (!uuid->empty() && !uuids::uuid::from_string(*uuid).has_value()) return false;
+  return true;
+}
+
+void remap_engine_entity_references(EngineComponentsComponent &value,
+                                   std::span<const EngineEntityUuidRemap> remaps) {
+  for (auto &reference : value.entity_references) {
+    const auto found = std::ranges::find(remaps, reference.entity_uuid, &EngineEntityUuidRemap::source);
+    if (found != remaps.end()) reference.entity_uuid = found->destination;
+  }
+}
+
 struct SceneModelingProjectionCheckpoint::State final {
   struct ParticipantRecord final {
     EntityId entity = kInvalidEntityId;
@@ -1453,6 +1494,8 @@ bool SceneDocument::restore_modeling_projection_checkpoint_impl(
       decrement_binding_reference(curve_binding_reference_counts_,
                                   component->curve);
     }
+    if (engine_components_observer_)
+      if (const auto *value = registry_.try_get<EngineComponentsComponent>(entity)) engine_components_observer_(*value);
     registry_.destroy(entity);
     entities_.erase(entity_id);
     ids_by_entity_.erase(entity_key(entity));
@@ -1533,6 +1576,11 @@ bool SceneDocument::restore_modeling_projection_checkpoint_impl(
       restore_optional_component(registry_, entity,
                                  structure.texture_mapping);
       restore_optional_component(registry_, entity, structure.light);
+      if (engine_components_observer_) {
+        if (const auto *value = registry_.try_get<EngineComponentsComponent>(entity)) engine_components_observer_(*value);
+        if (structure.engine_components) engine_components_observer_(*structure.engine_components);
+      }
+      restore_optional_component(registry_, entity, structure.engine_components);
       restore_optional_component(registry_, entity,
                                  structure.instance_definition);
       restore_optional_component(registry_, entity,
@@ -2169,6 +2217,8 @@ bool SceneDocument::destroy_entities(std::span<const EntityId> ids) {
       decrement_binding_reference(curve_binding_reference_counts_,
                                   component->curve);
     }
+    if (engine_components_observer_)
+      if (const auto *value = registry_.try_get<EngineComponentsComponent>(entity)) engine_components_observer_(*value);
     registry_.destroy(entity);
     entities_.erase(entity_id);
     ids_by_entity_.erase(entity_key(entity));
@@ -3254,8 +3304,62 @@ bool SceneDocument::clear_light(EntityId id) {
   return true;
 }
 
+bool SceneDocument::set_engine_components(EntityId id, EngineComponentsComponent components) {
+  const auto entity = require_entity(id);
+  if (entity == entt::null || !engine_components_is_valid(components)) return false;
+  if (const auto *current = engine_components(id); current != nullptr && *current == components) return true;
+  if (engine_components_observer_) {
+    if (const auto *current = engine_components(id)) engine_components_observer_(*current);
+    engine_components_observer_(components);
+  }
+  registry_.emplace_or_replace<EngineComponentsComponent>(entity, std::move(components));
+  ++render_component_revision_;
+  ++hierarchy_presentation_revision_;
+  mark_dirty(id, SceneModelingProjectionDomain::Structure);
+  return true;
+}
+
+bool SceneDocument::clear_engine_components(EntityId id) {
+  const auto entity = require_entity(id);
+  if (entity == entt::null || !registry_.all_of<EngineComponentsComponent>(entity)) return false;
+  if (engine_components_observer_) engine_components_observer_(registry_.get<EngineComponentsComponent>(entity));
+  registry_.remove<EngineComponentsComponent>(entity);
+  ++render_component_revision_;
+  ++hierarchy_presentation_revision_;
+  mark_dirty(id, SceneModelingProjectionDomain::Structure);
+  return true;
+}
+
+bool SceneDocument::remap_engine_entity_references(std::span<const EngineEntityClone> clones) {
+  std::vector<EngineEntityUuidRemap> remaps;
+  remaps.reserve(clones.size());
+  for (const auto &clone : clones) {
+    if (!exists(clone.destination)) return false;
+    remaps.push_back({clone.source_uuid, uuid(clone.destination)});
+  }
+  std::vector<std::pair<EntityId, EngineComponentsComponent>> updates;
+  for (const auto &clone : clones) {
+    const auto *current = engine_components(clone.destination);
+    if (current == nullptr || current->entity_references.empty()) continue;
+    auto candidate = *current;
+    quader::remap_engine_entity_references(candidate, remaps);
+    if (!engine_components_is_valid(candidate)) return false;
+    if (candidate != *current) updates.emplace_back(clone.destination, std::move(candidate));
+  }
+  for (auto &[entity, candidate] : updates)
+    if (!set_engine_components(entity, std::move(candidate))) return false;
+  return true;
+}
+
+bool SceneDocument::set_engine_settings(std::optional<EngineSceneSettings> settings) {
+  auto candidate = scene_settings_;
+  candidate.engine = std::move(settings);
+  return set_scene_settings(std::move(candidate));
+}
+
 bool SceneDocument::set_scene_settings(SceneSettings settings) {
-  if (!scene_fog_settings_is_valid(settings.fog)) {
+  if (!scene_fog_settings_is_valid(settings.fog) ||
+      (settings.engine && !engine_scene_settings_is_valid(*settings.engine))) {
     return false;
   }
   if (scene_settings_ == settings) {
@@ -3846,6 +3950,11 @@ const LightComponent* SceneDocument::light(EntityId id) const {
   const entt::entity entity = require_entity(id);
   return entity == entt::null ? nullptr
                               : registry_.try_get<LightComponent>(entity);
+}
+
+const EngineComponentsComponent *SceneDocument::engine_components(EntityId id) const {
+  const auto entity = require_entity(id);
+  return entity == entt::null ? nullptr : registry_.try_get<EngineComponentsComponent>(entity);
 }
 
 const SceneLayerMembershipComponent *

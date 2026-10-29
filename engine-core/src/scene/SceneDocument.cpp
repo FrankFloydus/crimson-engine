@@ -34,18 +34,10 @@ namespace crimson {
 namespace {
 using Json = nlohmann::json;
 // Legacy component-row metadata is validated during conversion, never written.
-constexpr std::array<std::string_view,17> LegacyComponentTokens{
+constexpr std::array<std::string_view,16> LegacyComponentTokens{
     "transform","actor","motor","controller","navigation","playerInput","lightRig",
     "darknessReveal","camera","cameraFollow","model","collider","directional","point",
-    "environment","particle","quader"};
-void preserveAuthoredActorComponents(EntityRecord& target,const EntityRecord& previous) {
-    target.actor=previous.actor;target.movement=previous.movement;target.controller=previous.controller;
-    target.navigation=previous.navigation;target.enemy=previous.enemy;target.playerInput=previous.playerInput;
-    target.tags=previous.tags;target.effects=previous.effects;target.decal=previous.decal;target.receiveDecals=previous.receiveDecals;
-    target.cameraFollow=previous.cameraFollow;
-    if(previous.camera)target.camera=previous.camera;
-    if(!target.spot&&!target.point&&previous.spot)target.spot=previous.spot; // Retain Crimson-only sources without conflicting local-light kinds.
-}
+    "environment","particle"};
 std::uint32_t readCollisionBits(const Json& value) {
     if(!value.is_number_integer()||(value.is_number_unsigned()?value.get<std::uint64_t>()>UINT32_MAX:value.get<std::int64_t>()<0||value.get<std::int64_t>()>UINT32_MAX))
         throw std::runtime_error("Collision layers and masks must be unsigned 32-bit integers.");
@@ -185,6 +177,9 @@ SceneDecal readDecal(const Json& json) {
     if(json.contains("seed")) {
     const auto& seed=json.at("seed");decal.seed.receiver=parseId(seed.at("receiver"));
     decal.seed.modelId=seed.at("model").get<std::string>();decal.seed.fingerprint=parseId(seed.at("fingerprint"));
+    if(seed.contains("sourceInstance"))decal.seed.sourceInstanceId=parseId(seed.at("sourceInstance"));
+    if(seed.contains("nativeSource")){const auto& source=seed.at("nativeSource");SceneDecalNativeSource provenance;
+        provenance.memberUuid=source.value("member",std::string{});provenance.indexOffset=readCollisionBits(source.at("indexOffset"));provenance.indexCount=readCollisionBits(source.at("indexCount"));decal.seed.nativeSource=std::move(provenance);}
     decal.seed.draw=readCollisionBits(seed.at("draw"));decal.seed.primitive=readCollisionBits(seed.at("primitive"));decal.seed.triangle=readCollisionBits(seed.at("triangle"));
     decal.seed.barycentric=seed.at("barycentric").get<Vec3>();decal.seed.localPoint=seed.at("localPoint").get<Vec3>();decal.seed.localNormal=seed.at("localNormal").get<Vec3>();
     } else if(decal.projection==SceneDecalProjection::Surface)throw std::runtime_error("Surface decal requires seed provenance.");
@@ -197,27 +192,17 @@ Json decalJson(const SceneDecal& decal) {
     Json result={{"asset",decal.asset},{"seed",{{"receiver",hexId(seed.receiver)},{"model",seed.modelId},{"fingerprint",hexId(seed.fingerprint)},
         {"draw",seed.draw},{"primitive",seed.primitive},{"triangle",seed.triangle},{"barycentric",seed.barycentric},{"localPoint",seed.localPoint},{"localNormal",seed.localNormal}}},
         {"tint",decal.tint},{"opacity",decal.opacity},{"edgeFeather",decal.edgeFeather},{"priority",decal.priority}};
+    if(seed.sourceInstanceId)result["seed"]["sourceInstance"]=hexId(seed.sourceInstanceId);
+    if(seed.nativeSource)result["seed"]["nativeSource"]={{"member",seed.nativeSource->memberUuid},{"indexOffset",seed.nativeSource->indexOffset},{"indexCount",seed.nativeSource->indexCount}};
     if(decal.projection==SceneDecalProjection::Box){result["projection"]="Box";result.erase("seed");}
     return result;
 }
 std::string uniqueToken() { return hexId(randomId()) + hexId(randomId()); }
 std::filesystem::path scenePath(const std::filesystem::path& root, const std::string& id) {
-    const auto relative = fromUtf8(id);
-    if (!isAssetUuid(id) && (relative.has_root_path() || relative.extension() != ".crimson-scene" ||
-        relative.parent_path() != std::filesystem::path("assets/scenes")))
-        throw std::runtime_error("Scene asset must be a .crimson-scene file directly under assets/scenes.");
-    const auto path = std::filesystem::weakly_canonical(resolveAssetPath(root,id));
-    if(path.extension()!=".crimson-scene")throw std::runtime_error("Scene identity does not reference a native scene file.");
-    if(contentStorageReady(root))return checkedContentPath(root,path);
-    const auto directory = std::filesystem::weakly_canonical(root / "assets/scenes");
-    if (path.parent_path() != directory)
-        throw std::runtime_error("Scene asset path escapes its managed directory.");
-    // Also reject a redirected assets/scenes directory outside the project.
-    const auto canonicalRoot = std::filesystem::weakly_canonical(root);
-    const auto contained = directory.lexically_relative(canonicalRoot);
-    if (contained.empty() || contained.is_absolute() || *contained.begin() == "..")
-        throw std::runtime_error("Managed scene directory escapes the project.");
-    return path;
+    if(!isAssetUuid(id))throw std::runtime_error("Scene files require a managed UUID.");
+    const auto file=resolveAssetPath(root,id);
+    if(assetPathExtension(file)!=".crimson-scene")throw std::runtime_error("Scene identity does not reference a native scene file.");
+    return checkedContentPath(root,file);
 }
 uint32_t nextOrder(const std::vector<EntityRecord>& records, EntityId parent) {
     uint64_t result{};
@@ -479,6 +464,7 @@ SceneSnapshot readSceneText(std::string_view contents,const std::string& owner,c
         record.order = order.get<uint32_t>();
         record.local = entity.at("local").get<Mat4>();
         if(version>=14)record.visible=entity.value("visible",true);
+        record.nativeGeometry=entity.value("__nativeGeometry",false);
         if (entity.contains("model")) record.model=entity.at("model").get<AssetRef<ModelAsset>>();
         if(version>=25&&entity.contains("meshPaint"))record.meshPaint=readMeshPaint(entity.at("meshPaint"));
         if(entity.contains("blendSettings"))record.blendSettings=readBlendSettings(entity.at("blendSettings"));
@@ -729,16 +715,6 @@ SceneSnapshot readSceneText(std::string_view contents,const std::string& owner,c
             record.collider->showCollisionInGame=c.value("showCollisionInGame",false);
             record.collider->collisionColor=readCollisionColor(c,record.collider->collisionColor);
         }
-        if(version>=9 && entity.contains("quader")) {
-            const auto& q=entity.at("quader");record.quader=QuaderLink{q.value("projectPath",std::string{}),
-                q.value("projectId",std::string{}),q.value("sceneId",std::string{}),q.value("importScale",1.f),
-                q.value("autoSync",true),q.value("refreshMaterials",false)};
-            record.quader->saveKey=q.value("saveKey",std::string{});
-            record.quader->syncLights=q.value("syncLights",true);
-        }
-        if(version>=9 && entity.contains("quaderGenerated")) {
-            const auto& q=entity.at("quaderGenerated");record.quaderGenerated=QuaderGenerated{parseId(q.at("owner")),q.at("sourceKey").get<std::string>()};
-        }
         if(version>=16 && entity.contains("componentOrder")) {
             const auto& authored=entity.at("componentOrder");
             if(!authored.is_array() || authored.size()>AllSceneComponentKinds.size())throw std::runtime_error("Invalid component display order.");
@@ -943,8 +919,9 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if(record.outlinerStyle && record.outlinerStyle->color)
             entity["outlinerStyle"]={{"color",*record.outlinerStyle->color}};
 
-        if (record.model) {
-            entity["model"] = *record.model;
+        if(record.nativeGeometry)entity["__nativeGeometry"]=true;
+        if (record.model||record.nativeGeometry) {
+            if(record.model)entity["model"] = *record.model;
             if(record.meshPaint)entity["meshPaint"]=meshPaintJson(*record.meshPaint);
             if(!record.blendSettings.empty())entity["blendSettings"]=blendSettingsJson(record.blendSettings);
             if(record.primitive) {
@@ -1003,10 +980,6 @@ Json writeScene(const SceneSnapshot& snapshot) {
             if(c.mesh)entity["collider"]["mesh"]={{"positions",c.mesh->positions},{"indices",c.mesh->indices}}; }
         if (record.camera) { const auto& c=*record.camera;entity["camera"]={{"verticalFov",c.verticalFov},{"near",c.nearPlane},{"far",c.farPlane}}; }
         if(record.cameraFollow) {const auto& c=*record.cameraFollow;entity["cameraFollow"]={{"target",hexId(c.target)},{"offset",c.offset},{"worldBasis",c.worldBasis}};}
-        if(record.quader) {const auto& q=*record.quader;entity["quader"]={{"projectPath",q.projectPath},{"projectId",q.projectId},
-            {"sceneId",q.sceneId},{"importScale",q.importScale},{"autoSync",q.autoSync},{"refreshMaterials",q.refreshMaterials},
-            {"saveKey",q.saveKey},{"syncLights",q.syncLights}};}
-        if(record.quaderGenerated) {const auto& q=*record.quaderGenerated;entity["quaderGenerated"]={{"owner",hexId(q.owner)},{"sourceKey",q.sourceKey}};}
         entities.push_back(std::move(entity));
     }
     Json result{{"version",25},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
@@ -1025,7 +998,7 @@ enum EntityField : uint64_t {
     Name=1ull<<0, Parent=1ull<<1, Order=1ull<<2, Local=1ull<<3, Model=1ull<<4, Particle=1ull<<5,
     Directional=1ull<<6, Point=1ull<<7, Environment=1ull<<8, ActorField=1ull<<9, Collider=1ull<<10, CameraField=1ull<<11,
     ModelMaterialField=1ull<<12, CastShadows=1ull<<13, ReceiveShadows=1ull<<14,
-    QuaderField=1ull<<15,QuaderGeneratedField=1ull<<16,LightingScopesField=1ull<<17,
+    LightingScopesField=1ull<<17,
     ModelAnimationField=1ull<<18,VisibleField=1ull<<20,MotorField=1ull<<21,ControllerField=1ull<<22,NavigationField=1ull<<23,
     PlayerInputField=1ull<<24,CameraFollowField=1ull<<27,
     OutlinerStyleField=1ull<<28,NavigationVolumeField=1ull<<29,EnemyField=1ull<<30,
@@ -1041,15 +1014,13 @@ template<class T> bool equalLight(const std::optional<T>& a,const std::optional<
 uint64_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     uint64_t fields=0;
     if(a.name!=b.name)fields|=Name;if(a.parent!=b.parent)fields|=Parent;if(a.order!=b.order)fields|=Order;
-    if(a.local!=b.local)fields|=Local;if(a.model!=b.model)fields|=Model;if(a.particle!=b.particle)fields|=Particle;
+    if(a.local!=b.local)fields|=Local;if(a.model!=b.model||a.nativeGeometry!=b.nativeGeometry)fields|=Model;if(a.particle!=b.particle)fields|=Particle;
     if(!equalLight(a.directional,b.directional))fields|=Directional;if(!equalLight(a.point,b.point))fields|=Point;
     if(!equalLight(a.spot,b.spot))fields|=SpotField;
     if(a.environment.has_value()!=b.environment.has_value() || (a.environment && !sameEnvironment(*a.environment,*b.environment)))fields|=Environment;
     if(a.actor!=b.actor)fields|=ActorField;if(a.collider!=b.collider)fields|=Collider;if(a.camera!=b.camera)fields|=CameraField;
     if(a.modelMaterials!=b.modelMaterials)fields|=ModelMaterialField;
     if(a.castShadows!=b.castShadows)fields|=CastShadows;if(a.receiveShadows!=b.receiveShadows)fields|=ReceiveShadows;
-    if(a.quader!=b.quader)fields|=QuaderField;
-    if(a.quaderGenerated!=b.quaderGenerated)fields|=QuaderGeneratedField;
     if(a.lightingScopes!=b.lightingScopes)fields|=LightingScopesField;
     if(a.modelAnimation!=b.modelAnimation)fields|=ModelAnimationField;
     if(a.modelRagdoll!=b.modelRagdoll)fields|=ModelRagdollField;
@@ -1073,15 +1044,13 @@ uint64_t changedFields(const EntityRecord& a,const EntityRecord& b) {
 }
 void copyFields(EntityRecord& target,const EntityRecord& source,uint64_t fields) {
     if(fields&Name)target.name=source.name;if(fields&Parent)target.parent=source.parent;if(fields&Order)target.order=source.order;
-    if(fields&Local)target.local=source.local;if(fields&Model)target.model=source.model;if(fields&Particle)target.particle=source.particle;
+    if(fields&Local)target.local=source.local;if(fields&Model){target.model=source.model;target.nativeGeometry=source.nativeGeometry;}if(fields&Particle)target.particle=source.particle;
     if(fields&Directional)target.directional=source.directional;if(fields&Point)target.point=source.point;
     if(fields&SpotField)target.spot=source.spot;
     if(fields&Environment)target.environment=source.environment;if(fields&ActorField)target.actor=source.actor;
     if(fields&Collider)target.collider=source.collider;if(fields&CameraField)target.camera=source.camera;
     if(fields&ModelMaterialField)target.modelMaterials=source.modelMaterials;
     if(fields&CastShadows)target.castShadows=source.castShadows;if(fields&ReceiveShadows)target.receiveShadows=source.receiveShadows;
-    if(fields&QuaderField)target.quader=source.quader;
-    if(fields&QuaderGeneratedField)target.quaderGenerated=source.quaderGenerated;
     if(fields&LightingScopesField)target.lightingScopes=source.lightingScopes;
     if(fields&ModelAnimationField)target.modelAnimation=source.modelAnimation;
     if(fields&ModelRagdollField)target.modelRagdoll=source.modelRagdoll;
@@ -1240,7 +1209,7 @@ ScenePersistencePlan prepareScenePersistence(const std::filesystem::path& root,c
             (void)loadNavigationAgentProfile(root,profile->id);continue;
         }
         if(!contentStorageReady(root))throw std::runtime_error("Initialize Content storage before saving converted Navigation Agent Profiles.");
-        const auto file=checkedContentPath(root,root/"Content"/"Navigation"/fromUtf8(profile->id+".crimson-agent-profile"));
+        const auto file=checkedContentPath(root,root/fromUtf8(profile->id+".crimson-agent-profile"));
         if(std::filesystem::exists(file))throw std::runtime_error("A converted Navigation Agent Profile destination already exists without registration.");
         plan.files.push_back({utf8(file.lexically_relative(root)),serializeNavigationAgentProfile(*profile)});
         plan.registrations.push_back({profile->id,file});
@@ -1257,7 +1226,7 @@ ScenePersistencePlan prepareScenePersistence(const std::filesystem::path& root,c
             (void)loadGameplayEffectAsset(root,effect->id);continue;
         }
         if(!contentStorageReady(root))throw std::runtime_error("Initialize Content storage before saving converted Gameplay Effects.");
-        const auto file=checkedContentPath(root,root/"Content"/"Gameplay"/fromUtf8(effect->id+".crimson-effect"));
+        const auto file=checkedContentPath(root,root/fromUtf8(effect->id+".crimson-effect"));
         if(std::filesystem::exists(file))throw std::runtime_error("A converted Gameplay Effect destination already exists without registration.");
         plan.files.push_back({utf8(file.lexically_relative(root)),serializeGameplayEffectAsset(*effect)});
         plan.registrations.push_back({effect->id,file});
@@ -1275,14 +1244,8 @@ std::vector<SceneAssetEntry> scanSceneAssets(const std::filesystem::path& root, 
     try {
         std::vector<StoredAssetPath> files;
         if(contentStorageReady(root))files=storedAssetPaths(root);
-        else {
-            const auto directory = root / "assets/scenes";
-            if (!std::filesystem::exists(directory)) return entries;
-            for(const auto& entry:std::filesystem::directory_iterator(directory))
-                if(entry.is_regular_file())files.push_back({"assets/scenes/"+utf8(entry.path().filename()),entry.path()});
-        }
         for (const auto& entry : files) {
-            if (entry.file.extension() != ".crimson-scene" || !std::filesystem::is_regular_file(entry.file)) continue;
+            if (assetPathExtension(entry.file) != ".crimson-scene" || !std::filesystem::is_regular_file(entry.file)) continue;
             const auto& id = entry.id;
             try {const auto scene=readSceneSnapshot(root,id);entries.push_back({scene.id,scene.name});}
             catch (const std::exception& error) { if (diagnostics) diagnostics->push_back(id + ": " + error.what()); }
@@ -1347,6 +1310,7 @@ void SceneDocument::select(std::vector<EntityId> ids, EntityId primary) {
     selection_ = {std::move(ids),primary}; sanitizeSelection();
 }
 bool SceneDocument::dirty() const {
+    if(authoringCommit_)return false;
     if (history_.dirty()) return true;
     if (!transaction_) return false;
     const auto& command=transaction_->command;
@@ -1355,10 +1319,26 @@ bool SceneDocument::dirty() const {
         return !change.before || !change.after || (changedFields(*change.before,*change.after)&change.fields)!=0;
     });
 }
-bool SceneDocument::resetTransientFrom(const SceneDocument& source) {
+bool SceneDocument::resetTransientFrom(const SceneSnapshot& source) {
+    try {
+        SceneDocument candidate(projectRoot_);
+        candidate.scene_.apply(source.records,source.properties);
+        candidate.name_=source.name.empty()?"Untitled":source.name;
+        candidate.previewCamera_=source.previewCamera;
+        for(const auto& profile:source.stagedNavigationProfiles)if(profile){validateNavigationAgentProfile(*profile);candidate.stagedNavigationProfiles_.emplace(profile->id,profile);}
+        candidate.stagedNavigationControllers_.insert(source.stagedNavigationControllers.begin(),source.stagedNavigationControllers.end());
+        for(const auto& effect:source.stagedGameplayEffects)if(effect){validateGameplayEffectAsset(*effect);candidate.stagedGameplayEffects_.emplace(effect->id,effect);}
+        candidate.stagedGameplayEffectEntities_.insert(source.stagedGameplayEffectEntities.begin(),source.stagedGameplayEffectEntities.end());
+        return resetTransientFrom(candidate);
+    }catch(const std::exception& error){status_=error.what();return false;}
+}
+bool SceneDocument::resetTransientFrom(const SceneDocument& source,std::span<const EntityRecord> additional) {
     if(&source==this){status_="Cannot clone a runtime document into itself.";return false;}
     try {
-        auto candidate=std::make_unique<Scene>();candidate->apply(source.scene().records(),source.scene().properties());
+        auto records=source.scene().records();
+        EntityId next=1;for(const auto& record:records)next=std::max(next,record.id+1);
+        for(const auto& value:additional){if(value.id){const auto existing=std::find_if(records.begin(),records.end(),[&](const auto& record){return record.id==value.id;});if(existing!=records.end()){if(!existing->collider)existing->collider=value.collider;continue;}}auto record=value;record.id=next++;record.parent=NoEntity;record.order=static_cast<std::uint32_t>(records.size());records.push_back(std::move(record));}
+        auto candidate=std::make_unique<Scene>();candidate->apply(records,source.scene().properties());
         auto selection=source.selection_;auto id=source.assetId_;auto name=source.name_;
         scene_.adoptPrepared(*candidate);selection_=std::move(selection);assetId_=std::move(id);name_=std::move(name);
         previewCamera_=source.previewCamera_;loadedFingerprint_=source.loadedFingerprint_;stagedNavigationProfiles_=source.stagedNavigationProfiles_;stagedNavigationControllers_=source.stagedNavigationControllers_;
@@ -1400,7 +1380,7 @@ std::shared_ptr<const GameplayEffectAsset> SceneDocument::gameplayEffect(const s
     }
     const auto found=stagedGameplayEffects_.find(id);if(found==stagedGameplayEffects_.end())return nullptr;
     if(contentStorageReady(projectRoot_))for(const auto& entry:storedAssetPaths(projectRoot_))if(entry.id==id)return nullptr;
-    if(std::filesystem::exists(projectRoot_/"Content"/"Gameplay"/fromUtf8(id+".crimson-effect")))return nullptr;
+    if(std::filesystem::exists(projectRoot_/fromUtf8(id+".crimson-effect")))return nullptr;
     return found->second;
 }
 std::vector<std::shared_ptr<const GameplayEffectAsset>> SceneDocument::stagedGameplayEffects() const {
@@ -1472,19 +1452,16 @@ bool SceneDocument::save(const std::string& name, bool saveAs, bool overwriteExt
                 if((saveAs||entry.id!=assetId_)&&sceneNameKey(entry.name)==key)
                     throw std::runtime_error("A scene named '"+entry.name+"' already exists. Choose another name.");
         }
-        std::string savedId = contentStorageReady(projectRoot_)?canonicalAssetId(assetId_):assetId_;std::filesystem::path file;
+        std::string savedId = canonicalAssetId(assetId_);std::filesystem::path file;
         if (savedId.empty() || saveAs) {
             if(contentStorageReady(projectRoot_)) {
                 savedId=newAssetId();std::string filename=savedName;
                 try {(void)contentFilename(filename+".crimson-scene");}catch(const std::exception&){filename=savedId;}
                 for(std::size_t suffix=1;;++suffix) {
                     const auto candidateFilename=filename+(suffix>1?" "+std::to_string(suffix):std::string{})+".crimson-scene";
-                    file=checkedContentPath(projectRoot_,projectRoot_/"Content"/fromUtf8(candidateFilename));
+                    file=checkedContentPath(projectRoot_,projectRoot_/fromUtf8(candidateFilename));
                     if(!std::filesystem::exists(file))break;
                 }
-            } else {
-                do { savedId = "assets/scenes/" + uniqueToken() + ".crimson-scene"; }
-                while (std::filesystem::exists(scenePath(projectRoot_,savedId)));
             }
         }
         if (!saveAs && !assetId_.empty() && !overwriteExternal && externalFileChanged())
@@ -1668,7 +1645,14 @@ bool SceneDocument::update(const Mutation& mutation) {
 bool SceneDocument::commit() {
     if (!transaction_) return true;
     auto command = transaction_->command;command.afterSelection=selection_;pruneCommand(command);
-    if (!command.entities.empty() || command.beforeProperties) history_.push(std::move(command));
+    if (!command.entities.empty() || command.beforeProperties) {
+        if(authoringCommit_) {
+            SceneSnapshot snapshot;snapshot.id=assetId_;snapshot.name=name_;snapshot.records=scene_.records();snapshot.properties=scene_.properties();
+            try {
+                if(!authoringCommit_(snapshot,command.label)){cancel();status_="The scene edit could not be accepted.";return false;}
+            }catch(const std::exception& error){cancel();status_=error.what();return false;}
+        }else history_.push(std::move(command));
+    }
     transaction_.reset(); return true;
 }
 void SceneDocument::cancel() {
@@ -1727,119 +1711,6 @@ EntityId SceneDocument::create(EntityRecord record, const std::string& label) {
 }
 EntityId SceneDocument::createEmpty(const std::string& name) {
     EntityRecord record; record.name = name; return create(std::move(record),"Create entity");
-}
-EntityId SceneDocument::createQuader(const std::string& name) {
-    EntityRecord record;record.name=name;record.quader.emplace();return create(std::move(record),"Create Quader");
-}
-bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,const std::vector<EntityRecord>& generated,
-    const ModelMaterialRemap& remapMaterials,const ModelPaintRemap& remapPaint,bool preservePlacement,const ModelBlendRemap& remapBlendSettings) {
-    if(transient_ || transaction_){status_="Quader import waits for Edit mode and the current scene edit.";return false;}
-    const auto root=scene_.find(owner);
-    if(!root || !root->quader){status_="Quader entity no longer exists.";return false;}
-    return edit("Import Quader",[&](auto& records,auto& properties) {
-        std::unordered_set<EntityId> removed;
-        std::unordered_map<std::string,EntityId> existing;
-        for(const auto& record:records)if(record.quaderGenerated && record.quaderGenerated->owner==owner) {
-            existing.try_emplace(record.quaderGenerated->sourceKey,record.id);
-            if(preservePlacement)removed.insert(record.id);
-            else for(const auto id:scene_.subtree(record.id))removed.insert(id);
-        }
-        std::vector<EntityRecord> replacements;replacements.reserve(generated.size()+1);
-        std::unordered_map<EntityId,EntityId> remap;
-        std::unordered_set<std::string> keys;
-        const auto allocate=[&](const std::string& key) {
-            if(!keys.insert(key).second)throw std::runtime_error("Quader import has duplicate source identities.");
-            if(const auto found=existing.find(key);found!=existing.end())return found->second;
-            EntityRecord reservation;reservation.id=unusedId(records);records.push_back(reservation);return reservation.id;
-        };
-        EntityRecord imported;imported.id=allocate("Imported");imported.name="Imported";imported.parent=owner;
-        imported.order=nextOrder(records,owner);imported.quaderGenerated=QuaderGenerated{owner,"Imported"};
-        if(const auto previous=scene_.find(imported.id)){
-            imported.visible=previous->visible;imported.outlinerStyle=previous->outlinerStyle;
-            if(preservePlacement){imported.name=previous->name;imported.local=previous->local;imported.parent=previous->parent;imported.order=previous->order;}
-            preserveAuthoredActorComponents(imported,*previous);
-        }
-        replacements.push_back(imported);
-        for(const auto& input:generated) {
-            if(!input.id || !input.quaderGenerated)throw std::runtime_error("Quader import record has no temporary identity.");
-            const auto id=allocate(input.quaderGenerated->sourceKey);
-            if(!remap.emplace(input.id,id).second)throw std::runtime_error("Quader import has duplicate temporary identities.");
-        }
-        for(const auto& input:generated) {
-            auto record=input;record.id=remap.at(input.id);record.parent=input.parent?remap.at(input.parent):imported.id;
-            // Quader has no representation for Crimson's lighting roles, flicker or GI energy. Keep
-            // those authored values on matching source identities/kinds while
-            // source transforms, energy, geometry and shadow flags still sync.
-            if(const auto previous=scene_.find(record.id)) {
-                if(preservePlacement) {
-                    record.name=previous->name;record.local=previous->local;
-                    record.parent=previous->parent;record.order=previous->order;
-                }
-                record.visible=previous->visible;
-                record.outlinerStyle=previous->outlinerStyle;
-                preserveAuthoredActorComponents(record,*previous);
-                if(record.model && previous->model) {
-                    record.meshPaint=remapPaint?remapPaint(*previous,record):previous->meshPaint;
-                    if(remapBlendSettings)record.blendSettings=remapBlendSettings(*previous,record);
-                    else if(record.model==previous->model)record.blendSettings=previous->blendSettings;
-                    else if(!previous->blendSettings.empty())throw std::runtime_error("Quader sync needs source material slots to preserve Blend settings on "+record.name+".");
-                    record.lightingScopes=previous->lightingScopes;
-                    record.meshShading=previous->meshShading;
-                    if(remapMaterials)record.modelMaterials=remapMaterials(*previous,record);
-                    else if(record.model==previous->model)record.modelMaterials=previous->modelMaterials;
-                    else if(!previous->modelMaterials.empty())
-                        throw std::runtime_error("Quader sync needs source material slots to preserve assignments on "+record.name+".");
-                }
-                if(record.point && previous->point) {
-                    record.point->roles=previous->point->roles;
-                    record.point->indirectEnergy=previous->point->indirectEnergy;
-                    record.point->temperatureKelvin=previous->point->temperatureKelvin;
-                    record.point->flicker=previous->point->flicker;
-                    record.point->colorMode=LightColorMode::Color; // Synchronized source RGB owns the active color.
-                }
-                if(input.spot && record.spot && previous->spot) {
-                    record.spot->roles=previous->spot->roles;
-                    record.spot->indirectEnergy=previous->spot->indirectEnergy;
-                    record.spot->temperatureKelvin=previous->spot->temperatureKelvin;
-                    record.spot->flicker=previous->spot->flicker;
-                    record.spot->colorMode=LightColorMode::Color;
-                }
-                if(record.directional && previous->directional) {
-                    record.directional->roles=previous->directional->roles;
-                    record.directional->indirectEnergy=previous->directional->indirectEnergy;
-                    record.directional->shadowAngularDiameter=previous->directional->shadowAngularDiameter;
-                    record.directional->temperatureKelvin=previous->directional->temperatureKelvin;
-                    record.directional->flicker=previous->directional->flicker;
-                    record.directional->colorMode=LightColorMode::Color;
-                }
-                if(record.collider && previous->collider) {
-                    const auto source=record.collider->source;
-                    const auto mesh=record.collider->mesh;
-                    record.collider=previous->collider;record.collider->source=source;record.collider->mesh=mesh;
-                    // Primitive overrides own their local center/orientation as
-                    // well as dimensions. One-sided resizing moves that center.
-                    // The visual parent and generated mesh source still sync.
-                    if(previous->collider->shape!=ColliderShape::Trimesh)record.local=previous->local;
-                }
-            }
-            record.quaderGenerated->owner=owner;replacements.push_back(std::move(record));
-        }
-        std::unordered_set<EntityId> kept;
-        for(const auto& record:replacements)kept.insert(record.id);
-        std::erase_if(records,[&](const auto& record){return removed.contains(record.id) || kept.contains(record.id);});
-        auto linked=std::find_if(records.begin(),records.end(),[&](const auto& record){return record.id==owner;});
-        if(linked==records.end())throw std::runtime_error("Quader owner cannot be replaced by its imported content.");
-        linked->quader=link;
-        records.insert(records.end(),replacements.begin(),replacements.end());
-        const auto lost=[&](EntityId id){return removed.contains(id) && !kept.contains(id);};
-        if(lost(properties.activeEnvironment))properties.activeEnvironment=NoEntity;
-        if(lost(properties.activeCamera))properties.activeCamera=NoEntity;
-        if(lost(properties.playerCharacter))properties.playerCharacter=NoEntity;
-        for(auto& record:records) {
-            if(record.cameraFollow && lost(record.cameraFollow->target)){record.cameraFollow.reset();}
-            if(record.environment && lost(record.environment->sun))record.environment->sun=NoEntity;
-        }
-    });
 }
 EntityId SceneDocument::createModel(const std::string& assetId, const std::string& name, const Mat4& local) {
     EntityRecord record; record.name = name; record.model=AssetRef<ModelAsset>{assetId}; record.local = local;
@@ -2021,7 +1892,6 @@ bool SceneDocument::eraseSelection() {
             record.cameraFollow.reset();
         }
         for(auto& record:records)if(record.environment && removed.contains(record.environment->sun))record.environment->sun=NoEntity;
-        for(auto& record:records)if(record.quaderGenerated && removed.contains(record.quaderGenerated->owner))record.quaderGenerated.reset();
     })) { cancel(); return false; }
     selection_ = {}; return commit();
 }
@@ -2064,11 +1934,6 @@ bool SceneDocument::duplicateInTransaction(const std::vector<EntityId>& roots,st
                 if(const auto target=copied.find(record.decal->seed.receiver);target!=copied.end())record.decal->seed.receiver=target->second;
             }
             if(record.environment)if(const auto sun=copied.find(record.environment->sun);sun!=copied.end())record.environment->sun=sun->second;
-            if(record.quaderGenerated) {
-                const auto owner=copied.find(record.quaderGenerated->owner);
-                if(owner!=copied.end())record.quaderGenerated->owner=owner->second;
-                else record.quaderGenerated.reset();
-            }
         }
     })) return false;
     selection_ = {};
@@ -2147,7 +2012,7 @@ bool SceneDocument::ungroupSelection() {
     for (const auto id : scene_.topmost(selection_.ids)) {
         const auto record=scene_.find(id);
         if (record && !record->model && !record->particle && !record->decal && !record->directional && !record->point && !record->spot && !record->environment &&
-            !record->actor && !record->movement && !record->controller && !record->navigation && !record->tags && !record->effects && !record->playerInput && !record->collider && !record->quader && !record->quaderGenerated && !record->camera && !scene_.children(id).empty()) groups.push_back(id);
+            !record->actor && !record->movement && !record->controller && !record->navigation && !record->tags && !record->effects && !record->playerInput && !record->collider && !record->camera && !scene_.children(id).empty()) groups.push_back(id);
     }
     if (groups.empty()) { status_="Select a group to ungroup."; return false; }
     struct ChildMove { EntityId id,parent; Mat4 local; };

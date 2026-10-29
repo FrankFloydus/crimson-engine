@@ -17,7 +17,6 @@ inline ShaderRuntimePaths selectShaderRuntimePaths(bool development,const Shader
 }
 inline std::vector<std::filesystem::path> shaderRuntimeWatchedRoots(const std::filesystem::path& project,
     const ShaderRuntimePaths& selected) {
-    if(!contentStorageReady(project))return {project/"assets",selected.sources,selected.includes};
-    return {project/"Content",project/"Engine",project/".crimson",selected.sources,selected.includes};
+    return {project,selected.sources,selected.includes};
 }
 }

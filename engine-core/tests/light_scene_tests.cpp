@@ -97,24 +97,7 @@ void missingFieldsAndStrictValidation(){
     require(rejected([](auto& light){light.flicker.period=0;}),"API accepted zero period.");
     require(rejected([](auto& light){light.flicker.color.minimumTint={1,-1,1};}),"API accepted invalid tint.");
 }
-void sourceLightOwnership(){
-    Project project;SceneDocument document(project.root);const auto owner=document.createQuader();
-    QuaderLink link{"C:/authoring/project.quader","project-id","scene-id",1,true,false};
-    EntityRecord point;point.id=1;point.name="Source point";point.point.emplace();point.quaderGenerated=QuaderGenerated{owner,"light/point"};
-    EntityRecord sun;sun.id=2;sun.name="Source sun";sun.directional.emplace();sun.quaderGenerated=QuaderGenerated{owner,"light/sun"};
-    require(document.replaceQuaderImport(owner,link,{point,sun}),document.status());
-    EntityId pointId{},sunId{};for(const auto& value:document.scene().records())if(value.quaderGenerated){if(value.quaderGenerated->sourceKey=="light/point")pointId=value.id;if(value.quaderGenerated->sourceKey=="light/sun")sunId=value.id;}
-    auto p=*document.scene().find(pointId),s=*document.scene().find(sunId);p.point->colorMode=LightColorMode::Temperature;p.point->temperatureKelvin=2700;p.point->flicker=authoredFlicker();
-    s.directional->colorMode=LightColorMode::Temperature;s.directional->temperatureKelvin=8000;s.directional->flicker=authoredFlicker();
-    require(document.updateEntity(pointId,p)&&document.updateEntity(sunId,s),document.status());const auto before=snapshot(document);
-    point.point->color={.2f,.4f,.8f};point.point->radius=14;point.point->intensity=45;sun.directional->color={.8f,.6f,.3f};sun.directional->intensity=3;
-    require(document.replaceQuaderImport(owner,link,{point,sun}),document.status());
-    const auto nextP=document.scene().find(pointId)->point;
-    const auto nextS=document.scene().find(sunId)->directional;
-    require(nextP->colorMode==LightColorMode::Color&&nextP->color==point.point->color&&nextP->radius==14&&nextP->temperatureKelvin==2700&&nextP->flicker==p.point->flicker,"Source sync lost point flicker or did not restore source RGB ownership.");
-    require(nextS->colorMode==LightColorMode::Color&&nextS->color==sun.directional->color&&nextS->temperatureKelvin==8000&&nextS->flicker==s.directional->flicker,"Source sync lost directional flicker or temperature memory.");
-    const auto after=snapshot(document);require(document.undo()&&snapshot(document)==before&&document.redo()&&snapshot(document)==after,"Source light refresh did not preserve atomic history.");
-}
+
 void spotLifecycleAndValidation(){
     Project project;SceneDocument document(project.root);
     const auto id=document.createSpotLight();require(id&&document.save("Spot lights"),document.status());
@@ -155,7 +138,7 @@ void spotLifecycleAndValidation(){
     auto missing=valid;for(auto& entity:missing["entities"])entity.erase("spot");writeFileAtomically(file,missing.dump());const auto missingBytes=read(file);
     SceneDocument ordinary(project.root);require(ordinary.load(document.assetId())&&!ordinary.dirty()&&!ordinary.scene().find(id)->spot&&read(file)==missingBytes,"An older scene acquired a spot component or was rewritten on load.");
 }
-void spotExtractionAndSourceOwnership(){
+void spotExtraction(){
     EntityRecord parent;parent.id=1;parent.name="Affine parent";parent.local=math::translation({3,2,1})*math::eulerRotationXYZ({.1f,.7f,-.2f});
     EntityRecord spot;spot.id=2;spot.parent=1;spot.name="Spot";spot.local=math::translation({0,4,-2})*math::scaling({-2,3,.5f});spot.local[8]+=.2f;spot.spot.emplace();
     spot.spot->innerAngle=15;spot.spot->outerAngle=70;spot.spot->coneFalloff=3;spot.spot->radius=14;spot.spot->castShadows=true;
@@ -175,15 +158,7 @@ void spotExtractionAndSourceOwnership(){
     const auto base=extractScene(scene);require(base.points.front().radius==14&&base.points.front().intensity==35&&base.points.front().color==temperatureColorSrgb(3200),"Static spot extraction retained flicker or transformed range by entity scale.");
     parent.visible=false;scene.apply({spot,parent},{});require(extractScene(scene).points.empty(),"A hidden spot ancestor continued illuminating the scene.");
 
-    Project project;SceneDocument document(project.root);const auto owner=document.createQuader();QuaderLink link{"C:/authoring/project.quader","project-id","scene-id",1,true,false};
-    EntityRecord source;source.id=1;source.name="Generated model";source.quaderGenerated=QuaderGenerated{owner,"source/model"};
-    require(document.replaceQuaderImport(owner,link,{source}),document.status());EntityId generated{};
-    for(const auto& record:document.scene().records())if(record.quaderGenerated&&record.quaderGenerated->sourceKey=="source/model")generated=record.id;
-    auto record=*document.scene().find(generated);record.spot=spot.spot;require(document.updateEntity(generated,record),document.status());
-    const auto before=snapshot(document);source.local=math::translation({2,0,0});require(document.replaceQuaderImport(owner,link,{source}),document.status());
-    require(document.scene().find(generated)->spot==spot.spot,"A Quader refresh discarded a Crimson-authored spot or changed its inactive color state.");
-    const auto after=snapshot(document);require(document.undo()&&snapshot(document)==before&&document.redo()&&snapshot(document)==after,"Spot source preservation escaped atomic import history.");
 }
 }
-int main(){try{persistenceHistoryAndIsolation();missingFieldsAndStrictValidation();sourceLightOwnership();spotLifecycleAndValidation();spotExtractionAndSourceOwnership();std::cout<<"Light scene persistence, validation, history, duplication, Play isolation and source sync passed.\n";return 0;}
+int main(){try{persistenceHistoryAndIsolation();missingFieldsAndStrictValidation();spotLifecycleAndValidation();spotExtraction();std::cout<<"Light scene persistence, validation, history, duplication, Play isolation and source sync passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

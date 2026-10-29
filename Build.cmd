@@ -14,8 +14,6 @@ if not exist "build\Release\build.ninja" (
 )
 cmake --build --preset windows-Release
 if errorlevel 1 goto :failure
-"build\Release\crimson-material-cache.exe" --project-root "%~dp0." --renderer-bin "%~dp0build\Release" --report "%~dp0build\Release\material-cache-preparation.json" --strict
-if errorlevel 1 goto :failure
 echo crimson-renderer ready: build\Release\crimson-renderer.exe
 popd
 exit /b 0

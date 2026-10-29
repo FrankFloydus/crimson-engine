@@ -4,6 +4,8 @@
 #include "render/crimson/crimson_environment.hpp"
 #include "assets/material_document.hpp"
 #include "resources/ResourceManager.h"
+#include "integration/ModelingWorldSnapshot.h"
+#include "integration/native_scene_render_bindings.hpp"
 #include "resources/ImageDecoder.h"
 #include "scene/light_properties.hpp"
 #include "core/color_space.hpp"
@@ -62,7 +64,7 @@ struct CrimsonRichWorld {
 };
 crimson::RenderScene CrimsonRichFrame::scene()const{
     if(!world_)return {settings,{}};
-    crimson::RenderScene result{settings,{},nullptr,nullptr,world_->instances,world_->directional,world_->locals,true,world_};result.shadowInstances=world_->instances;result.shadowWorldId=world_->world_id;result.shadowResolution=1024;result.meshPopulationRevision=world_->revision;result.giWorldId=world_->world_id;result.giCameraId=camera_id;result.giEnvironmentId=world_->world_id;result.modelingPresentation=presentation;return result;
+    crimson::RenderScene result{settings,{},nullptr,nullptr,bindings_?std::span<const crimson::RenderModelInstance>(*instances_):std::span<const crimson::RenderModelInstance>(world_->instances),world_->directional,world_->locals,true,pins_?pins_:std::static_pointer_cast<const void>(world_)};result.shadowInstances=bindings_?std::span<const crimson::RenderModelInstance>(*instances_):std::span<const crimson::RenderModelInstance>(world_->instances);result.shadowWorldId=world_->world_id;result.shadowResolution=1024;result.meshPopulationRevision=world_->revision^(bindings_?bindings_->revision*1099511628211ull:0);result.giWorldId=world_->world_id;result.giCameraId=camera_id;result.giEnvironmentId=world_->world_id;result.modelingPresentation=presentation;return result;
 }
 struct CrimsonRichScene::Impl {
     crimson::shared::Renderer& renderer;std::filesystem::path root;crimson::ResourceManager resources;
@@ -72,20 +74,22 @@ struct CrimsonRichScene::Impl {
     std::map<std::string,Image> images;
     std::map<std::uint64_t,std::shared_ptr<const CrimsonStandardMaterial>> materials;
     std::map<std::uint64_t,std::shared_ptr<const RichOccurrence>> occurrences;
-    std::shared_ptr<const CrimsonRichWorld> accepted;
+    mutable std::map<std::string,std::shared_ptr<const crimson::CollisionMesh>> collision_geometry;
+    std::shared_ptr<const CrimsonRichWorld> accepted,authoring;
+    mutable std::shared_ptr<const crimson::integration::ModelingWorldSnapshot> accepted_snapshot,authoring_snapshot;
     crimson::ResourceHandle<crimson::PreparedEnvironment> environment;
     crimson::ResourceHandle<crimson::DecodedImage> uv_debug_image;
     std::string environment_id,message,domain;std::uint64_t environment_revision{},revision{},world_id{};
     RenderSceneBindingKey binding;bool has_binding{},pending{},environment_pending{};
     explicit Impl(crimson::shared::Renderer& owner,std::filesystem::path path):renderer(owner),root(std::move(path)),world_id(new_world_identity()){}
     ~Impl(){resources.stop();clear();}
-    void clear(){accepted.reset();occurrences.clear();materials.clear();images.clear();for(auto& [key,entry]:geometry){(void)key;if(!entry.id.empty())renderer.evictModel(entry.id);}geometry.clear();environment={};environment_revision=0;environment_id.clear();has_binding=false;domain.clear();pending=environment_pending=false;}
+    void clear(){collision_geometry.clear();accepted_snapshot.reset();authoring_snapshot.reset();authoring.reset();accepted.reset();occurrences.clear();materials.clear();images.clear();for(auto& [key,entry]:geometry){(void)key;if(!entry.id.empty())renderer.evictModel(entry.id);}geometry.clear();environment={};environment_revision=0;environment_id.clear();has_binding=false;domain.clear();pending=environment_pending=false;}
     void bind(const RenderSceneBindingKey& next){
         if(has_binding&&binding==next)return;
         binding=next;has_binding=true;world_id=new_world_identity();
         domain=std::to_string(world_id)+":"+std::to_string(next.scene_session_id)+":"+
             std::to_string(next.activation_generation)+":"+std::to_string(next.binding_revision)+":";
-        accepted.reset();occurrences.clear();materials.clear();images.clear();
+        collision_geometry.clear();accepted_snapshot.reset();authoring_snapshot.reset();authoring.reset();accepted.reset();occurrences.clear();materials.clear();images.clear();
         // Frozen frames retain their immutable occurrence/geometry leases.
         // The normal prune boundary evicts only after the final frame releases.
         for(auto& [key,entry]:geometry){(void)key;entry.wanted=false;entry.request={};}
@@ -122,8 +126,13 @@ struct CrimsonRichScene::Impl {
 };
 CrimsonRichScene::CrimsonRichScene(crimson::shared::Renderer& renderer,std::filesystem::path root):impl_(std::make_unique<Impl>(renderer,std::move(root))){}
 CrimsonRichScene::~CrimsonRichScene()=default;
-bool CrimsonRichScene::prepare(std::shared_ptr<const CrimsonSceneProjection> source){
+bool CrimsonRichScene::prepare(std::shared_ptr<const CrimsonSceneProjection> source,bool authoring){
     auto& state=*impl_;state.resources.pump();state.pending=false;state.message.clear();if(!source||!source->source)return false;state.bind(source->source->scene_binding);
+    auto& accepted=authoring?state.authoring:state.accepted;auto& publication=authoring?state.authoring_snapshot:state.accepted_snapshot;
+    if(accepted&&accepted->source==source){
+        for(auto it=state.geometry.begin();it!=state.geometry.end();){auto& entry=it->second;if(!entry.wanted&&entry.lease.use_count()==1){entry.request={};if(!entry.id.empty())state.renderer.evictModel(entry.id);it=state.geometry.erase(it);}else ++it;}
+        return true;
+    }
     for(auto& [key,entry]:state.geometry){(void)key;entry.wanted=false;}for(auto& [key,entry]:state.images){(void)key;entry.wanted=false;}
     auto candidate=std::make_shared<CrimsonRichWorld>();candidate->source=source;candidate->world_id=state.world_id;std::set<std::uint64_t> live_instances,live_materials;bool ready=true;
     try {
@@ -136,17 +145,44 @@ bool CrimsonRichScene::prepare(std::shared_ptr<const CrimsonSceneProjection> sou
             bool cast=true;for(const auto& [id,value]:source->instance_cast_shadows)if(id==instance.id){cast=value;break;}crimson::Mat4 world;world.values=instance.world_from_local.values;
             auto& previous=state.occurrences[instance.id];if(!previous||previous->geometry!=geometry||previous->world!=world||previous->material_pins!=material_pins||previous->double_sided!=instance.double_sided||previous->cast_shadows!=cast||previous->context_dimmed!=instance.context_dimmed){auto occurrence=std::make_shared<RichOccurrence>();occurrence->geometry=geometry;occurrence->geometry_lease=entry.lease;occurrence->identity=instance.id;occurrence->resource_revision=resource.revision();occurrence->world=world;occurrence->double_sided=instance.double_sided;occurrence->cast_shadows=cast;occurrence->context_dimmed=instance.context_dimmed;occurrence->material_pins=std::move(material_pins);for(const auto& material:occurrence->material_pins){auto surface=material->surface;surface.doubleSided=instance.double_sided;surface.receiveFog=true;occurrence->materials.push_back(std::move(surface));occurrence->textures.push_back(material->bindings);}previous=std::move(occurrence);}candidate->owners.push_back(previous);
         }
-        if(ready){for(const auto& owner:candidate->owners){candidate->instances.push_back({owner->identity,{owner->geometry,owner->world},&owner->textures,owner->resource_revision,true,false,&owner->materials});candidate->instances.back().castShadows=owner->cast_shadows;candidate->instances.back().receiveShadows=true;candidate->instances.back().modelingContextDimmed=owner->context_dimmed;}
+        if(ready){for(const auto& owner:candidate->owners){candidate->instances.push_back({owner->identity,{owner->geometry,owner->world},&owner->textures,owner->resource_revision,true,false,&owner->materials});candidate->instances.back().castShadows=owner->cast_shadows;candidate->instances.back().receiveShadows=true;candidate->instances.back().modelingContextDimmed=owner->context_dimmed;if(const auto native=source->native_instances.find(owner->identity);native!=source->native_instances.end())candidate->instances.back().sourceInstanceId=native->second.source_instance_id;}
             for(const auto& source_light:source->lights){const auto& light=source_light.light;const auto values=light_engine_values(light);const auto energy=values.preview_energy*std::numbers::pi_v<float>;const auto color=display_color(light.color);const auto position=transform_point(source_light.world_transform,{});auto direction=transform_vector(source_light.world_transform,{0,-1,0});direction=length(direction)>1e-6f?normalize(direction):QVec3{0,-1,0};if(light.type==LightType::Directional){crimson::DirectionalLight value;value.entityId=source_light.entity_id;value.direction=vector(direction);value.color=color;value.intensity=energy;value.enabled=energy>0;value.castShadows=light.casts_shadows;candidate->directional.push_back(value);}else{crimson::PointLight value;value.entityId=source_light.entity_id;value.position=vector(position);value.direction=vector(direction);value.color=color;value.intensity=energy;value.enabled=energy>0;value.radius=std::max(.01f,light.range);value.attenuation=light.distance_attenuation;value.castShadows=light.casts_shadows;value.type=light.type==LightType::Spot?crimson::LocalLightType::Spot:crimson::LocalLightType::Point;candidate->locals.push_back(value);}}
             if(candidate->directional.size()>crimson::MaxDirectionalLights||candidate->locals.size()>crimson::MaximumClusteredPointLights)throw std::runtime_error("Rendered modeling lights exceed the canonical Crimson lighting budget.");
-            const bool changed=!state.accepted||state.accepted->source!=source||state.accepted->owners!=candidate->owners;if(changed){candidate->revision=++state.revision;state.accepted=std::move(candidate);}
+            const bool changed=!accepted||accepted->source!=source||accepted->owners!=candidate->owners;if(changed){candidate->revision=++state.revision;accepted=std::move(candidate);publication.reset();}
         }
     }catch(const std::exception& error){state.message=error.what();ready=false;}
-    state.prune(live_instances,live_materials);if(!ready&&state.message.empty())state.message="Preparing Rendered geometry and materials…";return ready&&state.accepted&&state.accepted->source==source;
+    state.prune(live_instances,live_materials);if(!ready&&state.message.empty())state.message="Preparing Rendered geometry and materials…";return ready&&accepted&&accepted->source==source;
+}
+std::shared_ptr<const crimson::integration::ModelingWorldSnapshot> CrimsonRichScene::snapshot(bool authoring)const{
+    auto& state=*impl_;const auto& world=authoring?state.authoring:state.accepted;
+    auto& publication=authoring?state.authoring_snapshot:state.accepted_snapshot;
+    if(!world)return {};if(publication)return publication;
+    auto result=std::make_shared<crimson::integration::ModelingWorldSnapshot>();
+    result->source_session=world->source->source->scene_binding.scene_session_id;result->generation=world->source->generation;
+    auto render=std::make_shared<crimson::RenderWorldSnapshot>();render->shadowInstances=world->instances;render->directional=world->directional;render->points=world->locals;for(auto& light:render->directional)light.entityId=hash("modeling-light:"+std::to_string(result->source_session)+":"+std::to_string(light.entityId));for(auto& light:render->points)light.entityId=hash("modeling-light:"+std::to_string(result->source_session)+":"+std::to_string(light.entityId));render->pinned=world;render->shadowWorldId=world->world_id;result->render=std::move(render);
+    for(std::size_t index=0;index<world->instances.size();++index)if(const auto found=world->source->native_instances.find(world->instances[index].entityId);found!=world->source->native_instances.end()){crimson::Mat4 relative;relative.values=found->second.entity_from_local.values;result->native_instances.push_back({index,found->second.entity_uuid,relative,world->owners[index]->geometry->source_slots});auto& binding=result->native_instances.back();binding.source_instance_id=found->second.source_instance_id;binding.member_uuid=found->second.member_uuid;binding.index_offset=found->second.index_offset;binding.index_count=found->second.index_count;const auto geometry=world->owners[index]->geometry;binding.original_lod=[geometry](std::uint32_t primitive,std::stop_token stop)->std::shared_ptr<const crimson::ModelPrimitive>{if(stop.stop_requested())return {};const auto upload=std::find_if(geometry->uploads.begin(),geometry->uploads.end(),[&](const auto& value){return value->primitive==primitive;});return upload==geometry->uploads.end()?std::shared_ptr<const crimson::ModelPrimitive>{}:std::shared_ptr<const crimson::ModelPrimitive>(*upload,&(*upload)->geometry);};}
+    std::set<std::string> collision_keys;
+    const auto append=[&](const RenderMeshAssetSnapshot& mesh,const QMat4& placement,std::span<const std::uint32_t> indices,const std::string& uuid,const QMat4& relative){
+        if(!mesh.renderable()||indices.empty())return;
+        const auto key=std::to_string(mesh.geometry_token)+":"+std::to_string(mesh.mesh_revision)+":"+std::to_string(reinterpret_cast<std::uintptr_t>(mesh.positions.data()))+":"+std::to_string(indices.data()-mesh.indices.data())+":"+std::to_string(indices.size());collision_keys.insert(key);
+        auto& collision=state.collision_geometry[key];if(!collision){
+            if(!mesh.positions.empty()&&mesh.positions.size()!=mesh.vertices.size())throw std::runtime_error("Modeling collision position count is invalid.");
+            std::vector<crimson::Vec3> positions;positions.reserve(mesh.vertices.size());
+            for(std::size_t i=0;i<mesh.vertices.size();++i){const auto value=mesh.positions.empty()?mesh.vertices[i].position:mesh.positions[i];positions.push_back({value.x,value.y,value.z});}
+            collision=crimson::makeCollisionMesh(std::move(positions),{indices.begin(),indices.end()});
+        }
+        crimson::EntityRecord record;record.name="Modeling collision";record.local.values=placement.values;record.collider=crimson::SceneCollider{};record.collider->shape=crimson::ColliderShape::Trimesh;record.collider->mesh=collision;if(!uuid.empty()){crimson::Mat4 local;local.values=relative.values;result->native_collisions.push_back({result->collision_records.size(),uuid,local});}result->collision_records.push_back(std::move(record));
+    };
+    const auto& source=*world->source->source;
+    for(const auto& mesh:source.meshes)if(mesh.mesh_component.generate_collisions&&mesh_collision_supported(mesh.mesh_component))append(mesh.mesh,mesh.world_transform,mesh.mesh.indices,mesh.entity_uuid,{});
+    for(const auto& primitive:source.instance_primitives)for(const auto& occurrence:primitive.occurrences)if(occurrence.generate_collisions){const auto offset=primitive.primitive.index_offset,count=primitive.primitive.index_count;if(offset>primitive.mesh.indices.size()||count>primitive.mesh.indices.size()-offset)throw std::runtime_error("Modeling collision index range is invalid.");append(primitive.mesh,occurrence.world_transform,primitive.mesh.indices.subspan(offset,count),occurrence.entity_uuid,primitive.member_from_definition);}
+    std::erase_if(state.collision_geometry,[&](const auto& entry){return !collision_keys.contains(entry.first);});publication=std::move(result);return publication;
 }
 bool CrimsonRichScene::prepare_environment(const std::string& id){auto& state=*impl_;if(!state.environment||state.environment_id!=id){state.environment_id=id;state.environment_revision=0;crimson::ResourceRequestOptions options;options.priority=crimson::ResourcePriority::Visible;options.retainLoader=false;options.cancelWhenUnused=true;const auto root=state.root;state.environment=state.resources.requestDerived<crimson::PreparedEnvironment>("quader-ibl:"+id,[root,id](std::stop_token stop){if(stop.stop_requested())throw std::runtime_error("Rendered environment canceled.");auto value=std::make_shared<const crimson::PreparedEnvironment>(prepare_crimson_packaged_environment(root,id));if(stop.stop_requested())throw std::runtime_error("Rendered environment canceled.");std::size_t bytes=value->data.diffuse.rgba.size()*sizeof(float)+value->data.brdf.size()*sizeof(float);for(const auto& mip:value->data.specular)bytes+=mip.rgba.size()*sizeof(float);return crimson::ResourceLoadResult<crimson::PreparedEnvironment>{value,bytes,value->key,{}};},std::move(options));}const auto ready=state.environment.snapshot();if(!ready){state.environment_pending=state.environment.state()!=crimson::ResourceState::Failed;if(!state.environment_pending)state.message=state.environment.diagnostic();return false;}if(state.environment_revision!=ready.revision()){const auto result=state.renderer.publish_modeling_environment(*ready);if(!result.ok()){state.message=std::string(result.error_message());return false;}state.environment_revision=ready.revision();}state.environment_pending=false;return true;}
-std::shared_ptr<const CrimsonRichFrame> CrimsonRichScene::view(const SceneSettings& settings,const ViewportCameraState& camera,const ViewportCameraPose& pose,crimson::AntiAliasing aa,std::uint64_t camera_id,const crimson::ModelingPresentation& controls,bool scene_lighting){
+std::shared_ptr<const CrimsonRichFrame> CrimsonRichScene::view(const SceneSettings& settings,const ViewportCameraState& camera,const ViewportCameraPose& pose,crimson::AntiAliasing aa,std::uint64_t camera_id,const crimson::ModelingPresentation& controls,bool scene_lighting,std::shared_ptr<const crimson::integration::NativeSceneRenderBindings> bindings){
     auto& state=*impl_;
+    // Every native rich target needs the modeling environment resources (also
+    // its BRDF lookup), even when Engine scene lighting disables preview IBL.
     if(!state.accepted||!prepare_environment(settings.environment.environment_id))return {};
     try{
         auto frame=std::make_shared<CrimsonRichFrame>();
@@ -176,10 +212,29 @@ std::shared_ptr<const CrimsonRichFrame> CrimsonRichScene::view(const SceneSettin
             const auto image=state.uv_debug_image.snapshot();if(!image){const bool failed=state.uv_debug_image.state()==crimson::ResourceState::Failed;state.pending|=!failed;if(failed)state.message=state.uv_debug_image.diagnostic();return {};}
             packet->uvDebugImage=image.shared();
         }
-        frame->presentation=std::move(packet);frame->world_=state.accepted;frame->source_generation=state.accepted->source->generation;frame->camera_id=camera_id;return frame;
+        frame->presentation=std::move(packet);frame->world_=state.accepted;frame->bindings_=std::move(bindings);
+        if(frame->bindings_){
+            frame->instances_=std::make_shared<std::vector<crimson::RenderModelInstance>>(state.accepted->instances);
+            struct Pins{std::shared_ptr<const CrimsonRichWorld> world;std::shared_ptr<const crimson::integration::NativeSceneRenderBindings> bindings;std::shared_ptr<std::vector<crimson::RenderModelInstance>> instances;std::vector<std::shared_ptr<const crimson::integration::NativeMaterialApplication>> materials;};
+            auto pins=std::make_shared<Pins>();pins->world=state.accepted;pins->bindings=frame->bindings_;pins->instances=frame->instances_;
+            for(std::size_t index=0;index<frame->instances_->size();++index){
+                auto& instance=(*frame->instances_)[index];
+                const auto native=state.accepted->source->native_instances.find(instance.entityId);if(native==state.accepted->source->native_instances.end())continue;
+                const auto binding=frame->bindings_->entities.find(native->second.entity_uuid);if(binding==frame->bindings_->entities.end())continue;
+                crimson::Mat4 local;local.values=native->second.entity_from_local.values;instance.entityId=binding->second.entity;instance.model.transform=binding->second.presented_world*local;instance.pickable=true;
+                crimson::integration::apply_native_render_flags(instance,binding->second);
+                if(instance.materials&&instance.textures)if(auto materials=crimson::integration::apply_native_materials(binding->second,
+                    state.accepted->owners[index]->geometry->source_slots,*instance.materials,*instance.textures)){
+                    instance.materials=&materials->materials;instance.textures=&materials->textures;pins->materials.push_back(std::move(materials));
+                }
+            }
+            frame->pins_=std::move(pins);
+        }
+        frame->source_generation=state.accepted->source->generation;frame->camera_id=camera_id;return frame;
     }catch(const std::exception& error){state.message=error.what();return {};}
 }
 bool CrimsonRichScene::pending()const{return impl_->pending||impl_->environment_pending;}
 const std::string& CrimsonRichScene::status()const{return impl_->message;}
+void CrimsonRichScene::clear_authoring(){impl_->authoring.reset();impl_->authoring_snapshot.reset();impl_->collision_geometry.clear();}
 void CrimsonRichScene::clear(){impl_->clear();}
 }

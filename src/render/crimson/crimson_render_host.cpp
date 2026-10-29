@@ -11,6 +11,8 @@
 #include "render/crimson/crimson_material_thumbnails.hpp"
 #if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
 #include "render/crimson/crimson_rich_scene.hpp"
+#include "integration/ModelingWorldSnapshot.h"
+#include "integration/native_scene_render_bindings.hpp"
 #endif
 
 #include "core/color_space.hpp"
@@ -46,6 +48,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <unordered_set>
 
 namespace quader {
 namespace {
@@ -101,6 +104,7 @@ struct CrimsonHostState final {
   void *borrowed_device = nullptr, *borrowed_queue = nullptr;
   CrimsonNativeQueueHandoff queue_handoff;
   std::shared_ptr<const crimson::PreparedRenderFrame> engine_frame;
+  std::shared_ptr<const crimson::integration::NativeSceneRenderBindings> native_bindings;
   std::uint64_t engine_revision = 0, engine_submitted_revision = 0;
   std::uint32_t completed_frame = 0;
   std::array<crimson::shared::Submission,2> engine_copies{};
@@ -121,6 +125,10 @@ struct CrimsonHostState final {
   std::unique_ptr<CrimsonMaterialThumbnails> material_thumbnails;
 #if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
   std::unique_ptr<CrimsonRichScene> rich_scene;
+  std::unique_ptr<CrimsonSceneProjectionCache> authoring_cache;
+  std::shared_ptr<const RenderSceneSnapshot> authoring_source;
+  std::shared_ptr<const CrimsonSceneProjection> authoring_projection;
+  std::uint64_t authoring_generation=0;
 #endif
 
   CrimsonMaterialPreview* material_preview() const {
@@ -175,11 +183,21 @@ struct CrimsonHostState final {
   }
 };
 
+#if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+struct CrimsonComposedFrame {
+  std::shared_ptr<const CrimsonRichFrame> native;
+  std::shared_ptr<const crimson::PreparedRenderFrame> engine;
+  std::vector<crimson::RenderModelInstance> instances,shadows;
+  crimson::SceneSettings settings;
+  bool engine_lighting{};
+};
+#endif
 struct CrimsonViewState final {
   std::weak_ptr<CrimsonSurfaceState> surface;
   crimson::shared::ViewFrame frame;
   std::shared_ptr<const crimson::shared::EditorFrame> accepted_editor;
   ViewportCameraState camera;
+  QVec2 logical_size{1,1};
   ViewportCameraPose pose{{0.0f, 0.0f, 10.0f}, {}, {0.0f, 1.0f, 0.0f}};
   std::uint32_t width = 1u;
   std::uint32_t height = 1u;
@@ -196,11 +214,12 @@ struct CrimsonViewState final {
   bool scene_visible = true;
   bool overlay_visible = true;
   bool solid = false;
-  bool rendered = false,shadowing = true,mesh_grid_visible=false;
+  bool rendered = false,shadowing = true,mesh_grid_visible=false,force_rich_pick=false;
   ViewportMaterialDebugMode material_debug=ViewportMaterialDebugMode::None;
   SceneSettings rendered_settings;
 #if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
   std::shared_ptr<const CrimsonRichFrame> rich_frame;
+  std::shared_ptr<const CrimsonComposedFrame> composed;
 #endif
   bool instance_context = false;
   bool configured_settings = false;
@@ -297,7 +316,7 @@ public:
   void update_camera(const ViewportCameraController &controller) override {
     const auto before = state_->frame.view_from_world;
     const auto projection_before = state_->frame.clip_from_view;
-    state_->camera = controller.state();
+    state_->camera = controller.state();state_->logical_size=controller.viewport_size();
     state_->pose = controller.pose();
     update_projection(*state_);
     if (before != state_->frame.view_from_world || projection_before != state_->frame.clip_from_view) {
@@ -659,14 +678,14 @@ public:
     if(state_->direct11&&!native_scope)std::terminate();
     for(const auto& entry:state_->material_previews)if(!entry.lifetime.expired())entry.view->release_gpu();
     state_->selected_preview={};state_->submitted_preview={};
-    state_->engine_frame.reset();
+    state_->engine_frame.reset();state_->native_bindings.reset();
     state_->engine_previews={};
     if(state_->material_thumbnails)state_->material_thumbnails->shutdown();
     state_->material_thumbnails.reset();
 #if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
     for(const auto& entry:state_->views)if(auto view=entry.lock())view->rich_frame.reset();
     if(state_->rich_scene)state_->rich_scene->clear();
-    state_->rich_scene.reset();
+    state_->rich_scene.reset();state_->authoring_cache.reset();state_->authoring_projection.reset();state_->authoring_source.reset();
 #endif
     if(state_->direct12&&!state_->queue_handoff.prepare_shutdown())std::terminate();
     if (!state_->accept(state_->renderer.shutdown())) {
@@ -701,7 +720,40 @@ public:
   RenderCompositionApi composition_api() const override { return state_->requested_api; }
   bool set_composition_api(RenderCompositionApi api)override{if(state_->initialized)return api==composition_api();if(api!=RenderCompositionApi::Direct3D11&&api!=RenderCompositionApi::Direct3D12&&api!=RenderCompositionApi::Vulkan)return false;state_->requested_api=api;return true;}
   crimson::shared::Renderer *crimson_renderer() override { return state_->initialized ? &state_->renderer : nullptr; }
+  void publish_modeling_authoring_source(std::shared_ptr<const RenderSceneSnapshot> source) override {
+#if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+    if(state_->authoring_source==source)return;
+    state_->authoring_source=std::move(source);state_->authoring_projection.reset();if(!state_->authoring_source&&state_->rich_scene)state_->rich_scene->clear_authoring();
+#endif
+  }
+  bool modeling_world_ready() const override {
+#if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+    if(!state_->authoring_source)return true;
+    const auto publication=modeling_world_snapshot();return publication&&state_->authoring_projection&&publication->generation==state_->authoring_projection->generation;
+#else
+    return true;
+#endif
+  }
+  std::shared_ptr<const crimson::integration::ModelingWorldSnapshot> modeling_world_snapshot() const override {
+#if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+    try{return state_->rich_scene?state_->rich_scene->snapshot(true):nullptr;}catch(const std::exception& error){state_->error=error.what();return {};}
+#else
+    return {};
+#endif
+  }
   std::uint32_t completed_frame() const override { return state_->completed_frame; }
+  bool request_native_pick(RenderView& native,const crimson::PickRequest& request) override {
+#if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+    auto* view=dynamic_cast<CrimsonRenderView*>(&native);if(!view||!state_->initialized||!state_->native_forward())return false;const auto source=view->state();const auto surface=source->surface.lock();if(!surface)return false;source->force_rich_pick=true;source->dirty=true;if(!source->rich_frame)return false;
+    auto physical=request;physical.x=source->crop_left+static_cast<std::uint32_t>(std::floor(float(request.x)*float(source->width)/std::max(1.f,source->logical_size.x)));physical.y=source->crop_top+static_cast<std::uint32_t>(std::floor(float(request.y)*float(source->height)/std::max(1.f,source->logical_size.y)));
+    return state_->accept(state_->renderer.request_modeling_pick(surface->target,physical,source->backing_width,source->backing_height));
+#else
+    (void)native;(void)request;return false;
+#endif
+  }
+  void publish_native_scene_bindings(std::shared_ptr<const crimson::integration::NativeSceneRenderBindings> bindings) override {
+    if(state_->native_bindings==bindings)return;state_->native_bindings=std::move(bindings);for(const auto& weak:state_->views)if(const auto view=weak.lock())view->dirty=true;
+  }
   void publish_engine_frame(std::shared_ptr<const crimson::PreparedRenderFrame> frame) override {
     if (state_->engine_frame == frame) return;
     state_->engine_frame = std::move(frame); ++state_->engine_revision;
@@ -835,6 +887,13 @@ public:
   void render_material_preview(RenderMaterialPreviewView &, RenderSurface &) override {}
   void begin_application_frame() override {
     if(state_->initialized&&state_->native_forward())state_->renderer.advanceStreaming();
+#if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+    if(state_->initialized&&state_->rich_scene&&state_->authoring_source){
+      if(!state_->authoring_cache)state_->authoring_cache=std::make_unique<CrimsonSceneProjectionCache>(state_->resources);
+      if(!state_->authoring_projection){std::string error;if(!state_->authoring_cache->prepare(state_->authoring_source,{},++state_->authoring_generation,state_->authoring_projection,error)){state_->error=std::move(error);return;}}
+      if(!state_->rich_scene->prepare(state_->authoring_projection,true))state_->error=state_->rich_scene->status();
+    }
+#endif
   }
   void begin_view_preparation() override { ++state_->preparation_depth; }
   void complete_view_preparation() override {
@@ -983,16 +1042,35 @@ private:
   }
 
 #if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+  const crimson::PreparedRenderView* engine_editor_view()const {
+    if(!state_->engine_frame)return nullptr;const auto found=std::ranges::find_if(state_->engine_frame->views,[](const auto& view){return view.identity.purpose==crimson::RenderViewPurpose::Scene;});return found==state_->engine_frame->views.end()?nullptr:&*found;
+  }
+  bool engine_editor_geometry()const {
+    if(engine_scene_lighting())return true;
+    if(state_->native_bindings&&!state_->native_bindings->material_entities.empty())return true;
+    const auto* view=engine_editor_view();return view&&(!view->instances.empty()||!view->collisionOverlays.empty()||(state_->engine_frame->world&&(!state_->engine_frame->world->particles.empty()||!state_->engine_frame->world->decals.empty())));
+  }
+  bool engine_scene_lighting()const {return state_->native_bindings&&state_->native_bindings->scene_lighting&&engine_editor_view();}
+  void compose_editor_view(CrimsonViewState& view){
+    const auto* editor=engine_editor_view();if(!view.rich_frame||!editor||!state_->engine_frame->world){view.composed.reset();return;}
+    auto composed=std::make_shared<CrimsonComposedFrame>();composed->native=view.rich_frame;composed->engine=state_->engine_frame;const auto native=view.rich_frame->scene();composed->instances.assign(native.instances.begin(),native.instances.end());composed->instances.insert(composed->instances.end(),editor->instances.begin(),editor->instances.end());composed->shadows.assign(native.shadowInstances.begin(),native.shadowInstances.end());
+    composed->engine_lighting=engine_scene_lighting()||view.rendered;composed->settings=composed->engine_lighting?editor->settings:native.settings;composed->settings.camera=native.settings.camera;
+    std::unordered_set<std::uint64_t> native_geometry;if(state_->native_bindings)for(const auto& [uuid,binding]:state_->native_bindings->entities){(void)uuid;if(binding.native_geometry)native_geometry.insert(binding.entity);}
+    for(const auto& instance:state_->engine_frame->world->shadowInstances)if(!native_geometry.contains(instance.entityId))composed->shadows.push_back(instance);view.composed=std::move(composed);
+  }
   crimson::RenderScene rich_scene(const CrimsonViewState& view) const {
-    auto scene=view.rich_frame->scene();
+    const auto native=view.rich_frame->scene();const bool engine_lighting=view.composed&&view.composed->engine_lighting;
+    auto scene=engine_lighting?crimson::RenderScene{view.composed->settings}:native;
+    if(engine_lighting){scene.instances=native.instances;scene.shadowInstances=native.shadowInstances;scene.shadowWorldId=native.shadowWorldId;scene.meshPopulationRevision=native.meshPopulationRevision;scene.giWorldId=native.giWorldId;scene.giCameraId=native.giCameraId;scene.giEnvironmentId=native.giEnvironmentId;scene.sceneMode=true;}
     scene.pinned=view.rich_frame;
-    if(!view.shadowing||!view.rendered){scene.shadowWorldId=0;scene.shadowInstances={};}
-    if(!view.rendered&&view.material_debug==ViewportMaterialDebugMode::None){
+    if(view.composed){const auto& engine=*view.composed->engine->world;scene.instances=view.composed->instances;scene.shadowInstances=view.composed->shadows;scene.directionalLights=engine.directional;scene.pointLights=engine.points;scene.particles=engine.particles;scene.particleMaterials=engine.particleMaterials;scene.decals=engine.decals;scene.materialContext=engine.materialContext;scene.shadowWorldId^=engine.shadowWorldId;scene.shadowResolution=engine.shadowResolution;scene.shadowPriorityOrigin=engine.shadowPriorityOrigin;scene.meshPopulationRevision^=view.composed->engine->resourceSignature;scene.pinned=view.composed;if(const auto* editor=engine_editor_view()){scene.collisionOverlays=editor->collisionOverlays;if(engine_lighting)scene.giEnvironmentId=editor->giEnvironmentId;}}
+    if(!engine_lighting&&(!view.shadowing||!view.rendered)){scene.shadowWorldId=0;scene.shadowInstances={};}
+    if(!engine_lighting&&!view.rendered&&view.material_debug==ViewportMaterialDebugMode::None){
       scene.previewShadedLighting.enabled=true;
       const auto& light=view.frame.light;scene.previewShadedLighting.keyDirectionView={light.key_direction_view[0],light.key_direction_view[1],light.key_direction_view[2]};
       scene.previewShadedLighting.keyIntensity=light.key_intensity;scene.previewShadedLighting.diffuseWrap=light.diffuse_wrap;scene.previewShadedLighting.groundFill=light.ground_fill;scene.previewShadedLighting.skyFill=light.sky_fill;
     }
-    switch(view.material_debug){
+    switch(engine_lighting?ViewportMaterialDebugMode::None:view.material_debug){
       case ViewportMaterialDebugMode::Albedo:scene.debugView=crimson::RenderDebugView::Albedo;break;
       case ViewportMaterialDebugMode::Roughness:scene.debugView=crimson::RenderDebugView::Roughness;break;
       case ViewportMaterialDebugMode::Metalness:scene.debugView=crimson::RenderDebugView::Metal;break;
@@ -1002,6 +1080,10 @@ private:
     return scene;
   }
 #endif
+  void render_engine_views(){
+    if(!state_->engine_frame)return;auto frame=std::make_shared<crimson::PreparedRenderFrame>();frame->world=state_->engine_frame->world;frame->appearance=state_->engine_frame->appearance;frame->gridVisible=false;frame->resourceSignature=state_->engine_frame->resourceSignature;
+    for(const auto& view:state_->engine_frame->views)if(view.identity.purpose==crimson::RenderViewPurpose::Game)frame->views.push_back(view);if(!frame->views.empty())state_->renderer.renderFrame(std::move(frame));
+  }
   bool submit_views() {
     if(state_->direct11&&!state_->d3d11_external)return false;
     std::vector<std::shared_ptr<CrimsonViewState>> active;
@@ -1013,6 +1095,7 @@ private:
       if (!surface || !surface->target.value) continue;
       active.push_back(std::move(view));
     }
+    for(const auto& view:active)if(view->force_rich_pick)if(const auto surface=view->surface.lock();surface&&!state_->renderer.modeling_pick_active(surface->target)&&!view->dirty){view->force_rich_pick=false;view->dirty=true;}
     const auto accepted_surfaces_available = [&] {
       return !active.empty() && std::ranges::all_of(active, [](const auto &view) {
         const auto surface = view->surface.lock();
@@ -1054,7 +1137,7 @@ private:
     };
     const auto submit_engine_only = [&] {
       if (!engine_dirty&&!preview_dirty&&!engine_previews_dirty&&!thumbnails_dirty) return false;
-      if(engine_dirty)state_->renderer.renderFrame(state_->engine_frame);
+      if(engine_dirty)render_engine_views();
       const bool preview_recorded=record_preview();
       const bool engine_previews_recorded=record_engine_previews();
       const bool thumbnail_recorded=record_thumbnail();
@@ -1074,8 +1157,8 @@ private:
     const auto projection = state_->pending ? state_->pending : state_->accepted;
     if (!projection) return submit_engine_only();
 #if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
-    const bool rich_visible=state_->rich_scene&&std::ranges::any_of(active,[](const auto& view){
-      return (view->rendered||view->material_debug!=ViewportMaterialDebugMode::None||view->mesh_grid_visible)&&!view->solid&&view->scene_visible;
+    const bool rich_visible=state_->rich_scene&&std::ranges::any_of(active,[this](const auto& view){
+      return (view->force_rich_pick||engine_editor_geometry()||view->rendered||view->material_debug!=ViewportMaterialDebugMode::None||view->mesh_grid_visible)&&(!view->solid||view->force_rich_pick||engine_editor_geometry())&&view->scene_visible;
     });
     if(rich_visible&&!state_->rich_scene->prepare(projection)){
       state_->error=state_->rich_scene->status();
@@ -1095,14 +1178,14 @@ private:
       view->frame.pass = !view->scene_visible ? crimson::shared::ScenePass::Empty
           : view->solid ? crimson::shared::ScenePass::Solid : crimson::shared::ScenePass::Shaded;
 #if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
-      if((view->rendered||view->material_debug!=ViewportMaterialDebugMode::None||view->mesh_grid_visible)&&!view->solid&&view->scene_visible&&state_->rich_scene){
+      if((view->force_rich_pick||engine_editor_geometry()||view->rendered||view->material_debug!=ViewportMaterialDebugMode::None||view->mesh_grid_visible)&&(!view->solid||view->force_rich_pick||engine_editor_geometry())&&view->scene_visible&&state_->rich_scene){
         crimson::ModelingPresentation controls;
         if(view->frame.modeling_presentation)controls.context=view->frame.modeling_presentation->context;
         controls.materialDebug=static_cast<crimson::ModelingMaterialDebug>(view->material_debug);
         controls.surfaceGrid=state_->mesh_grid;controls.surfaceGrid.enabled=controls.surfaceGrid.enabled&&view->mesh_grid_visible;
         auto rendered_settings=view->rendered_settings;
         {const auto& color=view->frame.clear_color;rendered_settings.environment.clear_color={srgb_to_linear(color.red),srgb_to_linear(color.green),srgb_to_linear(color.blue)};}
-        auto prepared=state_->rich_scene->view(rendered_settings,view->camera,view->pose,view->frame.anti_aliasing,surface->target.value,controls,view->rendered);
+        auto prepared=state_->rich_scene->view(rendered_settings,view->camera,view->pose,view->frame.anti_aliasing,surface->target.value,controls,view->rendered||engine_scene_lighting(),state_->native_bindings);
         if(!prepared||prepared->source_generation!=projection->generation){
           state_->error=state_->rich_scene->status();
           const bool engine_submitted=submit_engine_only();
@@ -1110,8 +1193,8 @@ private:
         }
         if(!view->rich_frame||view->rich_frame->source_generation!=prepared->source_generation||
             view->rich_frame->scene().meshPopulationRevision!=prepared->scene().meshPopulationRevision)view->dirty=true;
-        view->rich_frame=std::move(prepared);
-      }else view->rich_frame.reset();
+        view->rich_frame=std::move(prepared);compose_editor_view(*view);
+      }else {view->rich_frame.reset();view->composed.reset();}
 #endif
       dirty = dirty || view->dirty || !surface->rendered;
     }
@@ -1130,7 +1213,7 @@ private:
         return engine_submitted || accepted_surfaces_available();
       }
     }
-    if (engine_dirty) state_->renderer.renderFrame(state_->engine_frame);
+    if (engine_dirty) render_engine_views();
     const bool preview_recorded=record_preview();
     const bool engine_previews_recorded=record_engine_previews();
     const bool thumbnail_recorded=record_thumbnail();

@@ -53,6 +53,7 @@ public:
   [[nodiscard]] bool is_visible(UIPanelId id) const;
   [[nodiscard]] bool is_presented(UIPanelId id) const;
   bool set_visible(UIPanelId id, bool visible);
+  void set_suppressed(UIPanelId id, bool suppressed);
   bool focus(UIPanelId id);
   [[nodiscard]] QDockWidget *dock(UIPanelId id) const;
 
@@ -73,8 +74,11 @@ private:
       ui_panel_default_visible(UIPanelId::Layers),
       ui_panel_default_visible(UIPanelId::FaceTexture),
       ui_panel_default_visible(UIPanelId::AssetBrowser),
+      ui_panel_default_visible(UIPanelId::ToolSettings),
+      ui_panel_default_visible(UIPanelId::CommandsLibrary),
   };
   std::array<bool, kUiPanelCount> presented_{};
+  std::array<bool, kUiPanelCount> suppressed_{};
   VisibilityChangedCallback visibility_changed_;
   PresentationChangedCallback presentation_changed_;
 };

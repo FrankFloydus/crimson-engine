@@ -22,6 +22,7 @@ public:
     [[nodiscard]] static const ViewportWorkspaceService& workspace(const QuaderViewportApi& api);
     static void bind_scene_workspace(QuaderViewportApi &api,
                                      ViewportWorkspaceService &workspace);
+    static void set_scene_rendering_available(QuaderViewportApi &api, bool available);
     static void bind_scene_local_visibility(
         QuaderViewportApi &api, ViewportLocalVisibilityService &service);
 };

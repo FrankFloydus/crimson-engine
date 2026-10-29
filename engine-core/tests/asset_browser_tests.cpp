@@ -1,6 +1,5 @@
 #include "assets/BrowserCatalog.h"
 #include "resources/AssetId.h"
-#include "quader_bundle_fixture.h"
 
 #include <array>
 #include <algorithm>
@@ -39,10 +38,10 @@ void populate(const fs::path& root,std::span<AssetEntry> entries) {
     for(auto& asset:entries) {
         const auto identity=canonicalAssetId(asset.id);
         const auto logical=fs::path(asset.id);
-        auto file=root/"Content"/logical.filename();
+        auto file=root/logical.filename();
         if(asset.kind==AssetKind::Model) {
             const auto token=logical.filename()=="manifest.json"?logical.parent_path().filename():logical.filename();
-            file=root/"Content"/(token.string()+".crimson-model")/"manifest.json";
+            file=root/(token.string()+".crimson-model")/"manifest.json";
             write(file,"{}");write(file.parent_path()/"source.glb","managed content: "+identity);
         } else write(file,"managed content: "+identity);
         registerAssetPath(root,asset.id,file);
@@ -52,7 +51,7 @@ void populate(const fs::path& root,std::span<AssetEntry> entries) {
 void removeAssetFiles(const fs::path& root,std::span<const std::string> ids,const BrowserCatalog* catalog=nullptr) {
     for(const auto& id:ids)if(!catalog||!catalog->isFolder(id)) {
         auto file=resolveAssetPath(root,id);if(file.filename()=="manifest.json")file=file.parent_path();
-        const auto relative=file.lexically_relative(root/"Content");
+        const auto relative=file.lexically_relative(root);
         require(!relative.empty()&&!relative.has_root_path()&&*relative.begin()!="..","A disposable deletion fixture escaped Content.");
         fs::remove_all(file);
     }
@@ -70,15 +69,15 @@ void metadataAndIdentity() {
     BrowserCatalog catalog(project.root);
     populate(project.root,assets);catalog.synchronize(assets);
     for(const auto& stored:storedAssetPaths(project.root))require(isAssetUuid(stored.id),"The physical location index emitted a path-shaped asset reference.");
-    require(fs::is_regular_file(project.root/".crimson/browser.json")&&catalog.items().size()==2&&catalog.items()[0].id==BrowserCatalog::ContentFolder,
-        "Physical Content/Engine roots or migrated metadata were not available.");
-    require(catalog.items(BrowserCatalog::ContentFolder).size()==4 && catalog.items(BrowserCatalog::ContentFolder)[0].id==assets[0].id,"Initial catalog order is not alphabetical.");
-    const auto art=catalog.createFolder(BrowserCatalog::ContentFolder,"  Art  ");
+    require(fs::is_regular_file(project.root/".crimson/browser.json")&&catalog.items().size()==4&&catalog.items()[0].id==assets[0].id,
+        "Project-root asset rows or current metadata were not available.");
+    require(catalog.items(BrowserCatalog::RootFolder).size()==4 && catalog.items(BrowserCatalog::RootFolder)[0].id==assets[0].id,"Initial catalog order is not alphabetical.");
+    const auto art=catalog.createFolder(BrowserCatalog::RootFolder,"  Art  ");
     require(isAssetUuid(art),"New browser directories did not receive stable UUID identities.");
     const auto models=catalog.createFolder(art,"Models");
-    require(catalog.name(art)=="Art" && catalog.items(BrowserCatalog::ContentFolder)[0].id==art,"Folder name trimming or folder-first sorting failed.");
-    rejects([&]{catalog.createFolder(BrowserCatalog::ContentFolder,"aRT");},"Case-insensitive sibling folder collision was accepted.");
-    rejects([&]{catalog.createFolder(BrowserCatalog::ContentFolder,"../Outside");},"A path was accepted as a browser folder name.");
+    require(catalog.name(art)=="Art" && catalog.items(BrowserCatalog::RootFolder)[0].id==art,"Folder name trimming or folder-first sorting failed.");
+    rejects([&]{catalog.createFolder(BrowserCatalog::RootFolder,"aRT");},"Case-insensitive sibling folder collision was accepted.");
+    rejects([&]{catalog.createFolder(BrowserCatalog::RootFolder,"../Outside");},"A path was accepted as a browser folder name.");
     rejects([&]{catalog.rename(art,"..");},"A traversal name was accepted during rename.");
     catalog.move(std::array{assets[1].id},models);
     catalog.move(std::array{assets[0].id,assets[3].id},art);
@@ -88,20 +87,20 @@ void metadataAndIdentity() {
             "Renaming/moving changed the stable asset identity or display name.");
     require(catalog.parent(assets[0].id)==art && catalog.parent(assets[3].id)==art,"Mixed assets did not move together.");
     const auto breadcrumbs=catalog.breadcrumbs(models);
-    require(breadcrumbs.size()==3 && breadcrumbs[0].id==BrowserCatalog::ContentFolder && breadcrumbs[1].id==art && breadcrumbs[1].name=="Environment Art" && breadcrumbs[2].id==models,
+    require(breadcrumbs.size()==3 && breadcrumbs[0].id==BrowserCatalog::RootFolder && breadcrumbs[1].id==art && breadcrumbs[1].name=="Environment Art" && breadcrumbs[2].id==models,
             "Nested folder breadcrumbs did not follow a renamed parent.");
     for (const auto& asset:assets) {
         auto file=resolveAssetPath(project.root,asset.id);
         if(asset.kind==AssetKind::Model)file=file.parent_path()/"source.glb";
         require(read(file)=="managed content: "+asset.id,"Physical browser movement modified a managed source/package file.");
     }
-    require(fs::is_directory(project.root/"Content/Environment Art/Models/Ancient Tree")&&
-        resolveAssetPath(project.root,assets[0].id)==project.root/"Content/Environment Art/albedo.png",
+    require(fs::is_directory(project.root/"Environment Art/Models/Ancient Tree")&&
+        resolveAssetPath(project.root,assets[0].id)==project.root/"Environment Art/albedo.png",
         "Folder and asset rename/move did not change the actual backing locations.");
     catalog.rename(art,"environment art");
     bool exactCase=false;
-    for(const auto& directory:fs::directory_iterator(project.root/"Content"))if(directory.path().filename()=="environment art")exactCase=true;
-    require(exactCase&&catalog.folderPath(art)==project.root/"Content/environment art",
+    for(const auto& directory:fs::directory_iterator(project.root))if(directory.path().filename()=="environment art")exactCase=true;
+    require(exactCase&&catalog.folderPath(art)==project.root/"environment art",
         "A case-only directory rename lost its requested casing or metadata path.");
 
     BrowserCatalog reopened(project.root);
@@ -114,8 +113,8 @@ void metadataAndIdentity() {
     recovered.synchronize(assets);
     require(recovered.name(assets[1].id)=="Ancient Tree" && recovered.parent(assets[1].id)==models,
             "Temporarily missing managed assets lost their saved browser organization.");
-    recovered.move(std::array{assets[1].id},BrowserCatalog::ContentFolder);
-    require(recovered.parent(assets[1].id)==BrowserCatalog::ContentFolder && recovered.name(assets[1].id)=="Ancient Tree",
+    recovered.move(std::array{assets[1].id},BrowserCatalog::RootFolder);
+    require(recovered.parent(assets[1].id)==BrowserCatalog::RootFolder && recovered.name(assets[1].id)=="Ancient Tree",
             "Moving back to root discarded the asset display name.");
 }
 
@@ -124,9 +123,9 @@ void atomicMoves() {
     TemporaryProject project;
     BrowserCatalog catalog(project.root);
     populate(project.root,assets);catalog.synchronize(assets);
-    const auto source=catalog.createFolder(BrowserCatalog::ContentFolder,"Source");
+    const auto source=catalog.createFolder(BrowserCatalog::RootFolder,"Source");
     const auto child=catalog.createFolder(source,"Child");
-    const auto destination=catalog.createFolder(BrowserCatalog::ContentFolder,"Destination");
+    const auto destination=catalog.createFolder(BrowserCatalog::RootFolder,"Destination");
     const auto duplicate=catalog.createFolder(destination,"Child");
     catalog.move(std::array{assets[1].id},child);
     const auto before=read(project.root/".crimson/browser.json");
@@ -137,14 +136,14 @@ void atomicMoves() {
     rejects([&]{catalog.move(std::array{assets[0].id,child},destination);},"A conflicting folder move was accepted.");
     const auto reservedMissing=catalog.folderPath(destination)/"albedo.png";registerAssetPath(project.root,newAssetId(),reservedMissing);
     rejects([&]{catalog.move(std::array{assets[0].id},destination);},"A move reused another UUID's indexed but missing location.");
-    require(read(project.root/".crimson/browser.json")==before && catalog.parent(child)==source && catalog.parent(assets[0].id)==BrowserCatalog::ContentFolder,
+    require(read(project.root/".crimson/browser.json")==before && catalog.parent(child)==source && catalog.parent(assets[0].id)==BrowserCatalog::RootFolder,
             "A failed batch changed memory or published partial metadata.");
     require(catalog.parent(duplicate)==destination,"Failed move displaced an existing destination folder.");
     catalog.move(std::array{source,child,assets[1].id},destination);
     require(catalog.parent(source)==destination && catalog.parent(child)==source && catalog.parent(assets[1].id)==child,
             "Moving a selected parent plus its selected descendants flattened the hierarchy.");
-    catalog.move(std::array{source},BrowserCatalog::ContentFolder);
-    require(catalog.parent(source)==BrowserCatalog::ContentFolder && catalog.parent(child)==source&&fs::is_directory(project.root/"Content/Source/Child"),"Returning a physical subtree to Content changed descendant ownership.");
+    catalog.move(std::array{source},BrowserCatalog::RootFolder);
+    require(catalog.parent(source)==BrowserCatalog::RootFolder && catalog.parent(child)==source&&fs::is_directory(project.root/"Source/Child"),"Returning a physical subtree to Content changed descendant ownership.");
     catalog.move(std::array{assets[0].id},destination,true);
     require(catalog.parent(assets[0].id)==destination&&resolveAssetPath(project.root,assets[0].id).filename()=="albedo 2.png"&&!fs::exists(reservedMissing),
         "Import placement did not suffix an indexed missing destination while retaining the asset UUID.");
@@ -163,8 +162,8 @@ void invalidMetadataAndWriteFailure() {
         write(project.root/".crimson/browser.json",contents);
         BrowserCatalog catalog(project.root);
         populate(project.root,assets);catalog.synchronize(assets);
-        require(!catalog.status().empty() && catalog.items(BrowserCatalog::ContentFolder).size()==assets.size(),"Damaged metadata prevented the managed catalog from appearing.");
-        rejects([&]{catalog.createFolder(BrowserCatalog::ContentFolder,"New");},"Damaged metadata was overwritten by a folder creation.");
+        require(!catalog.status().empty() && catalog.items(BrowserCatalog::RootFolder).size()==assets.size(),"Damaged metadata prevented the managed catalog from appearing.");
+        rejects([&]{catalog.createFolder(BrowserCatalog::RootFolder,"New");},"Damaged metadata was overwritten by a folder creation.");
         rejects([&]{catalog.rename(assets[0].id,"Replacement");},"Damaged metadata was overwritten by a rename.");
         require(read(project.root/".crimson/browser.json")==contents && catalog.name(assets[0].id)==assets[0].name,
                 "Damaged browser data or in-memory names changed after a rejected edit.");
@@ -173,9 +172,9 @@ void invalidMetadataAndWriteFailure() {
     BrowserCatalog catalog(project.root);
     populate(project.root,assets);catalog.synchronize(assets);
     fs::remove(project.root/".crimson/browser.json");fs::create_directory(project.root/".crimson/browser.json"); // Destination cannot be atomically replaced with a file.
-    rejects([&]{catalog.createFolder(BrowserCatalog::ContentFolder,"Unpublished");},"A failed metadata write reported folder creation success.");
+    rejects([&]{catalog.createFolder(BrowserCatalog::RootFolder,"Unpublished");},"A failed metadata write reported folder creation success.");
     rejects([&]{catalog.rename(assets[0].id,"Unpublished");},"A failed metadata write reported rename success.");
-    require(catalog.items(BrowserCatalog::ContentFolder).size()==assets.size() && catalog.name(assets[0].id)==assets[0].name,
+    require(catalog.items(BrowserCatalog::RootFolder).size()==assets.size() && catalog.name(assets[0].id)==assets[0].name,
             "Failed metadata writes left unpublished names/folders in memory.");
 }
 
@@ -228,7 +227,7 @@ void selectionPolicy() {
 void folderDeletion() {
     auto assets=legacyAssets;
     TemporaryProject project;BrowserCatalog catalog(project.root);populate(project.root,assets);catalog.synchronize(assets);
-    const auto parent=catalog.createFolder(BrowserCatalog::ContentFolder,"Art"),child=catalog.createFolder(parent,"Models");
+    const auto parent=catalog.createFolder(BrowserCatalog::RootFolder,"Art"),child=catalog.createFolder(parent,"Models");
     catalog.move(std::array{assets[1].id},child);catalog.move(std::array{assets[0].id},parent);
     const auto nested=catalog.descendants(parent);require(nested.size()==3,"Folder deletion did not expand nested folders and assets.");
     const auto before=read(project.root/".crimson/browser.json");
@@ -236,9 +235,9 @@ void folderDeletion() {
     require(read(project.root/".crimson/browser.json")==before&&catalog.contains(parent),"Failed folder deletion changed metadata.");
     auto all=nested;all.push_back(parent);const auto candidate=catalog.serializeWithout(all);
     require(read(project.root/".crimson/browser.json")==before&&!candidate.empty(),"Preparing deletion prematurely wrote browser metadata.");
-    removeAssetFiles(project.root,all,&catalog);catalog.erase(all);require(!catalog.contains(parent)&&!catalog.contains(child)&&catalog.items(BrowserCatalog::ContentFolder).size()==2&&!fs::exists(project.root/"Content/Art"),"Complete folder deletion retained physical directories or cards.");
-    BrowserCatalog reopened(project.root);reopened.synchronize(std::array{assets[2],assets[3]});require(reopened.items(BrowserCatalog::ContentFolder).size()==2,"Deleted folders reappeared on reopen.");
-    const auto stale=reopened.createFolder(BrowserCatalog::ContentFolder,"Missing asset folder");populate(project.root,std::span(assets).first(1));reopened.synchronize(assets);reopened.move(std::array{assets[0].id},stale);
+    removeAssetFiles(project.root,all,&catalog);catalog.erase(all);require(!catalog.contains(parent)&&!catalog.contains(child)&&catalog.items(BrowserCatalog::RootFolder).size()==2&&!fs::exists(project.root/"Art"),"Complete folder deletion retained physical directories or cards.");
+    BrowserCatalog reopened(project.root);reopened.synchronize(std::array{assets[2],assets[3]});require(reopened.items(BrowserCatalog::RootFolder).size()==2,"Deleted folders reappeared on reopen.");
+    const auto stale=reopened.createFolder(BrowserCatalog::RootFolder,"Missing asset folder");populate(project.root,std::span(assets).first(1));reopened.synchronize(assets);reopened.move(std::array{assets[0].id},stale);
     reopened.synchronize(std::array{assets[2],assets[3]});removeAssetFiles(project.root,std::array{assets[0].id});reopened.erase(std::array{stale});
     BrowserCatalog final(project.root);final.synchronize(std::array{assets[2],assets[3]});require(final.status().empty(),"Missing asset's stale presentation corrupted metadata when deleting its folder.");
 }
@@ -261,7 +260,7 @@ void searchAndTypeQueries() {
         {"assets/textures/stoneOutside.png","Outside Stone",AssetKind::Texture}
     }};
     populate(project.root,fixture);catalog.synchronize(fixture);
-    const auto art=catalog.createFolder(BrowserCatalog::ContentFolder,"Art"),elsewhere=catalog.createFolder(BrowserCatalog::ContentFolder,"Elsewhere");
+    const auto art=catalog.createFolder(BrowserCatalog::RootFolder,"Art"),elsewhere=catalog.createFolder(BrowserCatalog::RootFolder,"Elsewhere");
     const auto models=catalog.createFolder(art,"Models"),textures=catalog.createFolder(art,"Textures"),deep=catalog.createFolder(models,"Deeper");
     catalog.move(std::array{fixture[0].id,fixture[5].id},art);
     catalog.move(std::array{fixture[2].id,fixture[3].id},models);catalog.move(std::array{fixture[4].id},deep);
@@ -305,9 +304,9 @@ void searchAndTypeQueries() {
     require(itemIds(catalog.items(art,"hero",BrowserAssetFilter::Textures),true).empty(),"Text and asset-kind filters were not combined.");
     require(itemIds(catalog.items(art,"stone",BrowserAssetFilter::All),true)==std::vector<std::string>({fixture[0].id,fixture[5].id}),
         "Active folder search missed direct aliases/original names or escaped its subtree.");
-    require(itemIds(catalog.items(BrowserCatalog::ContentFolder,"stone",BrowserAssetFilter::All),true).size()==3,"Root search failed to find matching assets across virtual folders.");
+    require(itemIds(catalog.items(BrowserCatalog::RootFolder,"stone",BrowserAssetFilter::All),true).size()==3,"Root search failed to find matching assets across virtual folders.");
     for(const auto [filter,kind]:std::array{std::pair{BrowserAssetFilter::Materials,AssetKind::Material},std::pair{BrowserAssetFilter::Scenes,AssetKind::Scene},std::pair{BrowserAssetFilter::Particles,AssetKind::Particle}}) {
-        const auto result=catalog.items(BrowserCatalog::ContentFolder,"",filter);
+        const auto result=catalog.items(BrowserCatalog::RootFolder,"",filter);
         require(std::count_if(result.begin(),result.end(),[](const auto& item){return !item.folder;})==1&&
             std::all_of(result.begin(),result.end(),[&](const auto& item){return item.folder||item.kind==kind;}),"A native asset filter returned another kind or lost a descendant.");
     }
@@ -334,11 +333,11 @@ void filteredSelectionAndDeletion() {
         {"visible-texture.png","Visible Texture",AssetKind::Texture},{"deep-texture.hdr","Deep Texture",AssetKind::Environment},
         {"hidden-model.glb","Hidden Model",AssetKind::Model},{"hidden-material.crimson-material","Hidden Material",AssetKind::Material}
     }};
-    populate(project.root,fixture);catalog.synchronize(fixture);const auto folder=catalog.createFolder(BrowserCatalog::ContentFolder,"Navigation");
+    populate(project.root,fixture);catalog.synchronize(fixture);const auto folder=catalog.createFolder(BrowserCatalog::RootFolder,"Navigation");
     catalog.move(std::array{fixture[1].id,fixture[2].id},folder);
-    BrowserSelection selection;const auto all=itemIds(catalog.items(BrowserCatalog::ContentFolder,"",BrowserAssetFilter::All));
+    BrowserSelection selection;const auto all=itemIds(catalog.items(BrowserCatalog::RootFolder,"",BrowserAssetFilter::All));
     selection.click(fixture[0].id,all,false,false);selection.click(fixture[3].id,all,true,false);
-    const auto filtered=catalog.items(BrowserCatalog::ContentFolder,"",BrowserAssetFilter::Textures);
+    const auto filtered=catalog.items(BrowserCatalog::RootFolder,"",BrowserAssetFilter::Textures);
     const auto visible=itemIds(filtered);
     selection.retain(visible);
     require(selection.ids()==std::vector<std::string>{fixture[0].id}&&selection.primary()==fixture[0].id,
@@ -351,43 +350,43 @@ void filteredSelectionAndDeletion() {
     require(!pending.contains(fixture[0].id)&&!pending.contains(fixture[1].id)&&pending.contains(folder)&&pending.contains(fixture[2].id)&&pending.contains(fixture[3].id),
         "Deleting filtered matches expanded into hidden folder contents or another asset kind.");
     removeAssetFiles(project.root,selection.ids());catalog.erase(selection.ids());catalog.synchronize(std::array{fixture[2],fixture[3]});
-    selection.retain(itemIds(catalog.items(BrowserCatalog::ContentFolder,"",BrowserAssetFilter::Textures)));
+    selection.retain(itemIds(catalog.items(BrowserCatalog::RootFolder,"",BrowserAssetFilter::Textures)));
     require(selection.ids().empty()&&selection.primary().empty()&&catalog.items(folder).size()==1,
         "Deleted filtered assets retained stale selection or removed unrelated nested assets.");
 }
 void physicalRootsAndPackageImages() {
     TemporaryProject project;BrowserCatalog catalog(project.root);
     const auto model=canonicalAssetId("assets/models/tree/manifest.json"),image=canonicalAssetId("assets/models/tree/images/bark.png"),image2=canonicalAssetId("assets/models/tree/images/nested/bark.png"),engine=canonicalAssetId("builtin:texture/gray");
-    const auto package=project.root/"Content/Tree.crimson-model";
+    const auto package=project.root/"Tree.crimson-model";
     write(package/"manifest.json","{}");write(package/"images/bark.png","immutable bark");
     write(package/"images/nested/bark.png","second immutable bark");
     registerAssetPath(project.root,model,package/"manifest.json");registerAssetPath(project.root,image,package/"images/bark.png");
     registerAssetPath(project.root,image2,package/"images/nested/bark.png");
-    fs::create_directories(project.root/"Content/Discovered/Nested");
+    fs::create_directories(project.root/"Discovered/Nested");
     const std::array fixture{AssetEntry{model,"Tree",AssetKind::Model},AssetEntry{image,"Bark.png",AssetKind::Texture},AssetEntry{engine,"Default gray",AssetKind::Texture},AssetEntry{image2,"Second Bark.png",AssetKind::Texture}};
     catalog.synchronize(fixture);
-    require(catalog.writableFolder(BrowserCatalog::ContentFolder)&&!catalog.writableFolder(BrowserCatalog::EngineFolder)&&!catalog.writableFolder({})&&
-        !catalog.mutableItem(BrowserCatalog::ContentFolder)&&!catalog.mutableItem(BrowserCatalog::EngineFolder)&&!catalog.mutableItem(engine),
-        "Content/Engine root mutation boundaries are incorrect.");
-    const auto content=catalog.items(BrowserCatalog::ContentFolder);
+    require(catalog.writableFolder(BrowserCatalog::RootFolder)&&!catalog.writableFolder(std::string(".crimson"))&&!catalog.writableFolder({})&&
+        !catalog.mutableItem(BrowserCatalog::RootFolder)&&!catalog.mutableItem(std::string(".crimson"))&&!catalog.mutableItem(engine),
+        "Engine root mutation boundaries are incorrect.");
+    const auto content=catalog.items(BrowserCatalog::RootFolder);
     const auto discovered=std::find_if(content.begin(),content.end(),[](const auto& item){return item.folder&&item.name=="Discovered";});
     require(discovered!=content.end()&&content.size()==4&&catalog.items(discovered->id).size()==1,
         "Real directories were hidden or model-package internals appeared as browser folders.");
-    require(catalog.parent(model)==BrowserCatalog::ContentFolder&&catalog.parent(image)==BrowserCatalog::ContentFolder,
+    require(catalog.parent(model)==BrowserCatalog::RootFolder&&catalog.parent(image)==BrowserCatalog::RootFolder,
         "Model/image cards were placed inside an atomic package instead of beside it.");
     rejects([&]{catalog.rename(engine,"Edited");},"Engine content was renamed.");
-    rejects([&]{catalog.move(std::array{image},BrowserCatalog::EngineFolder);},"A file was moved into Engine.");
-    rejects([&]{catalog.createFolder(BrowserCatalog::EngineFolder,"New");},"A directory was created inside Engine.");
+    rejects([&]{catalog.move(std::array{image},std::string(".crimson"));},"A file was moved into Engine.");
+    rejects([&]{catalog.createFolder(std::string(".crimson"),"New");},"A directory was created inside Engine.");
     rejects([&]{catalog.serializeWithout(std::array{engine});},"Engine content could be staged for deletion.");
-    rejects([&]{catalog.createFolder(BrowserCatalog::ContentFolder,"CON");},"A reserved Windows directory name was accepted.");
+    rejects([&]{catalog.createFolder(BrowserCatalog::RootFolder,"CON");},"A reserved Windows directory name was accepted.");
     rejects([&]{catalog.rename(image,"bad:name");},"An invalid Windows filename was accepted.");
-    const auto destination=catalog.createFolder(BrowserCatalog::ContentFolder,"Destination");
+    const auto destination=catalog.createFolder(BrowserCatalog::RootFolder,"Destination");
     write(catalog.folderPath(destination)/"bark.png","preexisting image");
     const auto reservedMissing=catalog.folderPath(destination)/"bark 2.png";registerAssetPath(project.root,newAssetId(),reservedMissing);
     catalog.move(std::array{model,image,image2},destination);
-    const auto movedPackage=project.root/"Content/Destination/Tree.crimson-model";
-    require(resolveAssetPath(project.root,model)==movedPackage/"manifest.json"&&resolveAssetPath(project.root,image).parent_path()==project.root/"Content/Destination"&&
-        resolveAssetPath(project.root,image)!=resolveAssetPath(project.root,image2)&&read(project.root/"Content/Destination/bark.png")=="preexisting image"&&
+    const auto movedPackage=project.root/"Destination/Tree.crimson-model";
+    require(resolveAssetPath(project.root,model)==movedPackage/"manifest.json"&&resolveAssetPath(project.root,image).parent_path()==project.root/"Destination"&&
+        resolveAssetPath(project.root,image)!=resolveAssetPath(project.root,image2)&&read(project.root/"Destination/bark.png")=="preexisting image"&&
         resolveAssetPath(project.root,image)!=reservedMissing&&resolveAssetPath(project.root,image2)!=reservedMissing&&!fs::exists(reservedMissing)&&
         read(movedPackage/"images/bark.png")=="immutable bark"&&read(resolveAssetPath(project.root,image))=="immutable bark"&&read(resolveAssetPath(project.root,image2))=="second immutable bark",
         "A package/image batch lost its retained import input, copied bytes or stable indexed identities.");
@@ -395,42 +394,21 @@ void physicalRootsAndPackageImages() {
     require(resolveAssetPath(project.root,image).filename()=="Rough Bark.png"&&catalog.parent(image)==destination&&catalog.name(image)=="Rough Bark",
         "Renaming an extracted image did not retain its extension, location and stable card identity.");
     catalog.rename(destination,"Renamed");
-    require(resolveAssetPath(project.root,model)==project.root/"Content/Renamed/Tree.crimson-model/manifest.json"&&
-        resolveAssetPath(project.root,image)==project.root/"Content/Renamed/Rough Bark.png",
+    require(resolveAssetPath(project.root,model)==project.root/"Renamed/Tree.crimson-model/manifest.json"&&
+        resolveAssetPath(project.root,image)==project.root/"Renamed/Rough Bark.png",
         "Directory rename did not update every indexed descendant.");
     const auto unavailable=newAssetId();const std::array missingFixture{fixture[0],fixture[1],fixture[2],AssetEntry{unavailable,"Pending Image",AssetKind::Texture}};
     catalog.synchronize(missingFixture);
-    const auto missingResults=catalog.items(BrowserCatalog::ContentFolder,"Pending",BrowserAssetFilter::Textures);
+    const auto missingResults=catalog.items(BrowserCatalog::RootFolder,"Pending",BrowserAssetFilter::Textures);
     require(!catalog.mutableItem(unavailable)&&std::any_of(missingResults.begin(),missingResults.end(),[&](const auto& item){return item.id==unavailable;}),
         "An unavailable UUID card crashed the catalog, became writable or disappeared from name search.");
 }
-void bundledModelOwnership() {
-    TemporaryProject project;const auto fixture=bundle_test::writeFixture(project.root);
-    const auto cache=resolveAssetPath(project.root,fixture.modelId);const auto bundleBytes=read(fixture.file);
-    BrowserCatalog catalog(project.root);const std::array assets{AssetEntry{fixture.modelId,"Triangle",AssetKind::Model}};
-    catalog.synchronize(assets);
-    const auto parent=catalog.parent(fixture.modelId);
-    require(catalog.name(parent)=="Levels"&&catalog.items(parent).size()==1&&catalog.items(parent).front().id==fixture.modelId,
-        "A bundled mesh was not presented beside its authored scene bundle.");
-    require(!catalog.mutableItem(fixture.modelId),"A disposable bundle member was independently mutable.");
-    require(catalog.deletableItem(fixture.modelId)&&!catalog.deletableItem(BrowserCatalog::ContentFolder)&&!catalog.deletableItem(BrowserCatalog::EngineFolder),
-        "Bundle mesh deletion stayed blocked or allowed deleting protected roots.");
-    rejects([&]{catalog.rename(fixture.modelId,"Renamed mesh");},"A bundle member was independently renamed.");
-    rejects([&]{catalog.move(std::array{fixture.modelId},BrowserCatalog::ContentFolder);},"A bundle member was independently moved.");
-    const auto deletion=catalog.prepareErase(std::array{fixture.modelId});
-    require(!deletion.contains(fixture.modelId)&&catalog.contains(fixture.modelId)&&read(fixture.file)==bundleBytes&&fs::is_regular_file(cache),
-        "Preparing a bundle mesh deletion failed or changed source files before the asset transaction.");
-    catalog.rename(parent,"Renamed levels");catalog.synchronize(assets);
-    const auto source=quaderBundleSource(project.root,fixture.modelId);
-    require(source&&*source==project.root/"Content/Renamed levels/Bundle fixture.crimson-quader"&&read(*source)==bundleBytes&&
-        resolveAssetPath(project.root,fixture.modelId)==cache&&catalog.parent(fixture.modelId)==parent,
-        "Moving a bundle's Content folder changed a model identity/cache path or lost its authored owner.");
-}
+
 }
 
 int main() {
     try {
-        metadataAndIdentity(); atomicMoves(); invalidMetadataAndWriteFailure(); selectionPolicy();folderDeletion();searchAndTypeQueries();filteredSelectionAndDeletion();physicalRootsAndPackageImages();bundledModelOwnership();
+        metadataAndIdentity(); atomicMoves(); invalidMetadataAndWriteFailure(); selectionPolicy();folderDeletion();searchAndTypeQueries();filteredSelectionAndDeletion();physicalRootsAndPackageImages();
         std::cout<<"Asset browser metadata and selection checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

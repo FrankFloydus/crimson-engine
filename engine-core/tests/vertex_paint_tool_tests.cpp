@@ -1,6 +1,6 @@
 #include "tools/VertexPaintTool.h"
 #include "integration/paint/LevelVertexPaint.h"
-#include "tools/ScenePanels.h"
+#include "tools/scene_inspector_context.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/Renderer.h"
 #include <QApplication>

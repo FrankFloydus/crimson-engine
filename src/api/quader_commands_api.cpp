@@ -9,6 +9,7 @@
 
 #include "api/quader_api.hpp"
 #include "api/quader_editor_mode_api.hpp"
+#include "editor/modes/editor_mode_policy.hpp"
 #include "api/quader_mesh_arrangement_catalog.hpp"
 #ifndef NDEBUG
 #include "api/quader_dev_tools_api.hpp"
@@ -1179,6 +1180,31 @@ QuaderKeybindingContextKind keybinding_context_kind_for_viewport_input(
 /**
  * Owns command registration, dispatch, and keybinding adaptation for QuaderCommandsApi.
  */
+static bool workspace_command_allowed(QuaderWorkspaceMode mode,
+                                      std::string_view id) {
+  if (mode == QuaderWorkspaceMode::Modeling) return true;
+  if (const auto tool = quader_tool_id_from_activation_command_target(id)) {
+    return workspace_tool_allowed(EditorWorkspaceMode::Default, *tool);
+  }
+  if (const auto selection = quader_selection_mode_id_from_command_target(id)) {
+    return *selection == "object" || *selection == "group";
+  }
+  if (id.starts_with("editor.mode.")) return id == "editor.mode.object";
+  if (id.starts_with("modeling.")) {
+    return workspace_action_allowed(EditorWorkspaceMode::Default,
+                                    id.substr(std::string_view{"modeling."}.size()));
+  }
+  for (const auto command : {
+           quader_command::kSelectEdgeDirection, quader_command::kSelectEdgeLoops,
+           quader_command::kSelectEdgeRing, quader_command::kSelectFacesWithSameMaterial,
+           quader_command::kSelectCoplanarFaces, quader_command::kSelectFaceNormal,
+           quader_command::kSelectMeshNGons, quader_command::kSelectGrow,
+           quader_command::kSelectShrink, quader_command::kSelectToggleBackfaceSelection}) {
+    if (id == command.string()) return false;
+  }
+  return true;
+}
+
 class QuaderCommandsApi::Impl final {
 public:
 #ifndef NDEBUG
@@ -1205,6 +1231,9 @@ public:
     [[nodiscard]] std::optional<QuaderCommandDescriptor>
     descriptor(std::string_view command_id) const;
     [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
+    [[nodiscard]] bool workspace_allows(std::string_view id) const {
+      return workspace_command_allowed(mode_.workspace_mode(), id);
+    }
     [[nodiscard]] std::string
     command_id_for_modeling_action(std::string_view action_id) const;
     [[nodiscard]] std::string
@@ -1440,6 +1469,7 @@ QuaderCommandsApi::Impl::execute(std::string_view command_id) {
   QDR_PROFILE_FUNCTION();
   QDR_PROFILE_NAME(command_id.data(), command_id.size());
   QDR_PROFILE_MESSAGE_DYNAMIC(command_id.data(), command_id.size());
+  if(!workspace_command_allowed(mode_.workspace_mode(),command_id))return failure("The command requires Modeling workspace mode.");
   if (std::optional<QuaderApiVoidResult> result =
           registry_.execute(command_id)) {
     result->revisions = api_.revisions();
@@ -1472,6 +1502,7 @@ QuaderCommandsApi::Impl::descriptor(std::string_view command_id) const {
       registry_.descriptor(command_id);
   if (command.has_value()) {
     command->shortcut = shortcut_for(command->id);
+    if(!workspace_command_allowed(mode_.workspace_mode(),command_id))command->enabled=false;
   }
   return command;
 }
@@ -1487,6 +1518,7 @@ std::vector<QuaderCommandDescriptor> QuaderCommandsApi::Impl::available() const 
     QDR_PROFILE_SCOPE("Quader commands shortcut enrichment");
     for (QuaderCommandDescriptor &command : commands) {
       command.shortcut = shortcut_for(command.id);
+      if(!workspace_command_allowed(mode_.workspace_mode(),command.id))command.enabled=false;
     }
   }
   return commands;
@@ -4322,6 +4354,10 @@ QuaderCommandsApi::descriptor(std::string_view command_id) const {
 std::optional<QuaderCommandDescriptor>
 QuaderCommandsApi::descriptor(QuaderCommandId command_id) const {
   return impl_->descriptor(command_id.string());
+}
+
+bool QuaderCommandsApi::workspace_allows(std::string_view command_id) const {
+  return impl_->workspace_allows(command_id);
 }
 
 std::vector<QuaderCommandDescriptor> QuaderCommandsApi::available() const {

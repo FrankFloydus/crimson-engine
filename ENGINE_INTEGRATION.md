@@ -1,10 +1,23 @@
-# Crimson Engine on the complete Quader application
+# Crimson Engine on the Quader Public 0.1 application
 
 The application base is the complete `quader-crimson` tree and history at
-`f6e0c6762592b7c17aa5d264fa3d3b834601f563`. Modeling, topology, UVs, tools,
+`f6e0c6762592b7c17aa5d264fa3d3b834601f563`. Modeling, topology, tools,
 selection, project documents, history, assets, the Qt main window, input,
 composition preparation and the native event loop remain Quader-owned.
-The application links `quader_release_profile_full`.
+The application links `quader_release_profile_public`, the immutable Quader
+Public 0.1 profile. Its existing public feature gates own the modeling toolset;
+Full-only UV and Face Texture authoring remain unavailable. Crimson owns the
+Engine material, light, Environment and gameplay components independently.
+An explicit host viewport capability restores Rendered presentation without
+changing the Public modeling profile. It follows native scene bindings and uses
+the same viewport and authored scene; it does not create another scene editor.
+
+The compatible native UI owners are updated from local Quader `main`
+`517ab3fcef2e2be9e5c3d8df0891d6175f985e8c`, including flat tab/section styling
+from `6c7166e1` and docked Tool Settings/Commands Library from `7b4ce8eb`, with
+later panel refinements. This UI port retains this branch's scene, mode and
+Crimson renderer contracts; it does not import unrelated renderer or modeling-core
+changes from that branch.
 
 The retained Engine domain source is `47d332534a5b6b4d255b311341d3ce4a5de61698`,
 under `engine-core/`. The superseded partial Qt migration is preserved on
@@ -54,26 +67,71 @@ Canvas resizing changes independent pane targets, never resets an unrelated
 primary swapchain. Native allocations, pending submissions and retention remain
 bounded and observable in the renderer's regression fixtures.
 
-## Domain boundaries
+## Projects and workspace modes
 
-Quader's ProjectSession and SceneSession remain the modeling document, history,
-selection and tool authorities. Engine LevelSession owns its schema-25 level,
-UUID asset library, reusable document controllers and first-person PlaySession.
-The two asset-ID domains are distinct. Modeling publications enter levels through
-the existing detached Quader reader/import/bridge contract, including paint,
-materials, hierarchy and source identity; they do not alias either registry.
+Startup retains Quader's Projects page and recent-project workflow. New Project
+and Open Project choose a folder. That folder is the sole project root for the
+modeling session, Engine data and the filesystem browser; preexisting asset files
+are allowed. A single existing `.qproj` is opened through the validated project
+pipeline, while a folder without one receives metadata and the ordinary initial
+scene. Ambiguous manifests are rejected before replacing the active project.
+Initial metadata uses no-replace atomic publication, and failed creation removes
+only files and directories created by that attempt.
 
-Engine views and document controls are added to the existing Qt shell. Their
-File/Edit/history/dirty/save/cancel boundaries remain with their Engine document
-controllers. Level selection and viewport picking retain persistent IDs and
-immutable generation/camera/target guards. Game owns physical movement/look/jump
-only after explicit focus acquisition, and releases ownership on interruption.
+`ProjectSession` owns the transient `Default` / `Modeling` workspace capability.
+The application selects Default on project entry. Every resident and new scene
+reads that project owner, so changing scene tabs preserves the accepted mode.
+Object/Edit selection context remains separate. Default preserves object
+placement, selection, transforms, asset documents and runtime controls; Modeling
+allows Public 0.1's geometry, component and instance-edit tools.
+Default hides modeling-only toolbar actions, component selection, geometry menus,
+geometry palette entries and Commands Library. The ordinary Select, Move, Rotate
+and Scale tools remain available. Modeling reveals its retained public controls
+without recreating their scene or layout. Full-only Face Texture and UV tools are
+absent in both modes. Tool Settings remains available to ordinary scene transforms. Command,
+direct API and native gesture owners enforce the same capability gate.
 
-The integration must preserve generated materials and Blend recipes, decals,
-particle/animation/ragdoll documents and previews, authored camera/light data,
-collision/navigation, fixed-step Play, resource workers and source synchronization.
-Presence of a source file or a successful library build does not establish that
-its user workflow is integrated.
+The selector changes capability in the same workspace viewport. It does not
+create a second application or project. The original project Asset Browser
+presents the whole chosen filesystem with Engine asset support in that view.
+Private bookkeeping and disposable caches remain below the project's hidden
+metadata directories.
+
+## One authored scene
+
+The native `quader::SceneDocument` and SceneSession services own the sole authored
+scene: entity identity, hierarchy, transforms, modeling data, selection, dirty state
+and undo/redo. The application has one authoring viewport, one Outliner and one
+Inspector. Engine authoring changes native entities and optional component envelopes
+through that same command/history boundary. Native General/Transform/light
+properties and the mounted Engine component editor share the Inspector panel.
+
+Native QDR's SCNE chunk uses schema 21. It appends optional versioned opaque
+`EngineComponentsComponent` payloads and `EngineSceneSettings`, with explicit native
+entity UUID references. Missing envelopes retain ordinary Quader scene behavior.
+The native codec preserves these payloads without interpreting game components;
+the Engine adapter validates their typed contents. Duplication, clipboard,
+parenting, scene history and Save use the native scene owners and remap declared
+references through their canonical identity rules.
+
+Engine internal scene codec 25 remains the typed payload/projection contract,
+separate from QDR schema 21 and material ABI 40. `crimson::SceneDocument`, LevelSession
+and PlaySession provide derived CPU evaluation, resource preparation and transient
+runtime state. They do not own a second saved level or independent scene history.
+There are no per-scene external level bindings or `.crimson-scene` save workflows.
+
+The host publishes immutable geometry/material/light/collision snapshots from the
+active native scene into the shared renderer and runtime. Pending preparation
+retains the last accepted publication under its binding and lifetime guards.
+Play evaluates a transient runtime world of that scene; Stop discards runtime
+poses/state while retaining the native authored document and history. Game is its
+runtime view. Game input owns physical movement/look/jump only after focus
+acquisition and releases ownership on interruption.
+
+Typed material, Blend, decal, particle, animation and ragdoll asset documents retain
+their own File/Edit/save/conflict controllers. Project replacement settles Play,
+dirty native scenes and asset documents before rebinding resources. Presence of a
+source file or a successful library build does not establish user-workflow parity.
 
 ## Verification boundaries
 

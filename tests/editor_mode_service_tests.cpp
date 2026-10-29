@@ -9,9 +9,12 @@
 #include "api/quader_editor_api.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modes/editor_mode_service.hpp"
+#include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
+#include "editor/viewport/mesh_bounds_resize_interaction.hpp"
+#include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "support/viewport_overlay_test_helpers.hpp"
 
 #include <QTemporaryDir>
@@ -1398,6 +1401,132 @@ TEST(EditorModeProjectLifecycleTests, DeselectedActiveObjectIsSceneLocalAndNotPe
   const auto entered = editor.mode().toggle_edit();
   EXPECT_TRUE(entered.ok());
   EXPECT_FALSE(entered.changed());
+}
+
+TEST_F(EditorModeServiceTests, DefaultWorkspaceBlocksModelingCommandsAndKeepsObjectTransforms){
+  const auto box=create_box();ASSERT_TRUE(editor_.selection().select_objects({box}).ok());
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor_.mode().set_workspace_mode(QuaderWorkspaceMode::Default).ok());
+  EXPECT_EQ(editor_.mode().current(),QuaderEditorMode::Object);
+  EXPECT_EQ(editor_.mode().workspace_mode(),QuaderWorkspaceMode::Default);
+  const auto history=session_.history().revision();
+  EXPECT_FALSE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+  EXPECT_FALSE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
+  EXPECT_FALSE(editor_.tools().activate("cut").ok());EXPECT_FALSE(editor_.tools().can_activate("cut"));
+  EXPECT_FALSE(session_.modeling().activate_viewport_tool(ModelingViewportTool::Box).ok);
+  EXPECT_FALSE(session_.native_tools().activate("curve",1).ok);
+  EXPECT_FALSE(editor_.commands().execute(quader_command::kModelingCombineMeshes).ok());
+  EXPECT_FALSE(editor_.modeling().execute_tool("combine_meshes").ok());
+  EXPECT_FALSE(editor_.modeling().create_box({.min={0,0,0},.max={1,1,1}},"Forbidden").ok());
+  EXPECT_EQ(session_.history().revision(),history);
+  EXPECT_TRUE(editor_.tools().activate("move").ok());EXPECT_TRUE(editor_.tools().activate("rotate").ok());EXPECT_TRUE(editor_.tools().activate("scale").ok());
+  ASSERT_TRUE(editor_.mode().set_workspace_mode(QuaderWorkspaceMode::Modeling).ok());
+  EXPECT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());EXPECT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
+}
+TEST_F(EditorModeServiceTests, DefaultWorkspaceRetiresBoundsPointerAndKeepsOrdinaryScale) {
+  const auto box = create_box();
+  ASSERT_TRUE(editor_.selection().select_objects({box}).ok());
+  session_.history().clear();
+  ViewportCameraController camera;
+  camera.set_viewport_size(800, 600);
+  camera.focus_origin(8);
+  camera.set_view_direction({0, 0, -1});
+  ViewportInputRouter router;
+  auto settings = ViewportSettings::defaults();
+  settings.set_bool_value(ViewportBoolSettingId::GridSnap, false);
+  ViewportInputFrame input;
+  input.viewport_hovered = input.viewport_focused = true;
+  input.viewport_size = {800, 600};
+  ViewportInputResult input_result;
+  ViewportInteractionFrame frame{.input_router = router, .camera = camera,
+      .settings = settings, .input = input, .input_result = input_result,
+      .selection_state = {.summary = editor_.selection().summary(),
+          .scene_revision = session_.scene().revision(), .asset_revision = session_.assets().revision()}};
+  MeshBoundsResizeInteraction bounds;
+  (void)bounds.handle_frame(editor_, frame);
+  ASSERT_NE(bounds.frame(), nullptr);
+  const auto handle = std::ranges::find_if(bounds.frame()->handles,
+      [](const auto& value) { return value.visible && value.enabled; });
+  ASSERT_NE(handle, bounds.frame()->handles.end());
+  frame.left_pressed = frame.left_down = true;
+  input.mouse_local = frame.left_click_local = handle->screen_position;
+  ASSERT_TRUE(bounds.handle_frame(editor_, frame).gizmo_consumed);
+  EXPECT_TRUE(bounds.pointer_active());
+  frame.left_pressed = false;
+  input.mouse_local.x += 40;
+  ASSERT_TRUE(bounds.handle_frame(editor_, frame).gizmo_consumed);
+  ASSERT_TRUE(bounds.dragging());
+  ASSERT_TRUE(session_.modeling().transform_drag_active());
+  const auto stale_bounds = editor_.modeling().selection_resize_bounds(QuaderTransformSpace::Global);
+  ASSERT_TRUE(stale_bounds);
+  ASSERT_TRUE(editor_.mode().set_workspace_mode(QuaderWorkspaceMode::Default).ok());
+  EXPECT_FALSE(session_.modeling().transform_drag_active());
+  EXPECT_EQ(session_.history().undo_count(), 0u);
+  (void)bounds.handle_frame(editor_, frame);
+  frame.left_down = false;
+  frame.left_released = true;
+  (void)bounds.handle_frame(editor_, frame);
+  EXPECT_FALSE(bounds.pointer_active());
+  EXPECT_EQ(bounds.frame(), nullptr);
+  EXPECT_FALSE(editor_.modeling().selection_resize_bounds(QuaderTransformSpace::Global));
+  QuaderTransformDragBeginRequest request{.tool = QuaderTransformTool::Scale,
+      .axis = QuaderTransformAxis::X, .screen_position = {100,100},
+      .screen_pivot = {90,100}, .screen_tip = {110,100},
+      .ray = {.origin = {0,0,10}, .direction = {0,0,-1}},
+      .camera = {.orthographic = true, .origin = {0,0,10},
+          .viewport_size = {800,600}, .orthographic_size = 10},
+      .grid_snap_enabled = false,
+      .bounds_resize_reference = QuaderBoundsResizeReference{.moving_point = {1,0,0}}};
+  EXPECT_FALSE(editor_.modeling().begin_transform_drag(request).ok());
+  request.bounds_resize_reference.reset();
+  ASSERT_TRUE(editor_.tools().activate("scale").ok());
+  ASSERT_TRUE(editor_.modeling().begin_transform_drag(request).ok());
+  EXPECT_TRUE(session_.modeling().transform_drag_active());
+  ASSERT_TRUE(editor_.modeling().cancel_transform_drag().ok());
+  EXPECT_TRUE(editor_.tools().activate("move").ok());
+  EXPECT_TRUE(editor_.tools().activate("rotate").ok());
+  EXPECT_TRUE(editor_.tools().activate("select").ok());
+  const auto scale = session_.scene().transform(box.entity)->scale;
+  EXPECT_FLOAT_EQ(scale.x, 1); EXPECT_FLOAT_EQ(scale.y, 1); EXPECT_FLOAT_EQ(scale.z, 1);
+}
+
+TEST_F(EditorModeServiceTests, DefaultWorkspaceFinishesAcceptedPrimitiveAndAbandonsHeldFootprint) {
+  ASSERT_TRUE(editor_.tools().activate("create_primitive").ok());
+  ModelingBoxPreview accepted;
+  accepted.ok = accepted.valid = true;
+  accepted.drag_state = ModelingBoxDragState::Height;
+  accepted.corners = {QVec3{-1,0,-1}, QVec3{-1,0,1}, QVec3{1,0,1}, QVec3{1,0,-1},
+      QVec3{-1,2,-1}, QVec3{-1,2,1}, QVec3{1,2,1}, QVec3{1,2,-1}};
+  accepted.corner_count = accepted.corners.size();
+  ASSERT_TRUE(session_.primitive_creation().accept_footprint(accepted, "Accepted box").ok);
+  const auto entities = session_.scene().entities();
+  ASSERT_EQ(entities.size(), 1u);
+  ModelingBoxToolEvent press{.ray = {.origin = {3,5,3}, .direction = {0,-1,0}}};
+  ASSERT_TRUE(session_.modeling().begin_box_footprint(press).ok);
+  ASSERT_NE(session_.modeling().box_drag_state(), ModelingBoxDragState::Idle);
+  ASSERT_TRUE(editor_.mode().set_workspace_mode(QuaderWorkspaceMode::Default).ok());
+  EXPECT_FALSE(session_.primitive_creation().active());
+  EXPECT_FALSE(editor_.tools().live_primitive_creation());
+  EXPECT_EQ(session_.modeling().box_drag_state(), ModelingBoxDragState::Idle);
+  EXPECT_EQ(session_.scene().entities(), entities);
+  EXPECT_EQ(session_.history().undo_count(), 1u);
+  EXPECT_EQ(session_.modeling().active_viewport_tool(), ModelingViewportTool::Select);
+  ASSERT_TRUE(editor_.history().undo().ok());
+  EXPECT_TRUE(session_.scene().entities().empty());
+  ASSERT_TRUE(editor_.history().redo().ok());
+  EXPECT_EQ(session_.scene().entities().size(), 1u);
+  EXPECT_TRUE(editor_.tools().activate("move").ok());
+}
+
+TEST(EditorModeProjectLifecycleTests, WorkspaceCapabilityBelongsToProjectAcrossResidentAndNewScenes){
+  ScopedModeProjectDirectory directory;ASSERT_TRUE(directory.valid());ASSERT_TRUE(std::filesystem::create_directory(directory.project_root()));
+  ProjectSession project;project.set_resource_root(std::filesystem::path(QUADER_SOURCE_DIR)/"resources/modeling_assets");QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(directory.project_root()).ok());const auto first=editor.scene_documents().active_scene_id();ASSERT_TRUE(first);
+  ASSERT_TRUE(editor.mode().set_workspace_mode(QuaderWorkspaceMode::Default).ok());const auto second=editor.scene_documents().new_scene();ASSERT_TRUE(second.ok());
+  EXPECT_EQ(editor.mode().workspace_mode(),QuaderWorkspaceMode::Default);EXPECT_FALSE(editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.mode().set_workspace_mode(QuaderWorkspaceMode::Modeling).ok());ASSERT_TRUE(editor.scene_documents().activate(*first).ok());
+  EXPECT_EQ(editor.mode().workspace_mode(),QuaderWorkspaceMode::Modeling);const auto third=editor.scene_documents().new_scene();ASSERT_TRUE(third.ok());EXPECT_EQ(editor.mode().workspace_mode(),QuaderWorkspaceMode::Modeling);
+  ASSERT_TRUE(editor.mode().set_workspace_mode(QuaderWorkspaceMode::Default).ok());ASSERT_TRUE(editor.scene_documents().activate(second.value()).ok());EXPECT_EQ(editor.mode().workspace_mode(),QuaderWorkspaceMode::Default);
 }
 
 } // namespace

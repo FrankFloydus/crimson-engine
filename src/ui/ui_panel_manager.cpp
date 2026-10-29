@@ -63,6 +63,7 @@ void UIPanelManager::clear() {
         ui_panel_default_visible(static_cast<UIPanelId>(slot));
   }
   presented_.fill(false);
+  suppressed_.fill(false);
 }
 
 void UIPanelManager::set_visibility_changed_callback(
@@ -98,7 +99,7 @@ bool UIPanelManager::is_presented(UIPanelId id) const {
   const std::size_t slot = index(id);
   return id == UIPanelId::Viewport ||
          (slot < docks_.size() && docks_[slot] != nullptr &&
-          explicit_visibility_[slot] && presented_[slot]);
+          explicit_visibility_[slot] && !suppressed_[slot] && presented_[slot]);
 }
 
 bool UIPanelManager::set_visible(UIPanelId id, bool visible) {
@@ -110,14 +111,24 @@ bool UIPanelManager::set_visible(UIPanelId id, bool visible) {
     return false;
   }
   const bool changed = record_explicit_visibility(id, visible);
-  if (panel->isHidden() == visible) {
-    panel->setVisible(visible);
+  const bool presented = visible && !suppressed_[index(id)];
+  if (panel->isHidden() == presented) {
+    panel->setVisible(presented);
   }
   return changed;
 }
 
+void UIPanelManager::set_suppressed(UIPanelId id, bool suppressed) {
+  const auto slot = index(id);
+  QDockWidget *panel = dock(id);
+  if (panel == nullptr || suppressed_[slot] == suppressed) return;
+  suppressed_[slot] = suppressed;
+  panel->toggleViewAction()->setVisible(!suppressed);
+  panel->setVisible(explicit_visibility_[slot] && !suppressed);
+}
+
 bool UIPanelManager::focus(UIPanelId id) {
-  if (id == UIPanelId::Viewport) {
+  if (id == UIPanelId::Viewport || (index(id) < suppressed_.size() && suppressed_[index(id)])) {
     return false;
   }
   QDockWidget *panel = dock(id);

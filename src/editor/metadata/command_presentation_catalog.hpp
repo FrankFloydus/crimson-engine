@@ -14,6 +14,8 @@
 
 namespace quader {
 
+enum class QuaderSelectionMode;
+
 /** Stable user-facing command domains used by menus and command discovery. */
 enum class CommandPresentationDomain {
   File,
@@ -101,6 +103,7 @@ enum class CommandPresentationSurface : std::uint32_t {
   Toolbar = 1u << 4u,
   ToolSettings = 1u << 5u,
   CommandPalette = 1u << 6u,
+  CommandsLibrary = 1u << 7u,
 };
 
 [[nodiscard]] constexpr CommandPresentationSurface
@@ -158,6 +161,17 @@ find_command_presentation(std::string_view command_id) noexcept;
 find_command_presentation(QuaderCommandId command_id) noexcept {
   return find_command_presentation(command_id.string());
 }
+
+/**
+ * Reports stable selected-kind relevance for the Commands Library surface.
+ * Modeling operations use their authoring menu's selected kind; shared tools
+ * additionally use their descriptor support and explicit authoring kind.
+ * Unrelated kinds and ordinary editor commands are omitted. Execution
+ * availability for matching operations stays with the command owner.
+ */
+[[nodiscard]] bool command_presentation_supports_selection_kind(
+    const CommandPresentationDescriptor &descriptor,
+    QuaderSelectionMode kind) noexcept;
 
 /** Stable identifiers and English fallbacks for category breadcrumbs. */
 [[nodiscard]] std::string_view

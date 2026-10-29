@@ -29,6 +29,20 @@ void QuaderEditorModeApi::rebind_session(QuaderApiSession session) {
   session_ = session;
 }
 
+QuaderWorkspaceMode QuaderEditorModeApi::workspace_mode()const{
+  const auto* project=QuaderApiSessionInternalAccess::project_session(session_);
+  const auto mode=project?project->workspace_mode():QuaderApiSessionInternalAccess::read_scene_session(session_).editor_mode().workspace_mode();
+  return mode==EditorWorkspaceMode::Modeling?QuaderWorkspaceMode::Modeling:QuaderWorkspaceMode::Default;
+}
+QuaderApiVoidResult QuaderEditorModeApi::set_workspace_mode(QuaderWorkspaceMode requested){
+  auto& scene=QuaderApiSessionInternalAccess::scene_session(session_);
+  if(requested!=QuaderWorkspaceMode::Default&&requested!=QuaderWorkspaceMode::Modeling)return quader_api_failure_status(scene,"Unknown workspace mode.");
+  const auto mode=requested==QuaderWorkspaceMode::Modeling?EditorWorkspaceMode::Modeling:EditorWorkspaceMode::Default;
+  auto* project=QuaderApiSessionInternalAccess::project_session(session_);
+  const auto result=project?project->set_workspace_mode(mode):scene.editor_mode().set_workspace_mode(mode);
+  return mutations_.run_runtime_result(result,result.changed?"Set Workspace Mode":"");
+}
+
 QuaderEditorMode QuaderEditorModeApi::current() const {
   return QuaderApiSessionInternalAccess::read_scene_session(session_)
                      .editor_mode().mode() == EditorMode::Edit

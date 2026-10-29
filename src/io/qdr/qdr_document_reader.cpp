@@ -81,6 +81,9 @@ copy_bytes(std::span<const std::byte> bytes) {
     const SceneSettings defaults;
     settings.camera.near_plane = defaults.camera.near_plane;
     settings.camera.far_plane = defaults.camera.far_plane;
+    // The opaque host envelope is not Quader Environment authoring. Native
+    // environment/fog/post-process values still require their release feature.
+    settings.engine.reset();
     if (!(settings == defaults)) {
       return true;
     }
@@ -243,7 +246,7 @@ deserialize_owned_project_document(
 }
 
 [[nodiscard]] QdrProjectDependencyReadResult
-deserialize_owned_project_dependencies(std::vector<std::byte> bytes) {
+deserialize_owned_project_dependencies(std::vector<std::byte> bytes, bool engine_only = false) {
   QdrProjectDependencyReadResult result;
   result.source_byte_count = bytes.size();
   result.source_content_hash = quader_io::qdr_binary_content_hash(bytes);
@@ -269,7 +272,10 @@ deserialize_owned_project_dependencies(std::vector<std::byte> bytes) {
   result.stats.raw_chunk_bytes = container.raw_chunk_bytes;
   result.stats.compressed_chunk_count = container.compressed_chunk_count;
   QdrSceneBinaryDependencyDecodeResult decoded =
-      decode_qdr_scene_binary_dependencies(container);
+      engine_only ? decode_qdr_scene_binary_engine_asset_dependencies(container)
+                  : decode_qdr_scene_binary_dependencies(container);
+  result.engine_asset_ids = std::move(decoded.engine_asset_ids);
+  result.engine_asset_ids_complete = decoded.engine_asset_ids_complete;
   result.scene_name = std::move(decoded.scene_name);
   result.material_ids = std::move(decoded.material_ids);
   result.project_asset_dependencies =
@@ -498,6 +504,71 @@ QdrDocumentReader::deserialize_project_material_usage(
   } catch (...) {
     return project_error_result<QdrProjectMaterialUsageReadResult>(
         "qdr.binary.unknown_error", "Unknown error reading QDR material usage.");
+  }
+}
+
+QdrProjectDependencyReadResult QdrDocumentReader::deserialize_project_engine_asset_dependencies(
+    std::span<const std::byte> bytes) {
+  QDR_PROFILE_FUNCTION();
+  try {
+    return deserialize_owned_project_dependencies(copy_bytes(bytes), true);
+  } catch (const quader_io::QdrDiagnosticException &exception) {
+    return project_error_result<QdrProjectDependencyReadResult>(
+        exception.diagnostic());
+  } catch (const std::exception &exception) {
+    return project_error_result<QdrProjectDependencyReadResult>(
+        "qdr.binary.read_failed", exception.what());
+  } catch (...) {
+    return project_error_result<QdrProjectDependencyReadResult>(
+        "qdr.binary.unknown_error", "Unknown error reading QDR scene dependencies.");
+  }
+}
+
+QdrProjectDependencyReadResult QdrDocumentReader::read_project_engine_asset_dependencies(
+    const std::filesystem::path &path) {
+  QDR_PROFILE_FUNCTION();
+  const auto byte_read_started = std::chrono::steady_clock::now();
+  try {
+    quader_io::SharedFileReadResult source =
+        quader_io::read_file_bytes_shared(path);
+    if (!source.ok) {
+      std::string_view code = "qdr.file_read_failed";
+      if (source.error == quader_io::SharedFileReadError::Open) {
+        code = "qdr.file_open_failed";
+      } else if (source.error == quader_io::SharedFileReadError::Size ||
+                 source.error == quader_io::SharedFileReadError::Limit) {
+        code = "qdr.binary.file_too_large";
+      }
+      return project_read_result_with_source_path(
+          project_error_result<QdrProjectDependencyReadResult>(
+              code, "Could not read QDR scene '" + path.string() + "': " +
+                        source.message),
+          path);
+    }
+    const double byte_read_ms = std::chrono::duration<double, std::milli>(
+                                    std::chrono::steady_clock::now() -
+                                    byte_read_started)
+                                    .count();
+    QdrProjectDependencyReadResult result =
+        deserialize_owned_project_dependencies(std::move(source.bytes), true);
+    result.stats.byte_read_ms = byte_read_ms;
+    return project_read_result_with_source_path(std::move(result), path);
+  } catch (const quader_io::QdrDiagnosticException &exception) {
+    return project_read_result_with_source_path(
+        project_error_result<QdrProjectDependencyReadResult>(
+            exception.diagnostic()),
+        path);
+  } catch (const std::exception &exception) {
+    return project_read_result_with_source_path(
+        project_error_result<QdrProjectDependencyReadResult>(
+            "qdr.binary.read_failed", exception.what()),
+        path);
+  } catch (...) {
+    return project_read_result_with_source_path(
+        project_error_result<QdrProjectDependencyReadResult>(
+            "qdr.binary.unknown_error",
+            "Unknown error reading QDR scene dependencies."),
+        path);
   }
 }
 

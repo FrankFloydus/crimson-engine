@@ -20,6 +20,7 @@ class QuaderApiMutationRunner;
 
 /// Defines the scene's editing context independently of its selection kind.
 enum class QuaderEditorMode { Object, Edit };
+enum class QuaderWorkspaceMode { Default, Modeling };
 
 /// Detached, read-only-by-value view of the scene-owned mode context.
 struct QuaderEditorModeState final {
@@ -39,6 +40,8 @@ public:
                       QuaderApiMutationRunner &mutations);
 
   [[nodiscard]] QuaderEditorMode current() const;
+  [[nodiscard]] QuaderWorkspaceMode workspace_mode()const;
+  QuaderApiVoidResult set_workspace_mode(QuaderWorkspaceMode);
   [[nodiscard]] std::uint64_t revision() const;
   [[nodiscard]] std::uint64_t generation() const;
   [[nodiscard]] QuaderEditorModeState state() const;

@@ -11,6 +11,7 @@
 #include "ui/ui_panel_manager.hpp"
 #include "ui/ui_settings.hpp"
 
+#include <algorithm>
 #include <array>
 #include <span>
 #include <filesystem>
@@ -89,16 +90,34 @@ TEST(UIPanelManagerTests, ExplicitVisibilityTransitionIgnoresPhysicalNoise) {
   EXPECT_TRUE(restored.changed);
 }
 
-TEST(UIPanelManagerTests, ViewportSettingsAreAbsentFromTheDockCatalog) {
-  for (UIPanelId id : kUiDockPanelIds) {
-    EXPECT_STRNE(ui_panel_stable_id(id), "tool_settings");
-    EXPECT_STRNE(ui_panel_key(id), "Tool Settings");
-  }
-
-  EXPECT_EQ(kUiDockPanelIds.size(), 6U);
+TEST(UIPanelManagerTests, ToolSettingsIsAnOrdinaryVisibleDock) {
+  EXPECT_TRUE(std::find(kUiDockPanelIds.begin(), kUiDockPanelIds.end(),
+                        UIPanelId::ToolSettings) != kUiDockPanelIds.end());
+  EXPECT_STREQ(ui_panel_stable_id(UIPanelId::ToolSettings), "tool_settings");
+  EXPECT_STREQ(ui_panel_key(UIPanelId::ToolSettings), "Tool Settings");
+  EXPECT_TRUE(UISettings::defaults().is_panel_visible(UIPanelId::ToolSettings));
 }
 
-TEST(UIPanelManagerTests, LegacyToolSettingsVisibilityIsIgnoredAndNotSaved) {
+TEST(UIPanelManagerTests, CommandsLibraryVisibilityPersistsIndependently) {
+  EXPECT_TRUE(std::find(kUiDockPanelIds.begin(), kUiDockPanelIds.end(),
+                        UIPanelId::CommandsLibrary) != kUiDockPanelIds.end());
+  EXPECT_STREQ(ui_panel_stable_id(UIPanelId::CommandsLibrary), "commands_library");
+  EXPECT_STREQ(ui_panel_key(UIPanelId::CommandsLibrary), "Commands Library");
+  EXPECT_TRUE(UISettings::defaults().is_panel_visible(UIPanelId::CommandsLibrary));
+  const auto path = std::filesystem::temp_directory_path() /
+                    "quader-commands-library-visibility.ini";
+  for (bool visible : {false, true}) {
+    auto settings = UISettings::defaults();
+    settings.set_panel_visible(UIPanelId::CommandsLibrary, visible);
+    ASSERT_TRUE(settings.save(path));
+    const auto restored = UISettings::load(path);
+    EXPECT_EQ(restored.is_panel_visible(UIPanelId::CommandsLibrary), visible);
+    EXPECT_TRUE(restored.is_panel_visible(UIPanelId::ToolSettings));
+  }
+  std::filesystem::remove(path);
+}
+
+TEST(UIPanelManagerTests, ToolSettingsVisibilityLoadsAliasesAndSavesStableIdentity) {
   const auto path = std::filesystem::temp_directory_path() /
                     "quader-viewport-settings-migration.ini";
   for (std::string_view legacy_key : {"tool_settings", "Tool Settings"}) {
@@ -115,6 +134,7 @@ TEST(UIPanelManagerTests, LegacyToolSettingsVisibilityIsIgnoredAndNotSaved) {
              << "[Interface]\nInterfaceScale=1.5\n";
       }
       const UISettings settings = UISettings::load(path);
+      EXPECT_EQ(settings.is_panel_visible(UIPanelId::ToolSettings), visible);
       EXPECT_FALSE(settings.is_panel_visible(UIPanelId::Inspector));
       EXPECT_TRUE(settings.is_panel_visible(UIPanelId::Console));
       EXPECT_FALSE(settings.is_panel_visible(UIPanelId::FaceTexture));
@@ -124,7 +144,8 @@ TEST(UIPanelManagerTests, LegacyToolSettingsVisibilityIsIgnoredAndNotSaved) {
       std::ifstream persisted(path);
       const std::string text((std::istreambuf_iterator<char>(persisted)),
                             std::istreambuf_iterator<char>());
-      EXPECT_EQ(text.find("tool_settings="), std::string::npos);
+      EXPECT_NE(text.find(visible ? "tool_settings=true" : "tool_settings=false"),
+                std::string::npos);
       EXPECT_EQ(text.find("Tool Settings="), std::string::npos);
       EXPECT_NE(text.find("inspector=false"), std::string::npos);
       EXPECT_NE(text.find("console=true"), std::string::npos);
@@ -134,10 +155,10 @@ TEST(UIPanelManagerTests, LegacyToolSettingsVisibilityIsIgnoredAndNotSaved) {
   std::filesystem::remove(path);
 }
 
-TEST(UIPanelManagerTests, LegacyToolSettingsDockStateRestoresRemainingDocks) {
+TEST(UIPanelManagerTests, ToolSettingsDockStateRestoresRegisteredVisibilityAndPlacement) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
-  char application_name[] = "quader-retired-settings-dock-tests";
+  char application_name[] = "quader-tool-settings-dock-state-tests";
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
@@ -153,6 +174,7 @@ TEST(UIPanelManagerTests, LegacyToolSettingsDockStateRestoresRemainingDocks) {
   for (bool legacy_visible : {false, true}) {
     SCOPED_TRACE(legacy_visible);
     QByteArray legacy_state;
+    UISettings legacy_settings = UISettings::defaults();
     {
       QMainWindow previous_window;
       add_dock(previous_window, QStringLiteral("dock_inspector"),
@@ -163,7 +185,10 @@ TEST(UIPanelManagerTests, LegacyToolSettingsDockStateRestoresRemainingDocks) {
       auto *legacy = add_dock(previous_window,
                               QStringLiteral("dock_tool_settings"),
                               Qt::RightDockWidgetArea);
-      legacy->setVisible(legacy_visible);
+      UIPanelManager previous_manager;
+      previous_manager.add(UIPanelId::ToolSettings, *legacy);
+      previous_manager.set_visible(UIPanelId::ToolSettings, legacy_visible);
+      previous_manager.write_settings(legacy_settings);
       legacy_state = previous_window.saveState(1);
     }
 
@@ -172,14 +197,25 @@ TEST(UIPanelManagerTests, LegacyToolSettingsDockStateRestoresRemainingDocks) {
                                Qt::RightDockWidgetArea);
     auto *console = add_dock(window, QStringLiteral("dock_console"),
                              Qt::TopDockWidgetArea);
+    auto *tool_settings = add_dock(window, QStringLiteral("dock_tool_settings"),
+                                  Qt::LeftDockWidgetArea);
+    UIPanelManager manager;
+    manager.add(UIPanelId::ToolSettings, *tool_settings);
     ASSERT_TRUE(window.restoreState(legacy_state, 1));
+    manager.apply_settings(legacy_settings);
     EXPECT_EQ(window.dockWidgetArea(inspector), Qt::LeftDockWidgetArea);
     EXPECT_EQ(window.dockWidgetArea(console), Qt::BottomDockWidgetArea);
     EXPECT_FALSE(inspector->isHidden());
     EXPECT_TRUE(console->isHidden());
-    EXPECT_EQ(window.findChild<QDockWidget *>(
-                  QStringLiteral("dock_tool_settings")), nullptr);
-    EXPECT_EQ(window.findChildren<QDockWidget *>().size(), 2);
+    EXPECT_EQ(window.dockWidgetArea(tool_settings), Qt::RightDockWidgetArea);
+    EXPECT_EQ(tool_settings->isHidden(), !legacy_visible);
+    EXPECT_EQ(manager.dock(UIPanelId::ToolSettings), tool_settings);
+    EXPECT_EQ(manager.is_visible(UIPanelId::ToolSettings), legacy_visible);
+    UISettings restored_settings = UISettings::defaults();
+    manager.write_settings(restored_settings);
+    EXPECT_EQ(restored_settings.is_panel_visible(UIPanelId::ToolSettings),
+              legacy_visible);
+    EXPECT_EQ(window.findChildren<QDockWidget *>().size(), 3);
   }
 }
 
@@ -240,7 +276,7 @@ TEST(UIPanelManagerTests, FaceTextureUsesTheSharedDockPanelContract) {
     found = found || id == UIPanelId::FaceTexture;
   }
   EXPECT_TRUE(found);
-  EXPECT_EQ(kUiDockPanelIds.size(), 6U);
+  EXPECT_EQ(kUiDockPanelIds.size(), 8U);
   EXPECT_STREQ(ui_panel_stable_id(UIPanelId::FaceTexture), "face_texture");
   EXPECT_STREQ(ui_panel_key(UIPanelId::FaceTexture), "Face Texture");
   EXPECT_STREQ(ui_panel_localization_key(UIPanelId::FaceTexture),

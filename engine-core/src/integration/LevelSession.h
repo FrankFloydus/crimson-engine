@@ -3,6 +3,9 @@
 #include "crimson-renderer/RenderFrame.h"
 #include "scene/SceneDocument.h"
 #include "assets/MaterialPreviewGeometry.h"
+#include "ModelingWorldSnapshot.h"
+#include "native_scene_projection.hpp"
+#include "native_scene_render_bindings.hpp"
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -14,7 +17,6 @@ class AssetLibrary;
 class GameInput;
 class PlaySession;
 class ResourceManager;
-class QuaderBridge;
 struct VertexPaintTargets;
 struct VertexPaintSurfaceSnapshot;
 struct MaterialAsset;
@@ -41,9 +43,9 @@ struct LevelViewportContext {
 };
 enum class LevelModelPreviewKind {Ragdoll,Animation};
 
-// Engine level ownership composed inside Quader's existing application. Quader
-// retains its modeling document; a level stores the engine's schema-25 actors,
-// physics, lights and asset references and links accepted modeling publications.
+// Runtime/resources composed inside the existing native application. The native
+// scene is the only authored world; this owner keeps a disposable typed projection
+// and an isolated Play clone. It has no scene persistence or authored history.
 // This owner creates no application, window, native input pump or GPU device.
 class LevelSession final {
 public:
@@ -53,7 +55,8 @@ public:
     LevelSession& operator=(const LevelSession&)=delete;
     AssetLibrary& assets();
     ResourceManager& resources();
-    QuaderBridge& modelingBridge();
+    void setModelingWorld(std::shared_ptr<const ModelingWorldSnapshot>,bool current=true);
+    void setSceneLighting(bool);
     SceneDocument& document();
     const SceneDocument& document() const;
     SceneDocument& editingDocument();
@@ -65,26 +68,17 @@ public:
     const std::string& status() const;
     std::uint64_t revision() const;
 
-    // Binding is read-only until an explicit save. Dirty levels reject a
-    // document switch so the native shell can run its usual unsaved prompt.
-    bool bindDocument(std::string stableDocumentKey,bool preserveInitialLevel=false);
-    std::optional<Camera> editorCamera()const;
-    void rememberEditorCamera(const Camera&);
-    bool saveEditorState();
+    bool publishNativeScene(const quader::SceneDocument&,std::string sceneUuid,std::uint64_t sourceRevision);
+    const NativeSceneProjection& nativeProjection()const;
+    std::shared_ptr<const NativeSceneRenderBindings> nativeRenderBindings();
     std::vector<std::filesystem::path> takeFileChanges();
-    bool newLevel(bool discardDirty=false);
-    bool openLevel(const std::string& assetId,bool discardDirty=false);
-    bool save(const std::string& name={},bool saveAs=false);
-    bool undo();
-    bool redo();
-    EntityId linkModelingScene(const std::filesystem::path& manifest,
-        const std::string& projectId,const std::string& sceneId);
-    void synchronizeModelingScene(EntityId owner);
     bool dropAsset(const std::string& assetId,Vec2 texturePixel,const Camera&,Vec2 textureSize);
     bool dropAssets(std::span<const std::string>,Vec2 texturePixel,const Camera&,Vec2 textureSize);
     bool selectViewport(Vec2 texturePixel,const Camera&,Vec2 textureSize,bool toggle=false,bool append=false);
     bool requestViewportContext(Vec2 texturePixel,const Camera&,Vec2 textureSize);
     std::optional<LevelViewportContext> takeViewportContext();
+    void setViewportPickRequester(std::function<bool(const PickRequest&)>);
+    bool viewportRequestPending()const;
     void cancelViewportRequest();
     void armDecalPlacement(EntityId);
     void replayParticle(EntityId);

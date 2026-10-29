@@ -40,13 +40,14 @@ void restore(const std::filesystem::path& root,const std::filesystem::path& dire
 }
 }
 std::filesystem::path checkedManagedAssetPath(const std::filesystem::path& root,const std::string& id){
-    const auto relative=path(id);if(relative.empty()||relative.has_root_path()||(!isAssetUuid(id)&&*relative.begin()!="assets"&&*relative.begin()!="Content"&&*relative.begin()!=".crimson"))throw std::runtime_error("Asset file must stay under Content or private game metadata: '"+id+"'.");
-    for(const auto& part:relative)if(part=="..")throw std::runtime_error("Asset path cannot contain parent traversal.");
-    const auto canonicalRoot=std::filesystem::weakly_canonical(root),result=isAssetUuid(id)||*relative.begin()=="assets"?resolveAssetPath(root,id):std::filesystem::weakly_canonical(root/relative),within=result.lexically_relative(canonicalRoot);
-    if(within.empty()||within.is_absolute()||*within.begin()==".."||*within.begin()=="Engine"||(*within.begin()!="assets"&&*within.begin()!="Content"&&*within.begin()!=".crimson"))throw std::runtime_error("Asset path escapes writable game content.");return result;
+    const auto relative=path(id);if(relative.empty()||relative.has_root_path())throw std::runtime_error("Asset file must stay beneath the project folder.");
+    for(const auto& part:relative)if(part==".."||part==".")throw std::runtime_error("Asset path cannot contain directory traversal.");
+    if(isEngineAssetId(id))throw std::runtime_error("Private builtin defaults cannot be changed by an asset transaction.");
+    const auto canonicalRoot=std::filesystem::weakly_canonical(root),result=isAssetUuid(id)?resolveAssetPath(root,id):std::filesystem::weakly_canonical(root/relative),within=result.lexically_relative(canonicalRoot);
+    if(within.empty()||within=="."||within.has_root_path()||*within.begin()==".."||*within.begin()==".git")throw std::runtime_error("Asset path escapes writable project files.");return result;
 }
 void recoverAssetTransactions(const std::filesystem::path& root){
-    const auto base=checkedManagedAssetPath(root,"assets/.resource-transactions");if(!std::filesystem::exists(base))return;
+    const auto base=checkedManagedAssetPath(root,".crimson/.resource-transactions");if(!std::filesystem::exists(base))return;
     for(const auto& item:std::filesystem::directory_iterator(base))if(item.is_directory()){
         const auto contained=std::filesystem::weakly_canonical(item.path()).lexically_relative(base);
         if(contained.empty()||contained.is_absolute()||*contained.begin()=="..")throw std::runtime_error("Transaction directory escapes its owner.");
@@ -59,7 +60,7 @@ void recoverAssetTransactions(const std::filesystem::path& root){
 void commitAssetTransaction(const std::filesystem::path& root,std::span<const AssetFileChange> changes){
     if(changes.empty())return;recoverAssetTransactions(root);
     static std::atomic<uint64_t> sequence{};const auto token=std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+"-"+std::to_string(sequence.fetch_add(1));
-    const auto directory=checkedManagedAssetPath(root,"assets/.resource-transactions/"+token);std::filesystem::create_directories(directory/"before");
+    const auto directory=checkedManagedAssetPath(root,".crimson/.resource-transactions/"+token);std::filesystem::create_directories(directory/"before");
     Json journal{{"version",1},{"committed",false},{"files",Json::array()}};std::set<std::filesystem::path> targets;
     bool publishedJournal=false;
     try{

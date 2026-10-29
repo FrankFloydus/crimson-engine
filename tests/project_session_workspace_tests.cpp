@@ -2157,6 +2157,104 @@ TEST(ProjectSessionWorkspace, ClosingActiveSceneClearsNextSceneHover) {
             ModelingActiveSelectionKind::None);
 }
 
+TEST(ProjectSessionWorkspace, FolderOpenAdoptsAssetsAndReopensOriginalProject) {
+  ScopedProjectSessionDirectory temporary("folder-open");
+  const auto root = temporary.make_empty_child("Folder Workspace");
+  const auto authored = root / "existing-model.obj";
+  {
+    std::ofstream stream(authored, std::ios::binary);
+    stream << "authored model bytes";
+  }
+  const auto authored_bytes = read_file_bytes(authored);
+  ProjectSession project(temporary.path() / "recent-scenes.json");
+  QuaderEditorApi editor(project);
+  // Standalone Quader callers retain their original empty-folder contract.
+  EXPECT_FALSE(editor.project().open(root).ok());
+  EXPECT_FALSE(project.has_project());
+  editor.project().set_runtime_hooks({.allow_nonempty_project_folder = true});
+
+  const auto opened = editor.project().open(root);
+  ASSERT_TRUE(opened.ok()) << opened.error_message();
+  EXPECT_EQ(project.root(), std::filesystem::canonical(root));
+  ASSERT_NE(project.active_scene(), nullptr);
+  ASSERT_NE(project.manifest(), nullptr);
+  const auto identity = project.manifest()->id();
+  const auto manifest = project.manifest_path();
+  EXPECT_EQ(manifest.filename(), "Folder Workspace.qproj");
+  EXPECT_EQ(read_file_bytes(authored), authored_bytes);
+  ASSERT_TRUE(project.close(true).ok);
+
+  const auto reopened = editor.project().open(root);
+  ASSERT_TRUE(reopened.ok()) << reopened.error_message();
+  EXPECT_EQ(project.manifest()->id(), identity);
+  EXPECT_EQ(project.manifest_path(), manifest);
+  EXPECT_EQ(read_file_bytes(authored), authored_bytes);
+  ASSERT_TRUE(project.close(true).ok);
+  const auto created_existing = editor.project().create(root);
+  ASSERT_TRUE(created_existing.ok()) << created_existing.error_message();
+  EXPECT_EQ(project.manifest()->id(), identity);
+}
+
+TEST(ProjectSessionWorkspace, FailedFolderAdoptionRemovesOnlyItsOwnMetadata) {
+  for (const bool existing_scenes : {false, true}) {
+    SCOPED_TRACE(existing_scenes);
+    ScopedProjectSessionDirectory temporary("folder-adoption-rollback");
+    const auto root = temporary.make_empty_child("Retained Folder");
+    if (existing_scenes) {
+      ASSERT_TRUE(std::filesystem::create_directory(root / "Scenes"));
+    }
+    const auto authored = root / "keep.txt";
+    {
+      std::ofstream stream(authored, std::ios::binary);
+      stream << "user-owned bytes";
+    }
+    const auto authored_bytes = read_file_bytes(authored);
+    ProjectSession project(temporary.path() / "recent-scenes.json");
+    project.set_resource_root(temporary.path() / "missing-packaged-resources");
+    const auto failed = project.create(root, false, true);
+    EXPECT_FALSE(failed.ok);
+    EXPECT_FALSE(project.has_project());
+    EXPECT_FALSE(std::filesystem::exists(root / "Retained Folder.qproj"));
+    EXPECT_EQ(std::filesystem::is_directory(root / "Scenes"), existing_scenes);
+    EXPECT_EQ(read_file_bytes(authored), authored_bytes);
+  }
+}
+
+TEST(ProjectSessionWorkspace, AmbiguousFolderPreflightPreservesOutgoingDirtyScene) {
+  ScopedProjectSessionDirectory temporary("ambiguous-folder");
+  ProjectSession project(temporary.path() / "recent-scenes.json");
+  QuaderEditorApi editor(project);
+  editor.project().set_runtime_hooks({.allow_nonempty_project_folder = true});
+  ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Current")).ok());
+  auto *active = project.active_scene();
+  ASSERT_NE(active, nullptr);
+  ASSERT_TRUE(active->session->document_commands().create_entity("Retained").ok);
+  const auto identity = project.manifest()->id();
+  const auto generation = project.project_generation();
+  const auto dirty_stamp = active->session->content_revision_stamp();
+  const auto root = temporary.make_empty_child("Ambiguous");
+  for (const auto *name : {"one.qproj", "two.qproj"}) {
+    std::ofstream stream(root / name, std::ios::binary);
+    stream << "not selected or replaced";
+  }
+  int prompts = 0;
+  editor.scene_documents().set_runtime_hooks({
+      .confirm_dirty_scene = [&](const QuaderSceneDocumentInfo &, std::string_view) {
+        ++prompts;
+        return QuaderDirtySceneDecision::Discard;
+      },
+  });
+  EXPECT_FALSE(editor.project().open(root).ok());
+  EXPECT_FALSE(editor.project().create(root).ok());
+  EXPECT_EQ(prompts, 0);
+  EXPECT_EQ(project.project_generation(), generation);
+  EXPECT_EQ(project.manifest()->id(), identity);
+  EXPECT_EQ(project.active_scene(), active);
+  EXPECT_EQ(active->session->content_revision_stamp(), dirty_stamp);
+  EXPECT_TRUE(active->dirty());
+  EXPECT_FALSE(std::filesystem::exists(root / "Scenes"));
+}
+
 TEST(ProjectSessionWorkspace, FailedReplacementPreservesExistingWorkspace) {
   ScopedProjectSessionDirectory temporary("replacement-rollback");
   ProjectSession project;

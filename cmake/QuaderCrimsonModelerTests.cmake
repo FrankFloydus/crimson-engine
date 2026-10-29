@@ -91,6 +91,7 @@ add_executable(quader_crimson_modeler_tests EXCLUDE_FROM_ALL
     tests/qt_texture_info_window_tests.cpp
     tests/qt_viewport_header_tests.cpp
     tests/qt_tool_toolbar_tests.cpp
+    tests/qt_workspace_mode_presentation_tests.cpp
     tests/qt_relative_pointer_input_tests.cpp
     tests/qt_horizontal_pointer_capture_tests.cpp
     tests/qt_retained_message_box_tests.cpp
@@ -249,3 +250,5 @@ set_tests_properties(quader_crimson_modeler_native_theme_core PROPERTIES
     LABELS "crimson-modeler" TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_QPA_PLATFORM_PLUGIN_PATH=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+
+include("${CMAKE_CURRENT_LIST_DIR}/QuaderCrimsonWorkspaceTests.cmake")

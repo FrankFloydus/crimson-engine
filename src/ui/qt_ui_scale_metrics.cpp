@@ -8,16 +8,23 @@
 
 #include "ui/qt_application_style.hpp"
 #include "ui/qt_dock_title_presentation.hpp"
+#include "ui/qt_semantic_axis_colors.hpp"
 #include "ui/ui_settings.hpp"
 
 #include <QApplication>
+#include <QAbstractItemView>
+#include <QCheckBox>
 #include <QDockWidget>
 #include <QEvent>
+#include <QGroupBox>
+#include <QLineEdit>
+#include <QMainWindow>
 #include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPalette>
 #include <QPointer>
+#include <QScopedValueRollback>
 #include <QStyleOption>
 #include <QStyleFactory>
 #include <QTabBar>
@@ -220,13 +227,37 @@ void QtUiScaleProxyStyle::set_metrics(
 int QtUiScaleProxyStyle::pixelMetric(PixelMetric metric,
                                      const QStyleOption *option,
                                      const QWidget *widget) const {
-  if ((metric == PM_TabBarTabVSpace || metric == PM_TabBarTabHSpace) &&
-      widget != nullptr &&
-      widget->property(kQtConnectedTabSurfaceProperty).toBool()) {
+  if (metric == PM_IndicatorWidth || metric == PM_IndicatorHeight) {
+    QStyleOption indicator_option;
+    if (widget != nullptr) {
+      indicator_option.initFrom(widget);
+    }
+    if (qt_application_style_active(option != nullptr ? option
+                                                     : &indicator_option)) {
+      return metrics_.px(metric == PM_IndicatorWidth ? kQtCheckSwitchWidth
+                                                   : kQtCheckSwitchHeight);
+    }
+  }
+  if (metric == PM_DockWidgetSeparatorExtent &&
+      qobject_cast<const QMainWindow *>(widget) != nullptr) {
+    QStyleOption separator_option;
+    separator_option.initFrom(widget);
+    if (qt_application_style_active(option != nullptr ? option
+                                                     : &separator_option)) {
+      // Qt supplies its native thin-separator resize handling at this extent.
+      return 1;
+    }
+  }
+  if (qobject_cast<const QTabBar *>(widget) != nullptr) {
     QStyleOption tab_option;
     tab_option.initFrom(widget);
     if (qt_application_style_active(option != nullptr ? option : &tab_option)) {
-      return metrics_.px(metric == PM_TabBarTabHSpace ? 40 : 4);
+      if (metric == PM_TabBarTabHSpace || metric == PM_TabBarTabVSpace) {
+        return metrics_.px(metric == PM_TabBarTabHSpace ? 24 : 10);
+      }
+      if (metric == PM_TabBarTabOverlap || metric == PM_TabBarBaseOverlap) {
+        return 0;
+      }
     }
   }
   if (widget != nullptr &&
@@ -236,7 +267,7 @@ int QtUiScaleProxyStyle::pixelMetric(PixelMetric metric,
     dock_option.initFrom(widget);
     if (qt_application_style_active(option != nullptr ? option : &dock_option)) {
       if (metric == PM_DockWidgetTitleMargin) {
-        return metrics_.px(6);
+        return metrics_.px(7);
       }
       if (metric == PM_DockWidgetTitleBarButtonMargin) {
         return metrics_.px(3);
@@ -299,6 +330,10 @@ QSize QtUiScaleProxyStyle::sizeFromContents(
     // but need the same reservation for the native painter's text column.
     QStyleOptionMenuItem measured_item(*item);
     measured_item.maxIconWidth = std::max(item->maxIconWidth, height);
+    if (themed && item->menuHasCheckableItems) {
+      measured_item.maxIconWidth = std::max(
+          measured_item.maxIconWidth, metrics_.px(kQtCheckSwitchWidth + 12));
+    }
     const QSize measured_size = QProxyStyle::sizeFromContents(
         type, &measured_item, contents_size, widget);
     size.setWidth(std::max(size.width(), measured_size.width()));
@@ -310,6 +345,20 @@ QSize QtUiScaleProxyStyle::sizeFromContents(
 QRect QtUiScaleProxyStyle::subElementRect(SubElement element,
                                          const QStyleOption *option,
                                          const QWidget *widget) const {
+  if (element == SE_LineEditContents &&
+      qobject_cast<const QLineEdit *>(widget) != nullptr &&
+      widget->property(kQtSquareEditorSurfaceProperty).toBool() &&
+      qt_application_style_active(option)) {
+    bool valid_axis = false;
+    const int axis = widget->property(kQtEditorAxisProperty).toInt(&valid_axis);
+    using quader_editor_core::ViewAxis;
+    if (valid_axis && axis >= static_cast<int>(ViewAxis::X) &&
+        axis <= static_cast<int>(ViewAxis::Z)) {
+      const QRect contents = QProxyStyle::subElementRect(element, option, widget);
+      const int inset = std::min(metrics_.px(6), std::max(0, (contents.width() - 1) / 2));
+      return contents.adjusted(inset, 0, -inset, 0);
+    }
+  }
   if ((element == SE_TabBarTabLeftButton ||
        element == SE_TabBarTabRightButton) && widget != nullptr &&
       widget->property(kQtConnectedTabSurfaceProperty).toBool() &&
@@ -443,7 +492,7 @@ int QtUiScaleProxyStyle::styleHint(StyleHint hint, const QStyleOption *option,
   return QProxyStyle::styleHint(hint, option, widget, return_data);
 }
 
-struct QtUiScaleApplicationController::Impl {
+struct QtUiScaleApplicationController::Impl : QObject {
   struct ListenerRecord {
     ListenerId id = 0U;
     QPointer<QObject> receiver;
@@ -456,6 +505,7 @@ struct QtUiScaleApplicationController::Impl {
   QtUiScaleProxyStyle *style = nullptr;
   ListenerId next_listener_id = 1U;
   std::vector<ListenerRecord> listeners;
+  bool refreshing_palette_geometry = false;
 
   Impl(QApplication &new_application, float initial_factor)
       : application(new_application), baseline_font(new_application.font()),
@@ -474,8 +524,40 @@ struct QtUiScaleApplicationController::Impl {
             : resolved_visual_palette(application_palette);
     style = new QtUiScaleProxyStyle(metrics);
     QApplication::setStyle(style);
+    application.installEventFilter(this);
     QApplication::setPalette(preserved_palette);
     QApplication::setFont(metrics.font(baseline_font));
+  }
+
+  bool eventFilter(QObject *watched, QEvent *event) override {
+    if (event->type() == QEvent::PaletteChange &&
+        !refreshing_palette_geometry) {
+      auto *widget = qobject_cast<QWidget *>(watched);
+      if (widget != nullptr &&
+          (qobject_cast<QCheckBox *>(widget) != nullptr ||
+           qobject_cast<QGroupBox *>(widget) != nullptr ||
+           qobject_cast<QAbstractItemView *>(widget) != nullptr ||
+           qobject_cast<QMenu *>(widget) != nullptr)) {
+        // Palette-only transitions can change checkbox geometry without a
+        // scale revision. Native size-hint caches require a style notification.
+        QScopedValueRollback<bool> guard(refreshing_palette_geometry, true);
+        if (!refresh_style_geometry(*widget)) {
+          return true;
+        }
+      }
+    }
+    return QObject::eventFilter(watched, event);
+  }
+
+  static bool refresh_style_geometry(QWidget &widget) {
+    QPointer<QWidget> guarded_widget(&widget);
+    QEvent style_change(QEvent::StyleChange);
+    QApplication::sendEvent(&widget, &style_change);
+    if (!guarded_widget.isNull()) {
+      guarded_widget->updateGeometry();
+      guarded_widget->update();
+    }
+    return !guarded_widget.isNull();
   }
 
   void notify_listeners() {
@@ -497,13 +579,7 @@ struct QtUiScaleApplicationController::Impl {
       if (widget == nullptr) {
         continue;
       }
-      QPointer<QWidget> guarded_widget(widget);
-      QEvent style_change(QEvent::StyleChange);
-      QApplication::sendEvent(widget, &style_change);
-      if (!guarded_widget.isNull()) {
-        guarded_widget->updateGeometry();
-        guarded_widget->update();
-      }
+      refresh_style_geometry(*widget);
     }
   }
 };

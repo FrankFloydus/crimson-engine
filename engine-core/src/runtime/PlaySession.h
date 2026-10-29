@@ -23,8 +23,8 @@ public:
     static constexpr double FixedStep=1.0/60.0;
     static constexpr std::uint64_t MaximumCatchUpTicks=8;
     explicit PlaySession(std::filesystem::path projectRoot);
-    bool start(const SceneDocument& authored);
-    bool startFromPoint(const SceneDocument& authored,const Vec3&,const Camera&);
+    bool start(const SceneDocument& authored,std::span<const EntityRecord> additional={});
+    bool startFromPoint(const SceneDocument& authored,const Vec3&,const Camera&,std::span<const EntityRecord> additional={});
     void stop();
     bool playing() const {return document_!=nullptr;}
     bool paused() const {return paused_;}
@@ -207,7 +207,7 @@ private:
     std::uint64_t editRevision_{},agentsRevision_{},ticks_{},droppedTicks_{};
     double remainder_{},lightSeconds_{};
     bool suspended_{},failed_{},paused_{},resumePending_{};
-    bool startInternal(const SceneDocument&,const PlayStartPoint*);
+    bool startInternal(const SceneDocument&,const PlayStartPoint*,std::span<const EntityRecord>);
     void advanceInternal(double,Vec2,const Camera&,bool,GameInput* = nullptr,bool singleStep=false);
     void refreshPresentation();
     std::string firePlayerTrace(EntityId);

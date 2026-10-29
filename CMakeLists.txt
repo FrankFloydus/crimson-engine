@@ -1107,6 +1107,7 @@ add_library(quader_ui STATIC
     src/ui/qt_numeric_spin_box.cpp
     src/ui/qt_tool_settings_number_slider.cpp
     src/ui/qt_tool_settings_panel.cpp
+    src/ui/qt_commands_library_panel.cpp
     src/ui/qt_unsaved_confirmation_dialog.cpp
     src/ui/qt_viewport_context_menu.cpp
     src/ui/qt_viewport_delete_popup.cpp
@@ -1126,6 +1127,15 @@ add_library(quader_ui STATIC
     src/ui/viewport_hover_controller.cpp
     src/ui/viewport_shortcut_controller.cpp
 )
+
+qt_add_resources(quader_ui "quader_panel_title_icons"
+    PREFIX "/quader/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+    FILES
+        resources/icons/outliner_icon.png
+        resources/icons/inspector_icon.png
+        resources/icons/tool_settings_icon.png
+        resources/icons/command_library_icon.png)
 
 qt_add_resources(quader_ui "quader_dimension_fonts"
     PREFIX "/quader/fonts"
@@ -1483,8 +1493,7 @@ if(CRIMSON_ENGINE_APPLICATION)
         engine-core/src/integration/LevelDocumentPreviews.cpp)
     quader_enable_common_pch(crimson-engine-app)
     target_include_directories(crimson-engine-app PUBLIC src "${QUADER_GENERATED_DIR}")
-    target_compile_definitions(crimson-engine-app PRIVATE CRIMSON_ENGINE_APPLICATION=1
-        "CRIMSON_ENGINE_DEFAULT_PROJECT_ROOT=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
+    target_compile_definitions(crimson-engine-app PRIVATE CRIMSON_ENGINE_APPLICATION=1)
     target_link_libraries(crimson-engine-app PUBLIC quader_editor_api quader_platform
         quader_render_common quader_ui CrimsonEngine::Widgets PRIVATE quader_modeling_profile)
     target_compile_features(crimson-engine-app PUBLIC cxx_std_20)
@@ -1493,15 +1502,15 @@ if(CRIMSON_ENGINE_APPLICATION)
     add_executable(crimson-renderer WIN32 ${_crimson_native_host_sources} src/platform/crimson_application.rc)
     crimson_engine_attach_profiling_runtime(crimson-renderer)
     set_source_files_properties(src/platform/crimson_application.rc PROPERTIES
-        INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding"
-        OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/crimson-engine.ico")
+        INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/resources/branding"
+        OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/resources/branding/crimson-engine.ico")
     qt_add_resources(crimson-renderer crimson_engine_branding PREFIX "/crimson"
-        BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding"
-        FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/crimson-engine.ico")
+        BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/branding"
+        FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/branding/crimson-engine.ico")
     target_include_directories(crimson-renderer PRIVATE src "${QUADER_GENERATED_DIR}")
     target_compile_definitions(crimson-renderer PRIVATE CRIMSON_ENGINE_APPLICATION=1)
     target_link_libraries(crimson-renderer PRIVATE crimson-engine-app quader_render_crimson_host
-        quader_release_profile_full CrimsonEngine::Host)
+        quader_release_profile_public CrimsonEngine::Host)
     crimson_engine_attach_runtime(crimson-renderer)
     add_dependencies(crimson-renderer quader_fatal_diagnostics)
     if(WIN32)
@@ -1520,7 +1529,7 @@ if(CRIMSON_ENGINE_APPLICATION)
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/qt-composition-tests")
         target_include_directories(crimson_qt_composition_tests PRIVATE src)
         target_link_libraries(crimson_qt_composition_tests PRIVATE quader_render_crimson_host
-            quader_ui quader_editor_viewport quader_release_profile_full CrimsonEngine::Host Qt6::WidgetsPrivate Qt6::GuiPrivate)
+            quader_ui quader_editor_viewport quader_release_profile_public CrimsonEngine::Host Qt6::WidgetsPrivate Qt6::GuiPrivate)
         target_compile_features(crimson_qt_composition_tests PRIVATE cxx_std_20)
         target_compile_definitions(crimson_qt_composition_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
         add_test(NAME crimson_qt_composition_native_core COMMAND crimson_qt_composition_tests "$<TARGET_FILE_DIR:crimson-renderer>")

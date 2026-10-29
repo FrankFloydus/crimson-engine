@@ -24,7 +24,7 @@ class QMimeData;
 namespace quader {
 
 /** Public asset categories and navigable physical folders. */
-enum class QtAssetBrowserKind : std::uint8_t { Folder, Scene, Material, Texture };
+enum class QtAssetBrowserKind : std::uint8_t { Folder, Scene, Material, Texture, Model, Environment, Particle, NavigationProfile, GameplayEffect, Animation, Ragdoll, Decal, File, Count };
 /** Native collection layouts sharing one selection model. */
 enum class QtAssetBrowserViewMode : std::uint8_t { Grid, List };
 
@@ -37,6 +37,10 @@ struct QtAssetBrowserItem final {
   QIcon thumbnail;
   std::uint64_t content_revision = 0;
   bool editable = true;
+  bool external = false;
+  bool openable = true;
+  bool duplicable = true;
+  QString extension_id;
 };
 
 /** The public asset owner supplies folders and assets in one revisioned view. */
@@ -62,6 +66,8 @@ enum class QtAssetBrowserAction : std::uint8_t {
   Import,
   Move,
   CopyTo,
+  FindReferences, CreateLevel, CreateGraphMaterial, CreateBlendMaterial, CreateParticle,
+  CreateNavigationProfile, CreateGameplayEffect, CreateDecal, CreateRagdoll,
 };
 
 /** Semantic intent fenced to the catalog that supplied its selected items. */
@@ -74,6 +80,23 @@ struct QtAssetBrowserActionRequest final {
   std::uint64_t generation = 0;
   std::uint64_t catalog_revision = 0;
   std::uint64_t dependency_revision = 0;
+};
+
+// Optional typed assets share the native browser's one filesystem model and
+// selection. The extension publishes immutable rows and semantic operations;
+// physical folder/file operations remain with the project asset service.
+struct QtAssetBrowserExtension final {
+  std::function<std::uint64_t()> revision;
+  std::function<std::uint64_t()> thumbnail_revision;
+  std::function<void(QtAssetBrowserSnapshot&)> append_snapshot;
+  std::function<bool(const QtAssetBrowserActionRequest&)> handle_action;
+  std::function<QIcon(const QtAssetBrowserItem&,QSize,qreal)> thumbnail;
+  std::function<void(const std::vector<QString>&)> visible_items;
+  std::function<void(QMimeData&,const std::vector<QtAssetBrowserItem>&)> augment_mime;
+  std::function<bool(const QString&)> reveal;
+  std::function<QString()> take_reveal;
+  std::function<bool(const QStringList&)> accepts_import;
+  std::function<bool(const QtAssetBrowserItem&)> can_create_ragdoll;
 };
 
 /** Decodes exactly one texture dragged by the browser for a material slot. */
@@ -132,6 +155,7 @@ public:
   [[nodiscard]] const QtAssetBrowserSnapshot &snapshot() const;
   void clear();
   void set_action_callback(ActionCallback callback);
+  void set_extension(std::shared_ptr<QtAssetBrowserExtension>);
   void set_selection_changed_callback(std::function<void()> callback);
   void set_presentation_state_changed_callback(std::function<void()> callback);
   void set_thumbnail_provider(ThumbnailProvider provider);

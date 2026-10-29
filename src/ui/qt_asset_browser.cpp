@@ -153,7 +153,7 @@ QMimeData *asset_mime(const std::vector<QtAssetBrowserItem> &items,
   QDataStream stream(&bytes, QIODevice::WriteOnly);
   stream << kDragVersion << quint64(generation) << quint32(items.size());
   for (const auto &item : items) {
-    stream << item.id << item.relative_path << quint8(item.kind);
+    stream << item.id << item.relative_path << quint8(quint8(item.kind)|(item.external?0x80:0));
   }
   mime->setData(QString::fromLatin1(kAssetMime), bytes);
   return mime;
@@ -185,10 +185,10 @@ bool read_asset_mime(const QMimeData *mime,
     stream >> item.id >> item.relative_path >> kind;
     if (stream.status() != QDataStream::Ok || item.id.isEmpty() ||
         item.relative_path.isEmpty() ||
-        kind > quint8(QtAssetBrowserKind::Texture)) {
+        (kind&0x7f) >= quint8(QtAssetBrowserKind::Count)) {
       return false;
     }
-    item.kind = static_cast<QtAssetBrowserKind>(kind);
+    item.kind = static_cast<QtAssetBrowserKind>(kind&0x7f);item.external=(kind&0x80)!=0;
     decoded.push_back(std::move(item));
   }
   if (!stream.atEnd()) {
@@ -284,7 +284,8 @@ public:
   QtAssetBrowserLabels labels;
   QtAssetBrowser::ThumbnailProvider thumbnail;
   std::function<void(const QtAssetBrowserItem &, QString)> rename;
-  std::array<QIcon, 4> fallback;
+  std::array<QIcon, static_cast<std::size_t>(QtAssetBrowserKind::Count)> fallback;
+  std::shared_ptr<QtAssetBrowserExtension> extension;
   QSize preview_size{128, 128};
   qreal dpr = 1.0;
   bool picker = false;
@@ -321,6 +322,16 @@ public:
       case QtAssetBrowserKind::Scene: return labels.scene;
       case QtAssetBrowserKind::Material: return labels.material;
       case QtAssetBrowserKind::Texture: return labels.texture;
+      case QtAssetBrowserKind::Model:return QStringLiteral("Model");
+      case QtAssetBrowserKind::Environment:return QStringLiteral("Environment");
+      case QtAssetBrowserKind::Particle:return QStringLiteral("Particle Effect");
+      case QtAssetBrowserKind::NavigationProfile:return QStringLiteral("Navigation Agent Profile");
+      case QtAssetBrowserKind::GameplayEffect:return QStringLiteral("Gameplay Effect");
+      case QtAssetBrowserKind::Animation:return QStringLiteral("Animation");
+      case QtAssetBrowserKind::Ragdoll:return QStringLiteral("Ragdoll");
+      case QtAssetBrowserKind::Decal:return QStringLiteral("Decal");
+      case QtAssetBrowserKind::File:return QStringLiteral("File");
+      case QtAssetBrowserKind::Count:return {};
       }
     }
     if (role == Qt::DecorationRole && index.column() == 0) {
@@ -379,7 +390,7 @@ public:
         items.push_back(snapshot.items[index.row()]);
       }
     }
-    return asset_mime(items, snapshot.generation);
+    auto* mime=asset_mime(items,snapshot.generation);if(extension&&extension->augment_mime)extension->augment_mime(*mime,items);return mime;
   }
   Qt::DropActions supportedDragActions() const override {
     return Qt::MoveAction | Qt::CopyAction;
@@ -432,7 +443,7 @@ public:
       const auto next = incoming.find(previous.id);
       auto &item = *next->second;
       const bool changed = previous.relative_path != item.relative_path ||
-          previous.name != item.name || previous.kind != item.kind ||
+          previous.name != item.name || previous.kind != item.kind || previous.external != item.external || previous.extension_id != item.extension_id || previous.openable != item.openable || previous.duplicable != item.duplicable ||
           previous.content_revision != item.content_revision ||
           previous.editable != item.editable ||
           previous.thumbnail.cacheKey() != item.thumbnail.cacheKey();
@@ -483,7 +494,7 @@ protected:
   bool filterAcceptsRow(int row, const QModelIndex &) const override {
     const auto *model = static_cast<const AssetModel *>(sourceModel());
     const auto &item = model->snapshot.items[row];
-    if (!materials_available && (item.kind == QtAssetBrowserKind::Material ||
+    if (!materials_available && item.extension_id.isEmpty() && (item.kind == QtAssetBrowserKind::Material ||
                                 item.kind == QtAssetBrowserKind::Texture)) {
       return false;
     }
@@ -690,7 +701,7 @@ bool qt_asset_browser_texture_drag(const QMimeData *data, QString &texture_id,
   std::vector<QtAssetBrowserItem> items;
   std::uint64_t source_generation = 0;
   if (!read_asset_mime(data, items, source_generation) || items.size() != 1 ||
-      items.front().kind != QtAssetBrowserKind::Texture) {
+      items.front().kind != QtAssetBrowserKind::Texture || items.front().external) {
     return false;
   }
   texture_id = items.front().id;
@@ -791,7 +802,7 @@ struct QtAssetBrowser::Impl final {
     const auto selected = *entry;
     if (selected.kind == QtAssetBrowserKind::Folder) {
       owner.set_selected_folder(selected.relative_path);
-    } else {
+    } else if(selected.openable) {
       emit_action(QtAssetBrowserAction::Open, {selected});
     }
   }
@@ -886,7 +897,7 @@ struct QtAssetBrowser::Impl final {
       for (const auto &entry : dragged) {
         const auto *current = find(entry.id);
         if (current == nullptr || !current->editable ||
-            current->relative_path != entry.relative_path || current->kind != entry.kind ||
+            current->relative_path != entry.relative_path || current->kind != entry.kind || current->external!=entry.external ||
             (entry.kind == QtAssetBrowserKind::Folder &&
              (destination == entry.relative_path ||
               destination.startsWith(entry.relative_path + QLatin1Char('/'),
@@ -902,7 +913,8 @@ struct QtAssetBrowser::Impl final {
       }
       return true;
     }
-    if (!proxy->materials_available || !mime->hasUrls()) {
+    const bool external_import=model->extension&&model->extension->accepts_import;
+    if ((!proxy->materials_available&&!external_import) || !mime->hasUrls()) {
       return false;
     }
     QStringList sources;
@@ -910,7 +922,7 @@ struct QtAssetBrowser::Impl final {
     for (const auto &url : mime->urls()) {
       const auto path = url.toLocalFile();
       if (!url.isLocalFile() || path.isEmpty() ||
-          !supported.contains(QFileInfo(path).suffix().toLower().toLatin1())) {
+          (!external_import&&!supported.contains(QFileInfo(path).suffix().toLower().toLatin1()))) {
         return false;
       }
       sources.push_back(path);
@@ -918,6 +930,7 @@ struct QtAssetBrowser::Impl final {
     if (sources.isEmpty()) {
       return false;
     }
+    if(external_import&&!model->extension->accepts_import(sources))return false;
     if (execute) {
       emit_action(QtAssetBrowserAction::Import, {}, {}, destination,
                   std::move(sources));
@@ -936,8 +949,12 @@ struct QtAssetBrowser::Impl final {
       actions.emplace(popup.addAction(label), id);
     };
     if (!selected.empty()) {
-      if (selected.size() == 1) {
+      if (selected.size() == 1 && selected.front().openable) {
         add(labels.open, QtAssetBrowserAction::Open);
+      }
+      if (!picker && model->extension && selected.size()==1 && !selected.front().extension_id.isEmpty()) {
+        add(QStringLiteral("Find References"),QtAssetBrowserAction::FindReferences);
+        if(model->extension->can_create_ragdoll?model->extension->can_create_ragdoll(selected.front()):selected.front().kind==QtAssetBrowserKind::Model)add(QStringLiteral("Create Ragdoll"),QtAssetBrowserAction::CreateRagdoll);
       }
       if (!picker) {
         popup.addSeparator();
@@ -946,7 +963,7 @@ struct QtAssetBrowser::Impl final {
           if (selected.size() == 1) {
             add(labels.rename, QtAssetBrowserAction::Rename);
           }
-          add(labels.duplicate, QtAssetBrowserAction::Duplicate);
+          if(std::all_of(selected.begin(),selected.end(),[](const auto& item){return item.duplicable;}))add(labels.duplicate, QtAssetBrowserAction::Duplicate);
           add(labels.cut, QtAssetBrowserAction::Cut);
           add(labels.copy, QtAssetBrowserAction::Copy);
           add(labels.delete_asset, QtAssetBrowserAction::Delete);
@@ -961,12 +978,17 @@ struct QtAssetBrowser::Impl final {
       }
       add(labels.new_folder, QtAssetBrowserAction::CreateFolder);
     }
+    if(!picker&&model->extension){
+      auto* create=popup.addMenu(QStringLiteral("Create"));
+      const auto extra=[&](const char* label,QtAssetBrowserAction action_id){actions.emplace(create->addAction(QString::fromUtf8(label)),action_id);};
+      extra("Material Graph",QtAssetBrowserAction::CreateGraphMaterial);extra("Blend Material",QtAssetBrowserAction::CreateBlendMaterial);extra("Particle Effect",QtAssetBrowserAction::CreateParticle);extra("Decal",QtAssetBrowserAction::CreateDecal);extra("Navigation Agent Profile",QtAssetBrowserAction::CreateNavigationProfile);extra("Gameplay Effect",QtAssetBrowserAction::CreateGameplayEffect);
+    }
     if (!picker) {
       if (paste_available) {
         popup.addSeparator();
         add(labels.paste, QtAssetBrowserAction::Paste);
       }
-      if (proxy->materials_available) {
+      if (proxy->materials_available||(model->extension&&model->extension->accepts_import)) {
         popup.addSeparator();
         add(labels.import, QtAssetBrowserAction::Import);
       }
@@ -1254,6 +1276,7 @@ void QtAssetBrowser::set_labels(QtAssetBrowserLabels labels) {
     s.types->clear();
     s.types->addItems({s.labels.all_types, s.labels.scenes,
                        s.labels.materials, s.labels.textures});
+    if(s.model->extension)s.types->addItems({QStringLiteral("Models"),QStringLiteral("Environments"),QStringLiteral("Particle Effects"),QStringLiteral("Navigation Agent Profiles"),QStringLiteral("Gameplay Effects"),QStringLiteral("Animations"),QStringLiteral("Ragdolls"),QStringLiteral("Decals"),QStringLiteral("Files")});
     s.types->setCurrentIndex(s.proxy->kind ? static_cast<int>(*s.proxy->kind) : 0);
   }
   s.types->refresh_layout();
@@ -1273,11 +1296,7 @@ bool QtAssetBrowser::set_snapshot(QtAssetBrowserSnapshot snapshot) {
   auto &s = *impl_;
   auto &previous = s.model->snapshot;
   if (s.has_snapshot && previous.generation == snapshot.generation &&
-      previous.revision == snapshot.revision) {
-    const bool changed = previous.dependency_revision != snapshot.dependency_revision;
-    previous.dependency_revision = snapshot.dependency_revision;
-    return changed;
-  }
+      previous.revision == snapshot.revision && previous.dependency_revision == snapshot.dependency_revision) return false;
   const bool new_project = previous.generation != snapshot.generation;
   std::set<QString> selected;
   if (!new_project) {
@@ -1334,6 +1353,7 @@ void QtAssetBrowser::clear() {
   set_snapshot({});
 }
 
+void QtAssetBrowser::set_extension(std::shared_ptr<QtAssetBrowserExtension> value){impl_->model->extension=std::move(value);set_labels(impl_->labels);impl_->types->setVisible(!impl_->picker&&(impl_->proxy->materials_available||impl_->model->extension));impl_->proxy->refresh();}
 void QtAssetBrowser::set_action_callback(ActionCallback callback) {
   impl_->action = std::move(callback);
 }
@@ -1370,7 +1390,7 @@ void QtAssetBrowser::invalidate_thumbnail(const QString &id) {
 void QtAssetBrowser::set_material_authoring_available(bool available) {
   auto &s = *impl_;
   s.proxy->materials_available = available;
-  s.types->setVisible(available && !s.picker);
+  s.types->setVisible((available||s.model->extension) && !s.picker);
   if (!available) {
     set_type_filter({});
   }
@@ -1384,7 +1404,7 @@ void QtAssetBrowser::set_picker_mode(bool picker) {
   auto &s = *impl_;
   s.picker = picker;
   s.model->picker = picker;
-  s.types->setVisible(!picker && s.proxy->materials_available);
+  s.types->setVisible(!picker && (s.proxy->materials_available||s.model->extension));
   for (QAbstractItemView *view : {static_cast<QAbstractItemView *>(s.grid),
                                   static_cast<QAbstractItemView *>(s.list),
                                   static_cast<QAbstractItemView *>(s.folders)}) {
@@ -1505,13 +1525,17 @@ bool QtAssetBrowser::handle_action(QtAssetBrowserAction action) {
        action == QtAssetBrowserAction::Open) && selected.empty()) {
     return false;
   }
+  if(action==QtAssetBrowserAction::Open&&selected.size()==1&&!selected.front().openable)return false;
+  if(action==QtAssetBrowserAction::Duplicate&&!std::all_of(selected.begin(),selected.end(),[](const auto& item){return item.duplicable;}))return false;
   if (action == QtAssetBrowserAction::Paste && !s.paste_available) {
     return false;
   }
-  if ((action == QtAssetBrowserAction::CreateMaterial || action == QtAssetBrowserAction::Import) &&
+  if ((action == QtAssetBrowserAction::CreateMaterial || (action == QtAssetBrowserAction::Import&&!(s.model->extension&&s.model->extension->accepts_import))) &&
       !s.proxy->materials_available) {
     return false;
   }
+  if(action==QtAssetBrowserAction::CreateRagdoll&&(selected.size()!=1||selected.front().extension_id.isEmpty()||
+      (s.model->extension&&s.model->extension->can_create_ragdoll?!s.model->extension->can_create_ragdoll(selected.front()):selected.front().kind!=QtAssetBrowserKind::Model)))return false;
   if (action == QtAssetBrowserAction::Open && selected.size() == 1 &&
       selected.front().kind == QtAssetBrowserKind::Folder) {
     set_selected_folder(selected.front().relative_path);

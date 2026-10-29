@@ -6,14 +6,14 @@
 #include <memory>
 
 namespace crimson {
-class QuaderBridge;
 class QtInspector final : public QWidget {
 public:
     explicit QtInspector(QWidget* parent=nullptr);
     ~QtInspector() override;
     void synchronize(SceneDocument&,AssetLibrary&,Renderer&,EntityId target=NoEntity);
-    void setQuaderBridge(QuaderBridge*);
     void setCollisionLayerNames(const CollisionLayerNames&);
+    // The native Inspector already presents identity, transform and lights.
+    void setComponentsOnly(bool enabled,bool nativeLight=false);
     void setNavigationPreview(std::string*,std::function<std::string(const std::string&)>);
     EditorFrame takeActions();
     EntityId takeDecalPlacement();

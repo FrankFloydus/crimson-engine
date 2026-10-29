@@ -177,6 +177,8 @@ struct ProjectWorkspaceStorage {
   std::filesystem::path manifest_path;
   /// Last loaded/committed disk metadata, unchanged by read-only discovery.
   std::uint64_t persisted_texture_metadata_fingerprint = 0u;
+  /// Records only a directory owned by initial creation, for safe rollback.
+  bool created_scenes_directory = false;
 };
 
 /// Creates, reads, validates, and atomically writes `.qproj` manifests.
@@ -184,6 +186,11 @@ class ProjectManifestStore final {
 public:
   [[nodiscard]] static ProjectIoResult<ProjectWorkspaceStorage>
   create_in_empty_directory(const std::filesystem::path &root);
+  [[nodiscard]] static ProjectIoResult<ProjectWorkspaceStorage>
+  create_in_directory(const std::filesystem::path &root,
+                      bool allow_existing_content = false);
+  [[nodiscard]] static ProjectIoResult<std::optional<std::filesystem::path>>
+  manifest_in_directory(const std::filesystem::path &root);
 
   [[nodiscard]] static ProjectIoResult<ProjectWorkspaceStorage>
   open(const std::filesystem::path &manifest_path);
@@ -194,12 +201,12 @@ public:
   open_metadata(const std::filesystem::path &manifest_path);
 
   [[nodiscard]] static ProjectIoResult<void>
-  save_atomic(const ProjectWorkspaceStorage &workspace);
+  save_atomic(const ProjectWorkspaceStorage &workspace, bool create_new = false);
 
   [[nodiscard]] static ProjectIoResult<void> save_atomic(
       const ProjectFileSystem &file_system,
       const std::filesystem::path &manifest_path,
-      const ProjectManifest &manifest);
+      const ProjectManifest &manifest, bool create_new = false);
 
   [[nodiscard]] static std::string serialize(const ProjectManifest &manifest);
   [[nodiscard]] static ProjectIoResult<ProjectManifest>

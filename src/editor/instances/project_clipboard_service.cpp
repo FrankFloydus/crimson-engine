@@ -855,6 +855,8 @@ private:
     }
 
     std::vector<EntityId> imported_definitions;
+    std::vector<DuplicateSelectedHierarchyCommand *> imported_commands;
+    std::vector<EngineEntityClone> engine_clones;
     imported_definitions.reserve(payload_.definitions.size());
     for (const ClipboardDefinition &source_definition :
          payload_.definitions) {
@@ -942,6 +944,8 @@ private:
       }
       imported_definitions.push_back(
           definition_command->duplicate_roots().front());
+      imported_commands.push_back(definition_command);
+      engine_clones.insert(engine_clones.end(), definition_command->engine_clones().begin(), definition_command->engine_clones().end());
     }
 
     std::vector<DocumentEntitySnapshot> occurrences;
@@ -981,11 +985,19 @@ private:
             session.scene(), std::move(occurrences),
             std::unordered_map<EntityId, EntityId>{},
             SceneEntityNamePolicy::Unique);
+    auto *occurrence_records = occurrence_command.get();
     const CommandResult occurrences_created =
         transaction.execute(std::move(occurrence_command));
     if (!occurrences_created.ok || !occurrences_created.changed) {
       return rollback(occurrences_created);
     }
+    imported_commands.push_back(occurrence_records);
+    engine_clones.insert(engine_clones.end(), occurrence_records->engine_clones().begin(), occurrence_records->engine_clones().end());
+    if (!session.scene().remap_engine_entity_references(engine_clones))
+      return rollback(clipboard_failure("Imported entity references could not be remapped."));
+    for (auto *command : imported_commands)
+      if (!command->retain_remapped_engine_components())
+        return rollback(clipboard_failure("Imported component state could not be retained."));
 
     const CommandResult recorded = transaction.record_executed_before_existing(
         std::make_unique<RecordedModelingMementoCommand>(

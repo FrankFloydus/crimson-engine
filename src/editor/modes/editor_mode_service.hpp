@@ -8,6 +8,7 @@
 
 #include "core/command_result.hpp"
 #include "editor/modes/editor_mode_types.hpp"
+#include "editor/modes/editor_mode_policy.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -29,6 +30,14 @@ public:
     return snapshot_;
   }
   [[nodiscard]] EditorMode mode() const noexcept { return snapshot_.mode; }
+  [[nodiscard]] EditorWorkspaceMode workspace_mode()const noexcept{return workspace_provider_?workspace_provider_():workspace_mode_;}
+  [[nodiscard]] bool permits_tool(std::string_view id)const noexcept{return workspace_tool_allowed(workspace_mode(),id);}
+  [[nodiscard]] bool permits_action(std::string_view id)const noexcept{return workspace_action_allowed(workspace_mode(),id);}
+  CommandResult set_workspace_mode(EditorWorkspaceMode);
+  CommandResult prepare_workspace_mode(EditorWorkspaceMode);
+  void workspace_mode_changed();
+  void bind_workspace_mode(std::function<EditorWorkspaceMode()> provider){workspace_provider_=std::move(provider);}
+
   [[nodiscard]] std::uint64_t revision() const noexcept {
     return snapshot_.revision;
   }
@@ -87,6 +96,8 @@ private:
   void normalize_tools();
   void advance_revision(bool new_generation = false) noexcept;
 
+  EditorWorkspaceMode workspace_mode_=EditorWorkspaceMode::Modeling;
+  std::function<EditorWorkspaceMode()> workspace_provider_;
   SceneSession &session_;
   EditorModeSnapshot snapshot_;
   std::unordered_set<std::string> admitted_uuids_;

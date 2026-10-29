@@ -1,14 +1,13 @@
 #include "QtInspector.h"
 #include "QtCollisionMaskControl.h"
 #include "ui/qt_panel_section_header.hpp"
-#include "quader/QuaderBridge.h"
 #include "resources/Paths.h"
 #include <QFileDialog>
 #include <QPointer>
 #include "assets/AssetLibrary.h"
 #include "scene/SceneComponents.h"
 #include "scene/SceneOutlinerRows.h"
-#include "tools/ScenePanels.h"
+#include "tools/scene_inspector_context.h"
 #include "math/Json.h"
 #include "editor/DecalAuthoring.h"
 #include "scene/CameraAuthoring.h"
@@ -130,8 +129,7 @@ struct QtInspector::Impl {
     EntityId entity{};std::uint64_t generation{},revision{},transaction{},catalogRevision{};std::shared_ptr<const ModelAsset> metadata;
     std::vector<EntityId> selection;Json fields,defaults;EditorFrame actions;EntityId decalPlacement{};
     std::string* navigationProfile{};std::function<std::string(const std::string&)> navigationStatus;QLabel* navigationLabel{};
-    QuaderBridge* quader{};QLabel* quaderLabel{};QuaderProjectCatalog quaderCatalog;std::string inspectedProject,quaderError;
-    const CollisionLayerNames* collisionNames{};bool embedded{};std::vector<QPointer<QtInspector>> parts;
+    const CollisionLayerNames* collisionNames{};bool embedded{},componentsOnly{},nativeLight{};std::vector<QPointer<QtInspector>> parts;
     std::shared_ptr<CameraTemplateCatalog> templates{std::make_shared<CameraTemplateCatalog>()};
     bool rebuilding{};std::unordered_map<std::string,bool> expanded;
     explicit Impl(QtInspector& widget):owner(widget) {
@@ -141,7 +139,7 @@ struct QtInspector::Impl {
     }
     bool valid()const{return document&&document->documentGeneration()==generation&&document->scene().contains(entity);}
     bool owned()const{return valid()&&transaction&&document->transactionId()==transaction;}
-    bool finish(){if(!owned()){transaction=0;return false;}const auto result=document->commit();transaction=0;return result;}
+    bool finish(){if(!owned()){transaction=0;return true;}const auto result=document->commit();transaction=0;return result;}
     void cancel(){if(owned())document->cancel();transaction=0;revision=0;}
     void error(const std::string& text){status->setText(QString::fromStdString(text));status->setVisible(!text.empty());}
     bool mutate(const std::string& path,Json value,bool commit=true) {
@@ -254,7 +252,7 @@ struct QtInspector::Impl {
         if(depth>10)return;
         for(auto it=object.begin();it!=object.end();++it) {
             const auto key=object.is_array()?std::to_string(it-object.begin()):it.key();const auto path=prefix+"/"+escaped(key);const auto& value=it.value();
-            if(key=="id"||key=="parent"||key=="order"||key=="local"||key=="mesh"||key=="meshPaint"||key=="quaderGenerated"||(key=="seed"&&prefix=="/decal")||key=="saveKey"||key=="blendSettings"||(key=="source"&&prefix.ends_with("/glow")))continue;
+            if(key=="id"||key=="parent"||key=="order"||key=="local"||key=="mesh"||key=="meshPaint"||(key=="seed"&&prefix=="/decal")||key=="saveKey"||key=="blendSettings"||(key=="source"&&prefix.ends_with("/glow")))continue;
             const bool vector=value.is_array()&&value.size()>=2&&value.size()<=4&&std::all_of(value.begin(),value.end(),[](const auto& v){return v.is_number();});
             if(value.is_object()||(value.is_array()&&!vector)) {
                 auto group=new InspectorSection(label(key),expanded.contains(path)?expanded[path]:depth<1,parent);auto nested=group->fields;form(nested,value,path,group->content,depth+1);
@@ -302,19 +300,8 @@ struct QtInspector::Impl {
         auto save=new QPushButton("Save Template",section->content);save->setEnabled(templates->available);section->fields->addRow(save);QObject::connect(save,&QPushButton::clicked,&connections,[this]{if(!valid()||!templates->available)return;finish();bool ok=false;const auto name=QInputDialog::getText(&owner,"Save Camera Template","Name",QLineEdit::Normal,{},&ok);if(!ok)return;const auto record=document->scene().find(entity);if(!record)return;const auto value=captureCameraTemplate(document->scene(),entity,record->cameraFollow?record->cameraFollow->target:NoEntity,name.toStdString());if(!value){error("The camera cannot be captured as a template.");return;}try{saveCameraTemplate(document->projectRoot(),templates->values,*value);templates->status.clear();revision=0;}catch(const std::exception& exception){error(exception.what());}});
         if(!templates->status.empty()){auto status=new QLabel(QString::fromStdString(templates->status),section->content);status->setWordWrap(true);section->fields->addRow(status);}layout->addRow(section);
     }
-    void quaderSection(QFormLayout* layout,const EntityRecord& record) {
-        auto section=new InspectorSection("Quader",true,body);auto form=section->fields;auto draft=std::make_shared<QuaderLink>(*record.quader);
-        auto path=new QLineEdit(QString::fromStdString(draft->projectPath),section->content);auto row=new QWidget(section->content);row->setObjectName("SceneField/quader/projectPath");auto pathLayout=new QHBoxLayout(row);pathLayout->setContentsMargins(0,0,0,0);pathLayout->addWidget(path,1);auto browse=new QPushButton("Browse",row);pathLayout->addWidget(browse);auto clear=new QPushButton("Clear",row);pathLayout->addWidget(clear);form->addRow("Project",row);
-        auto scenes=new QComboBox(section->content);form->addRow("Scene",scenes);auto scale=new QDoubleSpinBox(section->content);scale->setRange(.000001,1000000);scale->setDecimals(4);scale->setKeyboardTracking(false);scale->setValue(draft->importScale);form->addRow("Import Scale",scale);
-        auto request=new QPushButton("Import",section->content);auto cancel=new QPushButton("Cancel",section->content);auto buttons=new QWidget(section->content);auto buttonLayout=new QHBoxLayout(buttons);buttonLayout->setContentsMargins(0,0,0,0);buttonLayout->addWidget(request);buttonLayout->addWidget(cancel);form->addRow(buttons);quaderLabel=new QLabel(section->content);quaderLabel->setWordWrap(true);form->addRow(quaderLabel);
-        auto inspect=std::make_shared<std::function<void()>>();*inspect=[this,draft,path,scenes,request]{draft->projectPath=path->text().toStdString();if(inspectedProject!=draft->projectPath){inspectedProject=draft->projectPath;quaderCatalog={};quaderError.clear();if(!inspectedProject.empty())try{quaderCatalog=inspectQuaderProject(pathFromUtf8(inspectedProject));}catch(const std::exception& exception){quaderError=exception.what();}}draft->projectId=quaderCatalog.id;const QSignalBlocker blocked(scenes);scenes->clear();for(const auto& entry:quaderCatalog.scenes)scenes->addItem(QString::fromStdString(entry.path),QString::fromStdString(entry.id));auto index=scenes->findData(QString::fromStdString(draft->sceneId));if(index<0)index=scenes->findData(QString::fromStdString(quaderCatalog.defaultScene));if(index<0&&scenes->count())index=0;scenes->setCurrentIndex(index);draft->sceneId=scenes->currentData().toString().toStdString();request->setEnabled(quader&&quaderError.empty()&&!draft->projectPath.empty()&&!draft->sceneId.empty()&&!document->transient());};
-        QObject::connect(path,&QLineEdit::editingFinished,&connections,[this,inspect]{inspectedProject.clear();(*inspect)();});QObject::connect(browse,&QPushButton::clicked,&connections,[this,path,inspect]{const auto selected=QFileDialog::getOpenFileName(&owner,"Quader Project",path->text(),"Quader Project (*.qproj)");if(!selected.isEmpty()){path->setText(selected);inspectedProject.clear();(*inspect)();}});QObject::connect(scenes,&QComboBox::activated,&connections,[draft,scenes]{draft->sceneId=scenes->currentData().toString().toStdString();});QObject::connect(scale,&QDoubleSpinBox::valueChanged,&connections,[draft](double value){draft->importScale=float(value);});QObject::connect(scale,&QDoubleSpinBox::editingFinished,&connections,[this,draft]{if(valid()&&quader&&!draft->projectId.empty()&&!document->scene().find(entity)->quader->projectId.empty()){finish();quader->requestImport(entity,*draft,document->documentGeneration());}});
-        QObject::connect(request,&QPushButton::clicked,&connections,[this,draft]{if(!valid()||!quader)return;finish();quader->requestImport(entity,*draft,document->documentGeneration());});QObject::connect(cancel,&QPushButton::clicked,&connections,[this]{if(valid()&&quader)quader->cancel(entity);});QObject::connect(clear,&QPushButton::clicked,&connections,[this]{if(!valid())return;finish();auto r=*document->scene().find(entity);r.quader=QuaderLink{};document->updateEntity(entity,r,"Clear Quader source");if(quader)quader->cancel(entity);revision=0;});
-        for(const auto& policy:std::initializer_list<std::pair<const char*,const char*>>{{"Auto Sync on Save","autoSync"},{"Sync Materials","refreshMaterials"},{"Sync Lights","syncLights"}}){auto control=new QCheckBox(policy.first,section->content);control->setChecked(fields["quader"][policy.second].get<bool>());form->addRow(control);QObject::connect(control,&QCheckBox::toggled,&connections,[this,draft,key=std::string(policy.second)](bool value){if(mutate("/quader/"+key,value)){if(key=="autoSync")draft->autoSync=value;else if(key=="refreshMaterials")draft->refreshMaterials=value;else draft->syncLights=value;}});}
-        (*inspect)();section->setEnabled(!document->transient());layout->addRow(section);
-    }
     void rebuild() {
-        rebuilding=true;navigationLabel=nullptr;quaderLabel=nullptr;parts.clear();auto old=scroll->takeWidget();if(old){old->setParent(&owner);old->hide();old->deleteLater();}body=new QWidget;auto layout=new QFormLayout(body);layout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);scroll->setWidget(body);
+        rebuilding=true;navigationLabel=nullptr;parts.clear();auto old=scroll->takeWidget();if(old){old->setParent(&owner);old->hide();old->deleteLater();}body=new QWidget;auto layout=new QFormLayout(body);layout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);scroll->setWidget(body);
         const auto record=document->scene().find(entity);if(!record){rebuilding=false;return;}
         fields=entityFields(*document,entity);if(record->model)if(const auto model=assets->findModel(record->model->id,record->primitive)){auto& overrides=fields["modelMaterials"];while(overrides.size()<model->materials.size())overrides.push_back("");}defaults=fields;
         // Defaults for leaf reset remain type-correct; neutral component values
@@ -322,16 +309,15 @@ struct QtInspector::Impl {
         SceneSnapshot reset;reset.name=document->displayName();reset.properties=document->scene().properties();reset.records=document->scene().records();
         for(auto& r:reset.records)if(r.id==entity) {if(r.point){r.point=ScenePointLight{};r.point->flicker.enabled=true;}if(r.spot){r.spot=SceneSpotLight{};r.spot->flicker.enabled=true;}if(r.directional){r.directional=SceneDirectionalLight{};r.directional->flicker.enabled=true;}if(r.environment)r.environment=SceneEnvironment{};if(r.movement)r.movement=MovementComponent{};if(r.playerInput)r.playerInput=ScenePlayerInput{};if(r.collider){auto native=r.collider->mesh;auto source=r.collider->source;r.collider=SceneCollider{};r.collider->mesh=native;r.collider->source=source;}if(r.camera)r.camera=SceneCamera{};if(r.navigation)r.navigation=SceneNavigationAgent{};if(r.enemy)r.enemy=SceneEnemy{};}
         try{const auto encoded=Json::parse(serializeSceneSnapshot(reset));for(const auto& e:encoded["entities"])if(e["id"]==fields["id"]){defaults=e;for(auto kind:{"point","spot","directional"})if(defaults.contains(kind)){defaults[kind]["flicker"]["enabled"]=false;defaults[kind]["colorMode"]="Color";defaults[kind]["temperatureKelvin"]=6500;}break;}}catch(...){ }
-        layout->addRow("Name",row("name","/name",fields["name"],body));
-        transform(layout,*record);
+        if(!componentsOnly){layout->addRow("Name",row("name","/name",fields["name"],body));transform(layout,*record);}
         auto remaining=fields;remaining.erase("name");
+        if(componentsOnly){for(const auto key:{"visible","outlinerStyle"})remaining.erase(key);if(nativeLight)for(const auto key:{"point","spot","directional"})remaining.erase(key);}
         for(const auto key:{"movement","actor","controller","navigation","enemy","playerInput","camera","cameraFollow","model","modelMaterials","primitive","modelAnimation","modelRagdoll","meshShading","castShadows","receiveShadows","lightingScopes","receiveDecals","particle","decal","directional","point","spot","environment","collider","navigationVolume","tags","effects","visible","outlinerStyle"})if(remaining.contains(key)){Json section=Json::object();section[key]=remaining[key];form(layout,section,"",body);remaining.erase(key);}
-        if(record->quader){quaderSection(layout,*record);remaining.erase("quader");}
         form(layout,remaining,"",body);
         auto add=new QPushButton("Add Component",body);layout->addRow(add);
         QObject::connect(add,&QPushButton::clicked,&connections,[this,add]{if(!valid())return;finish();QMenu menu(add);for(auto kind:AllSceneComponentKinds)if(editableSceneComponent(kind)&&!hasSceneComponent(*document->scene().find(entity),kind)){auto action=menu.addAction(sceneComponentName(kind));QObject::connect(action,&QAction::triggered,&connections,[this,kind]{addSceneComponent(*document,entity,kind);revision=0;});}menu.exec(add->mapToGlobal(QPoint(0,add->height())));});
         auto remove=new QPushButton("Remove Component",body);layout->addRow(remove);QObject::connect(remove,&QPushButton::clicked,&connections,[this,remove]{if(!valid())return;finish();QMenu menu(remove);for(auto kind:sceneComponents(*document->scene().find(entity)))if(editableSceneComponent(kind)){auto action=menu.addAction(sceneComponentName(kind));QObject::connect(action,&QAction::triggered,&connections,[this,kind]{removeSceneComponent(*document,entity,kind);revision=0;});}menu.exec(remove->mapToGlobal(QPoint(0,remove->height())));});
-        if(record->point||record->spot||record->directional) {
+        if(!nativeLight&&(record->point||record->spot||record->directional)) {
             auto fixtures=new QComboBox(body);fixtures->addItem("Fixture preset");for(const auto& preset:lightFixturePresets())if(preset.directional==bool(record->directional))fixtures->addItem(QString::fromUtf8(preset.name.data(),preset.name.size()),QString::fromUtf8(preset.id.data(),preset.id.size()));layout->addRow(fixtures);
             QObject::connect(fixtures,&QComboBox::activated,&connections,[this,fixtures](int index){if(!index||!valid())return;finish();auto r=*document->scene().find(entity);const auto id=fixtures->currentData().toString().toStdString();if(r.point)applyLightFixturePreset(*r.point,id);if(r.spot)applyLightFixturePreset(*r.spot,id);if(r.directional)applyLightFixturePreset(*r.directional,id);document->updateEntity(entity,r,"Apply light preset");revision=0;});
             auto flicker=new QComboBox(body);flicker->addItem("Flicker preset");for(const auto& preset:lightFlickerPresets())flicker->addItem(QString::fromUtf8(preset.name.data(),preset.name.size()),QString::fromUtf8(preset.id.data(),preset.id.size()));layout->addRow(flicker);QObject::connect(flicker,&QComboBox::activated,&connections,[this,flicker](int index){if(!index||!valid())return;finish();auto r=*document->scene().find(entity);const auto id=flicker->currentData().toString().toStdString();if(r.point)applyLightFlickerPreset(r.point->flicker,id);if(r.spot)applyLightFlickerPreset(r.spot->flicker,id);if(r.directional)applyLightFlickerPreset(r.directional->flicker,id);document->updateEntity(entity,r,"Apply flicker preset");revision=0;});
@@ -346,16 +332,17 @@ struct QtInspector::Impl {
         if(record->particle){auto button=new QPushButton("Replay",body);layout->addRow(button);QObject::connect(button,&QPushButton::clicked,&connections,[this]{actions.playParticleEntity=entity;});}
         if(record->camera){cameraTemplatesSection(layout,*record);auto active=new QPushButton("Set Active Camera",body);layout->addRow(active);QObject::connect(active,&QPushButton::clicked,&connections,[this]{document->setActiveCamera(entity);});}
         if(record->environment){auto active=new QPushButton("Set Active Environment",body);layout->addRow(active);QObject::connect(active,&QPushButton::clicked,&connections,[this]{document->setActiveEnvironment(entity);});}
-        if(!embedded)for(const auto part:sceneEntityParts(document->scene(),entity))if(part!=entity){const auto owned=document->scene().find(part);if(!owned)continue;auto section=new InspectorSection(QString::fromStdString(owned->name),true,body);auto projection=new QtInspector(section->content);parts.push_back(projection);projection->impl_->templates=templates;projection->setNavigationPreview(navigationProfile,navigationStatus);projection->setQuaderBridge(quader);if(collisionNames)projection->setCollisionLayerNames(*collisionNames);projection->synchronize(*document,*assets,*renderer,part);projection->setMinimumHeight(280);section->fields->addRow(projection);layout->addRow(section);}
+        if(!embedded)for(const auto part:sceneEntityParts(document->scene(),entity))if(part!=entity){const auto owned=document->scene().find(part);if(!owned)continue;auto section=new InspectorSection(QString::fromStdString(owned->name),true,body);auto projection=new QtInspector(section->content);parts.push_back(projection);projection->impl_->templates=templates;projection->setNavigationPreview(navigationProfile,navigationStatus);if(collisionNames)projection->setCollisionLayerNames(*collisionNames);projection->synchronize(*document,*assets,*renderer,part);projection->setMinimumHeight(280);section->fields->addRow(projection);layout->addRow(section);}
         rebuilding=false;
     }
 };
 QtInspector::QtInspector(QWidget* parent):QWidget(parent),impl_(std::make_unique<Impl>(*this)){}
 QtInspector::~QtInspector(){finish();if(impl_->document&&!impl_->embedded){const auto entry=inspectors.find(impl_->document);if(entry!=inspectors.end()&&entry->second==this){inspectors.erase(entry);subdivisionQueries.erase(impl_->document);}}delete impl_->scroll;impl_->scroll=nullptr;}
+void QtInspector::setComponentsOnly(bool enabled,bool nativeLight){if(impl_->componentsOnly==enabled&&impl_->nativeLight==nativeLight)return;finish();impl_->componentsOnly=enabled;impl_->nativeLight=nativeLight;impl_->revision=0;}
 void QtInspector::synchronize(SceneDocument& document,AssetLibrary& assets,Renderer& renderer,EntityId target) {
     auto& p=*impl_;const bool embedded=target!=NoEntity;
     if(p.document!=&document||p.embedded!=embedded){finish();if(p.document&&!p.embedded){const auto previous=inspectors.find(p.document);if(previous!=inspectors.end()&&previous->second==this)inspectors.erase(previous);}p.document=&document;p.embedded=embedded;if(!embedded)inspectors[&document]=this;}
-    p.assets=&assets;p.renderer=&renderer;if(p.quaderLabel){const auto text=QString::fromStdString(p.quaderError.empty()&&p.quader?p.quader->status(p.entity):p.quaderError);if(text!=p.quaderLabel->text())p.quaderLabel->setText(text);p.quaderLabel->setVisible(!text.isEmpty());}if(p.navigationLabel&&p.navigationProfile&&p.navigationStatus){const auto text=QString::fromStdString(p.navigationStatus(*p.navigationProfile));if(text!=p.navigationLabel->text())p.navigationLabel->setText(text);p.navigationLabel->setVisible(!text.isEmpty());}
+    p.assets=&assets;p.renderer=&renderer;if(p.navigationLabel&&p.navigationProfile&&p.navigationStatus){const auto text=QString::fromStdString(p.navigationStatus(*p.navigationProfile));if(text!=p.navigationLabel->text())p.navigationLabel->setText(text);p.navigationLabel->setVisible(!text.isEmpty());}
     const auto selected=embedded?std::vector<EntityId>{target}:document.selection().ids;
     const bool changed=p.generation!=document.documentGeneration()||p.selection!=selected;
     if(changed){finish();p.generation=document.documentGeneration();p.selection=selected;p.entity=embedded?target:document.selection().primary;p.revision=0;}
@@ -364,18 +351,17 @@ void QtInspector::synchronize(SceneDocument& document,AssetLibrary& assets,Rende
     if(changed||(!editing&&!QApplication::activePopupWidget()&&!p.owned()&&(p.revision!=document.scene().revision()||resourcesChanged))){p.revision=document.scene().revision();p.catalogRevision=assets.catalogRevision();p.metadata=metadata;p.rebuild();}
     for(const auto& part:p.parts)if(part)part->synchronize(document,assets,renderer,part->impl_->entity);
 }
-void QtInspector::setQuaderBridge(QuaderBridge* bridge){impl_->quader=bridge;}
 void QtInspector::setCollisionLayerNames(const CollisionLayerNames& names){impl_->collisionNames=&names;}
 void QtInspector::setNavigationPreview(std::string* profile,std::function<std::string(const std::string&)> query){impl_->navigationProfile=profile;impl_->navigationStatus=std::move(query);}
 EditorFrame QtInspector::takeActions(){auto result=std::exchange(impl_->actions,{});for(const auto& part:impl_->parts)if(part){auto value=part->takeActions();if(!value.openMaterial.empty())result.openMaterial=value.openMaterial;if(!value.openParticle.empty())result.openParticle=value.openParticle;if(!value.openAnimation.empty())result.openAnimation=value.openAnimation;if(!value.openRagdoll.empty())result.openRagdoll=value.openRagdoll;if(!value.createRagdollModel.empty())result.createRagdollModel=value.createRagdollModel;if(!value.openDecal.empty())result.openDecal=value.openDecal;if(!value.openNavigationAgentProfile.empty())result.openNavigationAgentProfile=value.openNavigationAgentProfile;if(!value.openGameplayEffect.empty())result.openGameplayEffect=value.openGameplayEffect;if(value.playParticleEntity)result.playParticleEntity=value.playParticleEntity;if(value.activateRagdollEntity)result.activateRagdollEntity=value.activateRagdollEntity;if(value.resetRagdollEntity)result.resetRagdollEntity=value.resetRagdollEntity;}return result;}
 EntityId QtInspector::takeDecalPlacement(){auto result=std::exchange(impl_->decalPlacement,NoEntity);for(const auto& part:impl_->parts)if(part)if(const auto id=part->takeDecalPlacement())result=id;return result;}
-bool QtInspector::finish(){bool result=impl_->finish();for(const auto& part:impl_->parts)if(part)result=part->finish()||result;return result;}
+bool QtInspector::finish(){bool result=impl_->finish();for(const auto& part:impl_->parts)if(part)result=part->finish()&&result;return result;}
 void QtInspector::cancel(){impl_->cancel();for(const auto& part:impl_->parts)if(part)part->cancel();}
 void QtInspector::detach(){
     finish();auto& p=*impl_;for(const auto& part:p.parts)if(part)part->detach();
     if(p.document&&!p.embedded){const auto found=inspectors.find(p.document);if(found!=inspectors.end()&&found->second==this){inspectors.erase(found);subdivisionQueries.erase(p.document);}}
-    p.rebuilding=true;p.parts.clear();p.document=nullptr;p.assets=nullptr;p.renderer=nullptr;p.quader=nullptr;p.collisionNames=nullptr;
-    p.navigationProfile=nullptr;p.navigationStatus={};p.navigationLabel=nullptr;p.quaderLabel=nullptr;p.transaction=0;p.selection.clear();p.entity=NoEntity;p.generation=p.revision=p.catalogRevision=0;p.metadata.reset();p.templates=std::make_shared<CameraTemplateCatalog>();
+    p.rebuilding=true;p.parts.clear();p.document=nullptr;p.assets=nullptr;p.renderer=nullptr;p.collisionNames=nullptr;
+    p.navigationProfile=nullptr;p.navigationStatus={};p.navigationLabel=nullptr;p.transaction=0;p.selection.clear();p.entity=NoEntity;p.generation=p.revision=p.catalogRevision=0;p.metadata.reset();p.templates=std::make_shared<CameraTemplateCatalog>();
     if(auto* old=p.scroll->takeWidget()){old->setParent(this);old->hide();old->deleteLater();}p.body=new QWidget;p.scroll->setWidget(p.body);p.status->clear();p.status->hide();p.rebuilding=false;
 }
 bool QtInspector::eventFilter(QObject* target,QEvent* event){if(event->type()==QEvent::KeyPress&&static_cast<QKeyEvent*>(event)->key()==Qt::Key_Escape){impl_->cancel();if(auto widget=qobject_cast<QWidget*>(target))widget->clearFocus();return true;}return QWidget::eventFilter(target,event);}

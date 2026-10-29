@@ -47,6 +47,8 @@
 
 #include <QAbstractSpinBox>
 #include <QApplication>
+#include <QDockWidget>
+#include <QMainWindow>
 #include <QEnterEvent>
 #include <QEventLoop>
 #include <QFocusEvent>
@@ -1175,13 +1177,18 @@ TEST(SelectedMeshOutlinePresentationTests,
   ASSERT_TRUE(editor.selection().select_edge(object, 1, 2).ok());
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
 
+  QMainWindow window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  window.resize(1340, 750);
   QtViewportPanel viewport;
-  viewport.setAttribute(Qt::WA_DontShowOnScreen, true);
-  viewport.resize(1000, 750);
+  window.setCentralWidget(&viewport);
   viewport.attach_workspace(session.viewport_workspace());
   viewport.set_startup_presentation_blocked(false);
+  QDockWidget settings_dock(&window);
   QtToolSettingsPanel panel;
-  viewport.set_settings_panel(&panel);
+  settings_dock.setWidget(&panel);
+  window.addDockWidget(Qt::LeftDockWidgetArea, &settings_dock);
+  window.resizeDocks({&settings_dock}, {340}, Qt::Horizontal);
   panel.set_expanded(true);
   panel.bind(editor);
   QtCommandEventFilter command_filter(editor, [&] { return viewport.tool_state(); });
@@ -1189,8 +1196,8 @@ TEST(SelectedMeshOutlinePresentationTests,
     return viewport.command_input_context();
   });
   application.installEventFilter(&command_filter);
-  viewport.show();
-  viewport.activateWindow();
+  window.show();
+  window.activateWindow();
   QCoreApplication::processEvents();
   auto *surface = viewport.surface(ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
@@ -1204,10 +1211,9 @@ TEST(SelectedMeshOutlinePresentationTests,
                            session.modeling(), {}, session.native_tools(),
                            &session.point_placement(), 1.0 / 60.0);
     // UISystem leaves the current numeric draft in place during interaction;
-    // viewport ownership and overlay placement still advance on every frame.
+    // viewport ownership still advances on every frame.
     if (!panel.numeric_interaction_active()) panel.refresh();
     viewport.refresh_workspace_layout();
-    viewport.refresh_settings_overlay(editor);
   };
   process_frame();
 

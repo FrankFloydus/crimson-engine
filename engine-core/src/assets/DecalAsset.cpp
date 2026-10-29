@@ -68,9 +68,9 @@ std::shared_ptr<const MaterialAsset> stagedDecalMaterial(const std::filesystem::
 }
 std::filesystem::path decalAssetPath(const std::filesystem::path& root,const std::string& id) {
     if(!isAssetUuid(id)||isEngineAssetId(id))throw std::runtime_error("Decal file requires a writable managed UUID.");
-    for(const auto& p:storedAssetPaths(root))if(p.id==canonicalAssetId(id)){if(p.file.extension()!=".crimson-decal")throw std::runtime_error("Asset is not a decal file.");return p.file;}
-    try{const auto file=resolveAssetPath(root,id);if(file.extension()==".crimson-decal")return file;}catch(const std::exception&){}
-    return resolveAssetPath(root,"assets/decals")/(canonicalAssetId(id)+".crimson-decal");
+    for(const auto& p:storedAssetPaths(root))if(p.id==canonicalAssetId(id)){if(assetPathExtension(p.file)!=".crimson-decal")throw std::runtime_error("Asset is not a decal file.");return p.file;}
+    try{const auto file=resolveAssetPath(root,id);if(assetPathExtension(file)==".crimson-decal")return file;}catch(const std::exception&){}
+    return root/(canonicalAssetId(id)+".crimson-decal");
 }
 std::string serializeDecalAsset(const DecalAsset& value){auto a=value;canonicalizeDecalAsset(a);if(a.id.empty())throw std::runtime_error("Saving a decal requires its managed identity.");
     return Json{{"version",2},{"type","crimson-decal"},{"id",a.id},{"name",a.name},{"material",a.material}}.dump(2)+"\n";}
@@ -102,7 +102,7 @@ DecalAsset saveDecalAssetAs(const std::filesystem::path& root,const DecalAsset& 
     validateDecalAsset(source);if(!contentStorageReady(root))initializeContentStorage(root);auto a=source;a.id=newAssetId();a.name=unusedName(root,name.empty()?source.name:name);saveDecalAsset(root,a);return a;
 }
 std::vector<DecalAssetEntry> scanDecalAssets(const std::filesystem::path& root,std::vector<std::string>* diagnostics) {
-    std::vector<DecalAssetEntry> result;if(!contentStorageReady(root))return result;for(const auto& p:storedAssetPaths(root))if(p.file.extension()==".crimson-decal"&&std::filesystem::is_regular_file(p.file)) {
+    std::vector<DecalAssetEntry> result;if(!contentStorageReady(root))return result;for(const auto& p:storedAssetPaths(root))if(assetPathExtension(p.file)==".crimson-decal"&&std::filesystem::is_regular_file(p.file)) {
         try{auto a=loadDecalAsset(root,p.id);result.push_back({std::move(a.id),std::move(a.name)});}catch(const std::exception& e){if(diagnostics)diagnostics->push_back("Decal "+p.id+": "+e.what());}}
     std::sort(result.begin(),result.end(),[](const auto& a,const auto& b){return a.name!=b.name?a.name<b.name:a.id<b.id;});return result;
 }

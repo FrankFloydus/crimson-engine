@@ -28,6 +28,12 @@ class QtHorizontalPointerCapture;
 /// Most fields scrub numerically; domain-specific fields retain virtual steps.
 enum class QtNumericDragMode { Automatic, NativeSteps };
 
+/// One input-time observation of the originating viewport's distance grid.
+struct QtNumericGridSnapState {
+  double increment = 1.0;
+  bool enabled = false;
+};
+
 /// Presentation and pointer gestures shared by native integer/double editors.
 /// The spin box retains numeric validation, stepping, locale and accessibility.
 class QtNumericSpinBoxController final : public QObject {
@@ -54,6 +60,12 @@ public:
   void set_drag_snap_increment(double increment);
   /// Convert the application grid into this field's numeric units.
   void set_drag_snap_scale(double scale);
+  /// Quantize ordinary floating scrubs while the originating grid snap is on.
+  void set_grid_aware_drag(bool enabled);
+
+  /// Optional field-local observation; increments are in world units before
+  /// set_drag_snap_scale. Missing observers retain the application Ctrl grid.
+  std::function<QtNumericGridSnapState()> grid_snap_state;
 
   /// Mixed-value fields supply their neutral origin and presentation transition.
   std::function<double()> drag_origin;
@@ -98,7 +110,7 @@ private:
   void begin_drag_activity();
   void end_drag_activity();
   [[nodiscard]] double drag_sensitivity() const;
-  [[nodiscard]] double drag_snap_increment() const;
+  [[nodiscard]] QtNumericGridSnapState drag_grid_snap_state() const;
   [[nodiscard]] bool normalized_drag() const;
   void finish_drag(bool notify = true);
   void finish_native_edit();
@@ -128,6 +140,7 @@ private:
   bool reserves_arrow_space_ = false;
   bool refreshing_geometry_ = false;
   bool geometry_refresh_queued_ = false;
+  bool grid_aware_drag_ = false;
   int authored_minimum_width_ = 0;
   int applied_minimum_width_ = 0;
   double original_value_ = 0.0;

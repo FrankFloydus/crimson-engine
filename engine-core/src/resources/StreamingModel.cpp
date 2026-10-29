@@ -74,7 +74,7 @@ Aabb primitiveBounds(const ModelPrimitive& primitive) {
 
 ModelStream buildModelCache(const ModelAsset& asset,const std::filesystem::path& root,bool writeMetadata) {
     ModelStream result{asset.id,modelContentKey(asset),{}};
-    const auto folder=resolveAssetPath(root,"assets/cache/mesh-lods")/detail::hex(result.key);
+    const auto folder=resolveAssetPath(root,".crimson/cache/mesh-lods")/detail::hex(result.key);
     std::filesystem::create_directories(folder);
     for (std::size_t p=0;p<asset.primitives.size();++p) {
         const auto& original=asset.primitives[p]; validate(original);

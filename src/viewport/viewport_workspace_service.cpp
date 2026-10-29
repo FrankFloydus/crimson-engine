@@ -244,6 +244,10 @@ bool ViewportWorkspaceService::set_grid_preset(int preset) {
   return true;
 }
 
+bool ViewportWorkspaceService::rendered_presentation_available() const {
+  return scene_rendering_available_ || release_has_feature(ReleaseFeature::RenderedViewport);
+}
+
 ViewportShadingMode
 ViewportWorkspaceService::shading_mode(ViewportPaneId pane_id) const {
   const ViewportWorkspacePaneState &pane_state = pane(pane_id);
@@ -251,7 +255,7 @@ ViewportWorkspaceService::shading_mode(ViewportPaneId pane_id) const {
   const ViewportShadingMode mode = orthographic
                                        ? pane_state.orthographic_shading
                                        : pane_state.perspective_shading;
-  if (!release_has_feature(ReleaseFeature::RenderedViewport) &&
+  if (!rendered_presentation_available() &&
       viewport_shading_uses_rendered_materials(mode)) {
     return orthographic ? ViewportShadingMode::Wireframe
                         : ViewportShadingMode::Shaded;
@@ -262,7 +266,7 @@ ViewportWorkspaceService::shading_mode(ViewportPaneId pane_id) const {
 bool ViewportWorkspaceService::set_shading_mode(ViewportPaneId pane_id,
                                                 ViewportShadingMode mode) {
   if (!viewport_shading_mode_is_valid(mode) ||
-      (!release_has_feature(ReleaseFeature::RenderedViewport) &&
+      (!rendered_presentation_available() &&
        viewport_shading_uses_rendered_materials(mode))) {
     return false;
   }

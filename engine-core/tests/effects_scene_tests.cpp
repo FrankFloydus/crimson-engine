@@ -132,17 +132,11 @@ void independentlyMaterializedWins() {
     bool failed=false;try{saveSceneSnapshot(project.root,document.assetId(),snapshot);}catch(const std::exception&){failed=true;}
     require(failed&&read(file)=="corrupt","A corrupt materialized identity was silently overwritten with migration data.");
 }
-void componentAndQuaderOwnership() {
+void componentOwnership() {
     Project project;SceneDocument document(project.root);const auto group=document.createEmpty("Effect owner");require(addSceneComponent(document,group,SceneComponentKind::Effects),document.status());
     const auto child=document.createEmpty("Child");document.select({child},child);require(document.reparentSelection(group),document.status());document.select({group},group);
     require(!document.ungroupSelection(),"An Effects-only owner was treated as an empty group.");
-    const auto owner=document.createQuader();EntityRecord input;input.id=1;input.name="Imported entity";input.quaderGenerated=QuaderGenerated{owner,"entity"};
-    require(document.replaceQuaderImport(owner,QuaderLink{},{input}),document.status());
-    std::vector<EntityId> ids;for(const auto& record:document.scene().records())if(record.quaderGenerated)ids.push_back(record.id);
-    for(const auto entity:ids){auto record=*document.scene().find(entity);record.effects=SceneEffects{{AssetRef<GameplayEffectAsset>{EnemyStartingEffectId}}};require(document.updateEntity(entity,record),document.status());}
-    input.local=math::translation({2,0,1});require(document.replaceQuaderImport(owner,QuaderLink{},{input}),document.status());
-    for(const auto entity:ids)require(document.scene().find(entity)->effects==SceneEffects{{AssetRef<GameplayEffectAsset>{EnemyStartingEffectId}}},"Quader refresh discarded effects from a generated member or Imported container.");
 }
 }
-int main(){try{recipesAndMembership();deterministicReadAndCurrentSubsets();membershipConversionDefaultsAndExistingEffects();membershipConversionPreservesUnknownEffectModifiers();historyPlayAndPersistence();independentlyMaterializedWins();componentAndQuaderOwnership();
+int main(){try{recipesAndMembership();deterministicReadAndCurrentSubsets();membershipConversionDefaultsAndExistingEffects();membershipConversionPreservesUnknownEffectModifiers();historyPlayAndPersistence();independentlyMaterializedWins();componentOwnership();
     std::cout<<"Effect scene checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

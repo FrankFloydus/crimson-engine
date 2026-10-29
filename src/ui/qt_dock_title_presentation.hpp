@@ -42,6 +42,15 @@ qt_dock_title_style_sheet(const QPalette &palette);
 /** Installs scoped dock styling that follows application palette transitions. */
 void install_palette_aware_dock_title_presentation(QDockWidget &dock);
 
+/** Assigns authored panel artwork before its native dock title. */
+void set_palette_aware_dock_title_icon(QDockWidget &dock,
+                                      const QString &resource_path);
+
+/** Resolves assigned panel artwork through the title's live palette. */
+[[nodiscard]] QIcon qt_dock_title_panel_icon(
+    const QDockWidget &dock, const QPalette &palette,
+    QPalette::ColorGroup group);
+
 /** Reflows an installed dock title without changing its palette or state. */
 void apply_ui_scale_to_palette_aware_dock_title_presentation(
     QDockWidget &dock, const QtUiScaleMetrics &metrics);

@@ -22,15 +22,14 @@ struct BrowserItem {
     bool folder{false};
 };
 
-// Cards follow physical Content/Engine files and directories. Asset identities
+// Cards follow physical files and directories in the chosen project folder. Asset identities
 // remain stable when their backing file or package is renamed or moved.
 class BrowserCatalog {
 public:
-    static constexpr const char* ContentFolder="folder:content";
-    static constexpr const char* EngineFolder="folder:engine";
+    static constexpr const char* RootFolder="folder:project";
     explicit BrowserCatalog(std::filesystem::path projectRoot);
     void synchronize(std::span<const AssetEntry> assets);
-    std::vector<BrowserItem> items(const std::string& folder = {}) const;
+    std::vector<BrowserItem> items(const std::string& folder = RootFolder) const;
     // Active search/type filtering includes matching assets below this folder;
     // its direct child folders remain available for navigation.
     std::vector<BrowserItem> items(const std::string& folder,std::string_view search,BrowserAssetFilter filter) const;
@@ -57,6 +56,8 @@ public:
     void erase(std::span<const std::string> ids);
     std::string serializeWithout(std::span<const std::string> ids) const;
     BrowserCatalog prepareErase(std::span<const std::string> ids) const;
+    // Pure metadata plan for the shared filesystem owner; performs no moves.
+    std::string serializeRelocated(std::span<const ContentPathMove> moves) const;
     const std::string& status() const { return status_; }
 private:
     struct Presentation { std::string folder, name; };

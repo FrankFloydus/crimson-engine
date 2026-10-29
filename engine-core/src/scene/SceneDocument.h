@@ -116,7 +116,12 @@ public:
     bool transactionActive() const { return transaction_.has_value(); }
     uint64_t transactionId() const { return transaction_?transaction_->id:0; }
     bool transient() const { return transient_; }
-    bool resetTransientFrom(const SceneDocument& source);
+    // An embedded host routes accepted component edits to its canonical scene.
+    // This document then owns only a disposable typed preview, never history.
+    using AuthoringCommit = std::function<bool(const SceneSnapshot&,const std::string&)>;
+    void setAuthoringCommit(AuthoringCommit callback) { authoringCommit_=std::move(callback); }
+    bool resetTransientFrom(const SceneDocument& source,std::span<const EntityRecord> additional={});
+    bool resetTransientFrom(const SceneSnapshot& source);
     bool applyRuntimePoses(std::span<const ScenePoseUpdate> poses);
     bool beginTransform(const std::string& label, std::vector<EntityId> roots);
     // Opens one transform transaction with copies selected. Existing update,
@@ -168,14 +173,6 @@ public:
     bool undo();
     bool redo();
     EntityId createEmpty(const std::string& name = "Entity");
-    EntityId createQuader(const std::string& name = "Quader");
-    // Generated records use temporary IDs/parent IDs and stable source keys.
-    // Reimport preserves matching persistent identities and all manual siblings.
-    using ModelBlendRemap = std::function<SceneBlendSettings(const EntityRecord&,const EntityRecord&)>;
-    using ModelMaterialRemap = std::function<ModelMaterialOverrides(const EntityRecord&,const EntityRecord&)>;
-    using ModelPaintRemap = std::function<std::optional<SceneMeshPaint>(const EntityRecord&,const EntityRecord&)>;
-    bool replaceQuaderImport(EntityId owner,const QuaderLink&,const std::vector<EntityRecord>& generated,
-        const ModelMaterialRemap& remapMaterials={},const ModelPaintRemap& remapPaint={},bool preservePlacement=false,const ModelBlendRemap& remapBlendSettings={});
     EntityId createModel(const std::string& assetId, const std::string& name, const Mat4& local = Mat4{});
     EntityId createDecal(const SceneDecal&,const std::string& name="Decal",const Mat4& local=Mat4{});
     EntityId createBoxDecal(const std::string& name="Box Decal",EntityId parent=NoEntity);
@@ -224,6 +221,7 @@ private:
     uint64_t transactionSerial_{};
     std::optional<Transaction> transaction_;
     bool transient_{};
+    AuthoringCommit authoringCommit_;
     std::unordered_map<std::string,std::shared_ptr<const NavigationAgentProfile>> stagedNavigationProfiles_;
     std::unordered_map<EntityId,std::string> stagedNavigationControllers_;
     std::unordered_map<std::string,std::shared_ptr<const GameplayEffectAsset>> stagedGameplayEffects_;

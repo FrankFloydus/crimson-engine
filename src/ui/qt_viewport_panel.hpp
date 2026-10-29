@@ -89,7 +89,7 @@ qt_event_target_belongs_to_tool_settings(const QObject *target);
 class QtViewportPanel final : public QWidget {
 public:
   explicit QtViewportPanel(QWidget *parent = nullptr, bool composed = false,
-      RenderCompositionApi api = RenderCompositionApi::Vulkan);
+      RenderCompositionApi api = RenderCompositionApi::Vulkan, bool scene_rendering_available = false);
   ~QtViewportPanel() override;
 
   QtViewportPanel(const QtViewportPanel &) = delete;
@@ -118,13 +118,6 @@ public:
   /// Returns false while a nested paint must wait for the shared projection.
   [[nodiscard]] bool prepare_composed_frame();
   void refresh_control_actions(QuaderEditorApi &editor);
-  /// Adopts one retained settings overlay; null detaches the host callbacks.
-  void set_settings_panel(QtToolSettingsPanel *panel);
-  /// Samples cheap operation metadata; unchanged frames do no widget work.
-  void refresh_settings_overlay(QuaderEditorApi &editor);
-  [[nodiscard]] std::uint64_t settings_overlay_update_count() const {
-    return settings_overlay_update_count_;
-  }
   void set_viewport_settings(const ViewportSettings &settings);
   void apply_ui_scale(const QtUiScaleMetrics &metrics);
   [[nodiscard]] float
@@ -196,6 +189,7 @@ protected:
   void resizeEvent(QResizeEvent *event) override;
 
 private:
+  bool scene_rendering_available_ = false;
   /// Owns the retained Qt presentation objects for one workspace pane.
   struct Pane {
     ViewportPaneId id = ViewportPaneId::Perspective;
@@ -268,8 +262,6 @@ private:
   [[nodiscard]] QRect pane_content_rect(const Pane &pane) const;
   void update_pane_geometry();
   void update_pane_overlay_geometry(Pane &pane);
-  void update_settings_overlay_geometry();
-  void abandon_settings_overlay();
   void update_focused_pane_indicator();
   void cancel_navigation();
   void synchronize_pointer_capture(std::optional<ViewportPaneId> owner);
@@ -326,14 +318,7 @@ private:
   QtUiScaleMetrics ui_scale_metrics_;
   RenderHost *render_system_ = nullptr;
   ViewportWorkspaceService *workspace_ = nullptr;
-  QPointer<QtToolSettingsPanel> settings_panel_;
   QtEnvironmentSettingsPopup *environment_popup_ = nullptr;
-  std::string settings_target_id_;
-  std::uint64_t settings_origin_serial_ = 0;
-  std::optional<ViewportPaneId> settings_origin_pane_;
-  std::optional<ViewportPaneId> settings_host_pane_;
-  bool settings_overlay_geometry_dirty_ = true;
-  std::uint64_t settings_overlay_update_count_ = 0;
   const ViewportSettings *viewport_settings_ = nullptr;
   LocalizationService *localization_ = nullptr;
   std::function<QuaderMaterialReference()> primitive_creation_material_provider_;

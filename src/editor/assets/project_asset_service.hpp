@@ -10,10 +10,12 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace quader {
@@ -53,6 +55,35 @@ struct ProjectAssetDiscoveryWorkStats final {
   std::uint64_t metadata_checks = 0u;
 };
 
+/// Accepted physical roots, shared with additional project asset domains.
+enum class ProjectAssetMutationKind { Move, Copy, Delete };
+struct ProjectAssetPathMapping final {
+  ProjectRelativePath source;
+  std::optional<ProjectRelativePath> destination;
+};
+struct ProjectAssetMutation final {
+  ProjectAssetMutationKind kind = ProjectAssetMutationKind::Move;
+  std::vector<ProjectAssetPathMapping> paths;
+};
+/// An existing metadata replacement, or a copied file's identity rewrite.
+/// The filesystem owner checks exact baseline bytes before publication and
+/// includes the replacement in its existing recovery journal.
+struct ProjectAssetMutationWrite final {
+  ProjectRelativePath path;
+  std::string before;
+  std::string after;
+  bool created_by_copy = false;
+  bool create_new = false;
+};
+struct ProjectAssetMutationPreparation final {
+  std::uint64_t revision = 0u;
+  std::vector<ProjectAssetMutationWrite> writes;
+  std::function<ProjectIoResult<void>()> validate;
+  std::function<void()> committed;
+};
+using ProjectAssetMutationPrepare = std::function<
+    ProjectIoResult<ProjectAssetMutationPreparation>(const ProjectAssetMutation &)>;
+
 /// Owns mixed project folder discovery and transactional organization.
 class ProjectAssetService final {
 public:
@@ -69,6 +100,12 @@ public:
   [[nodiscard]] std::uint64_t revision() const noexcept;
   [[nodiscard]] const ProjectAssetDiscoveryWorkStats &work_stats() const noexcept { return work_; }
   void invalidate() noexcept;
+  /// Bind the active additional asset domain; clear before its owner closes.
+  void set_mutation_prepare(ProjectAssetMutationPrepare prepare) {
+    mutation_prepare_ = std::move(prepare);
+  }
+  [[nodiscard]] ProjectIoResult<ProjectAssetMutationPreparation>
+  prepare_mutation(const ProjectAssetMutation &mutation) const;
   /// Repairs interrupted organization before project catalogs are opened.
   [[nodiscard]] static ProjectIoResult<void> recover_pending_operations(
       const std::filesystem::path &manifest_path);
@@ -127,6 +164,7 @@ private:
                                 std::span<const ProjectRelativePath> changed);
 
   ProjectSession *project_ = nullptr;
+  ProjectAssetMutationPrepare mutation_prepare_;
   mutable std::optional<ProjectIoResult<ProjectAssetSnapshot>> cached_;
   mutable ProjectId cached_project_;
   mutable std::uint64_t cached_material_revision_ = 0u;

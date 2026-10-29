@@ -93,7 +93,7 @@ std::optional<CameraTemplate> captureCameraTemplate(const Scene& scene,EntityId 
     return validCameraTemplate(value)?std::optional<CameraTemplate>{std::move(value)}:std::nullopt;
 }
 std::filesystem::path cameraTemplatesPath(const std::filesystem::path& projectRoot) {
-    return projectRoot/"Content"/"camera-templates.json";
+    return projectRoot/".crimson"/"camera-templates.json";
 }
 std::vector<CameraTemplate> loadCameraTemplates(const std::filesystem::path& projectRoot) {
     const auto path=cameraTemplatesPath(projectRoot);

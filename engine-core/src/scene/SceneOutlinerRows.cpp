@@ -7,8 +7,7 @@ namespace crimson {
 bool isSceneGroup(const EntityRecord& record) {
     return !record.model&&!record.particle&&!record.decal&&!record.directional&&!record.point&&!record.spot&&!record.environment&&
         !record.actor&&!record.movement&&!record.controller&&!record.navigation&&!record.playerInput&&
-        !record.collider&&!record.camera&&!record.cameraFollow&&
-        !record.quader&&!record.quaderGenerated;
+        !record.collider&&!record.camera&&!record.cameraFollow;
 }
 namespace {
 struct Projection {
@@ -67,7 +66,6 @@ bool matches(const EntityRecord& record,SceneOutlinerFilter type) {
     case SceneOutlinerFilter::Decals:return hasSceneComponent(record,SceneComponentKind::Decal);
     case SceneOutlinerFilter::Environment:return hasSceneComponent(record,SceneComponentKind::Environment);
     case SceneOutlinerFilter::Navigation:return record.navigation||record.navigationVolume;
-    case SceneOutlinerFilter::Quader:return hasSceneComponent(record,SceneComponentKind::Quader);
     }
     return false;
 }
@@ -85,7 +83,6 @@ const char* sceneOutlinerFilterName(SceneOutlinerFilter value) {
     case SceneOutlinerFilter::Decals:return "Decals";
     case SceneOutlinerFilter::Environment:return "Environment";
     case SceneOutlinerFilter::Navigation:return "Navigation";
-    case SceneOutlinerFilter::Quader:return "Quader";
     }
     return "All types";
 }

@@ -36,7 +36,7 @@ std::shared_ptr<const PreparedEnvironment> prepareEnvironmentCpu(const std::file
     prepared->settings.specularSize=ibl::source_cube_size(image.width,image.height);
     prepared->key=ibl::cacheKey(source,prepared->settings);
     std::ostringstream name; name << std::hex << std::setfill('0') << std::setw(16) << prepared->key << ".ibl";
-    const auto cache=resolveAssetPath(projectRoot,"assets/cache/ibl")/name.str();
+    const auto cache=resolveAssetPath(projectRoot,".crimson/cache/ibl")/name.str();
     const bool cached=ibl::readCache(cache,prepared->key,prepared->settings,prepared->data);
     bool saved=true;
     if (!cached) {

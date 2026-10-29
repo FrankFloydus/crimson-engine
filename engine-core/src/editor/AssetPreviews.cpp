@@ -190,7 +190,7 @@ struct AssetPreviews::Impl {
     std::function<bool(const std::string&)> imageAvailable;
     Impl(std::filesystem::path directory,AssetLibrary& library,ResourceManager& manager,Renderer& gpu,EditorResources& models)
         :root(std::move(directory)),assets(library),resources(manager),renderer(gpu),prepared(models),
-         cacheFolder(resolveAssetPath(root,"assets/cache/previews")) {}
+         cacheFolder(resolveAssetPath(root,".crimson/cache/previews")) {}
     std::filesystem::path cache(const std::string& id,uint64_t signature) const {
         return assetPreviewImagePath(cacheFolder,id,signature);
     }

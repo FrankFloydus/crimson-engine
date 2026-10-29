@@ -6311,8 +6311,8 @@ public:
 
   [[nodiscard]] bool action_supports_editor_mode(std::string_view action_id) const {
     return editor_mode_service_ == nullptr ||
-           ModelingActionCatalog::action_supports_editor_mode(
-               action_id, editor_mode_service_->mode());
+           (editor_mode_service_->permits_action(action_id)&&ModelingActionCatalog::action_supports_editor_mode(
+               action_id, editor_mode_service_->mode()));
   }
 
   void apply_action_mode_policy(ModelingActionItem &action) const {
@@ -6977,6 +6977,7 @@ public:
     if (repeat.last_action_kind ==
             quader_editor_core::RepeatableActionKind::Operation &&
         repeat.last_operation.has_value()) {
+      if(editor_mode_service_&&editor_mode_service_->workspace_mode()!=EditorWorkspaceMode::Modeling)return {false,false,"Repeating a modeling operation requires Modeling workspace mode."};
       quader_editor_core::EditorOperationCommand command =
           *repeat.last_operation;
       command.phase = quader_editor_core::EditorOperationCommandPhase::Execute;
@@ -6994,6 +6995,7 @@ public:
   ModelingCommandResult begin_operation_preview(
       const ModelingActionItem &action,
       const quader_editor_core::EditorOperation &operation) {
+    if(!action_supports_editor_mode(action.action_id))return {.ok=false,.message="The operation requires Modeling workspace mode."};
     if (operation_preview_active() &&
         tool_settings_target().action_id == action.action_id) {
       return {.ok = true};
@@ -8035,6 +8037,7 @@ public:
   }
 
   ModelingCommandResult activate_viewport_tool(ModelingViewportTool tool) {
+    if(editor_mode_service_){const auto* descriptor=find_viewport_tool_descriptor(tool);if(descriptor&&!editor_mode_service_->permits_tool(descriptor->id))return {.ok=false,.message="The tool requires Modeling workspace mode."};}
     if (editor_mode_service_ != nullptr &&
         !viewport_tool_supports_editor_mode(tool, editor_mode_service_->mode())) {
       return {.ok = false, .message = "Tool is unavailable in the current editor mode."};

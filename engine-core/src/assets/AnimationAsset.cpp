@@ -120,7 +120,7 @@ AnimationAsset deserializeAnimationAsset(std::string_view text,const std::string
 }
 std::filesystem::path animationAssetPath(const std::filesystem::path& root,const std::string& id) {
     if(!isAssetUuid(id))throw std::runtime_error("Animation reference must be a UUID.");
-    const auto file=resolveAssetPath(root,id);if(file.extension()!=".crimson-animation")throw std::runtime_error("Animation reference has an incompatible asset kind.");return file;
+    const auto file=resolveAssetPath(root,id);if(assetPathExtension(file)!=".crimson-animation")throw std::runtime_error("Animation reference has an incompatible asset kind.");return file;
 }
 AnimationAsset loadAnimationAsset(const std::filesystem::path& root,const std::string& id) {
     const auto file=animationAssetPath(root,id);if(std::filesystem::file_size(file)>MaximumAnimationBytes)throw std::runtime_error("Animation exceeds 64 KiB.");
@@ -132,7 +132,7 @@ void saveAnimationAsset(const std::filesystem::path& root,const AnimationAsset& 
     if(!contentStorageReady(root))initializeContentStorage(root);
     const auto contents=serializeAnimationAsset(asset);const auto entries=storedAssetPaths(root);
     const auto existing=std::find_if(entries.begin(),entries.end(),[&](const auto& entry){return entry.id==asset.id;});
-    const auto file=existing==entries.end()?checkedContentPath(root,root/"Content"/"Animations"/fromUtf8(asset.id+".crimson-animation")):animationAssetPath(root,asset.id);
+    const auto file=existing==entries.end()?checkedContentPath(root,root/fromUtf8(asset.id+".crimson-animation")):animationAssetPath(root,asset.id);
     (void)checkedContentPath(root,file);
     if(existing==entries.end()&&std::filesystem::exists(file))throw std::runtime_error("An unregistered Animation destination already exists.");
     const std::array<StoredAssetPath,1> registration{{{asset.id,file}}};

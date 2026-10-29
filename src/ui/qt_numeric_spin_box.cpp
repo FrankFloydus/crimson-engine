@@ -97,6 +97,19 @@ void invoke_callback(const std::function<void()> &callback) {
   }
 }
 
+double snap_grid_distance(double distance, double increment) {
+  if (distance == 0.0 || !std::isfinite(distance)) {
+    return distance;
+  }
+  const double magnitude = std::abs(distance);
+  // Small distances follow the binary subdivisions used by scene grids.
+  // Beyond one cell, retain uniformly spaced whole-cell distances instead.
+  const double snapped = magnitude < increment
+      ? std::exp2(std::round(std::log2(magnitude)))
+      : std::round(magnitude / increment) * increment;
+  return std::isfinite(snapped) ? std::copysign(snapped, distance) : distance;
+}
+
 } // namespace
 
 /// Adopts Qt-created editors and routes input for the active numeric text edit.
@@ -501,15 +514,27 @@ void QtNumericSpinBoxController::set_drag_snap_scale(double scale) {
   drag_snap_scale_ = std::isfinite(scale) && scale > 0.0 ? scale : 1.0;
 }
 
-double QtNumericSpinBoxController::drag_snap_increment() const {
+void QtNumericSpinBoxController::set_grid_aware_drag(bool enabled) {
+  grid_aware_drag_ = enabled;
+}
+
+QtNumericGridSnapState
+QtNumericSpinBoxController::drag_grid_snap_state() const {
   if (drag_snap_increment_override_ > 0.0) {
-    return drag_snap_increment_override_;
+    return {drag_snap_increment_override_, false};
   }
   // The provider may invoke its owner synchronously. Copy all controller
   // state needed after that call so it may safely destroy this field.
   const double scale = drag_snap_scale_;
-  const double increment = current_snap_increment() * scale;
-  return std::isfinite(increment) && increment > 0.0 ? increment : 1.0;
+  const auto observe = grid_snap_state;
+  const auto state = observe ? observe()
+                             : QtNumericGridSnapState{current_snap_increment(),
+                                                      false};
+  const double increment = state.increment * scale;
+  if (!std::isfinite(increment) || increment <= 0.0) {
+    return {1.0, false};
+  }
+  return {increment, state.enabled};
 }
 
 bool QtNumericSpinBoxController::normalized_drag() const {
@@ -650,11 +675,16 @@ void QtNumericSpinBoxController::update_drag(
 void QtNumericSpinBoxController::apply_linear_drag() {
   const QPointer<QtNumericSpinBoxController> guard(this);
   double increment = 1.0;
-  if (drag_modifiers_.testFlag(Qt::ControlModifier)) {
-    increment = drag_snap_increment();
+  bool snap_distance = false;
+  if (grid_aware_drag_ || drag_modifiers_.testFlag(Qt::ControlModifier)) {
+    const auto state = drag_grid_snap_state();
     if (!guard || !dragging_) {
       return;
     }
+    increment = state.increment;
+    snap_distance = grid_aware_drag_ && state.enabled;
+  }
+  if (drag_modifiers_.testFlag(Qt::ControlModifier)) {
     if (drag_modifiers_.testFlag(Qt::ShiftModifier)) {
       increment *= 0.1;
     }
@@ -667,13 +697,16 @@ void QtNumericSpinBoxController::apply_linear_drag() {
   // next reverse movement to affect the value immediately.
   drag_accumulator_ = std::clamp(drag_accumulator_, minimum, maximum);
   double next = drag_accumulator_;
-  if (next > minimum && next < maximum &&
-      drag_modifiers_.testFlag(Qt::ControlModifier)) {
-    if (integer) {
-      increment = std::max(1.0, std::round(increment));
-      next = std::trunc(next / increment) * increment;
-    } else {
-      next = std::round(next / increment) * increment;
+  if (next > minimum && next < maximum) {
+    if (drag_modifiers_.testFlag(Qt::ControlModifier)) {
+      if (integer) {
+        increment = std::max(1.0, std::round(increment));
+        next = std::trunc(next / increment) * increment;
+      } else {
+        next = std::round(next / increment) * increment;
+      }
+    } else if (snap_distance && floating) {
+      next = snap_grid_distance(next, increment);
     }
   }
   if (integer) {

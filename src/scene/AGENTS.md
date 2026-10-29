@@ -17,6 +17,15 @@ file except through prior written authorization from Francesco Di Blasi.
   and project workspace lifetime belong to `src/editor/session`.
 - `document/scene_entity_state.*` is the shared component inventory for persistence, history,
   clipboard, and rollback. Do not add a second live object-record store or allocator.
+- Engine authoring is `EngineComponentsComponent` on these same entities and optional
+  `SceneSettings::engine`; identity, names, transforms, hierarchy and history stay native.
+  Immutable opaque bytes and declared UUID reference slots travel through the shared inventory.
+  The host validates component schema; native code validates only the bounded envelope and
+  reference metadata. Optional complete Engine asset UUID inventories drive saved/live/native-history
+  retention; missing inventories stay unknown across roundtrip. Native history retains immutable bytes;
+  retention observers keep only weak payload roots, never a second history or IO in mutation callbacks.
+  Duplicate/paste remap declared references through the complete batch,
+  preserving references outside it. Scene-wide selectors continue to target the original entities.
 - Authored `SelectableComponent::selectable` is a positive permission, inherited through
   hierarchy and layer restrictions. `VisibilityComponent::selectable` remains a separate
   eligibility gate; selection consumers apply both without merging their authored state.

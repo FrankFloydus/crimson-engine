@@ -123,6 +123,8 @@ struct RenderSceneInstanceOccurrenceRecord final {
   QMat4 sampling_from_local;
   bool selected = false;
   bool dimmed = false;
+  bool generate_collisions = false;
+  std::string entity_uuid;
 };
 
 /**
@@ -140,6 +142,7 @@ struct RenderSceneInstancePrimitiveRecord final {
   RenderMaterialBindingSnapshot material;
   RenderInstanceBounds local_bounds;
   std::vector<RenderSceneInstanceOccurrenceRecord> occurrences;
+  std::string member_uuid;
 
   [[nodiscard]] bool renderable() const {
     return mesh.renderable() && primitive.index_count > 0u &&
@@ -168,6 +171,7 @@ struct RenderSceneMeshRecord {
   bool binding_dirty = true;
   /// Global viewport policy, independent of the preserved authored component.
   bool backface_culling_enabled = true;
+  std::string entity_uuid;
 
   [[nodiscard]] bool renderable() const { return mesh.renderable(); }
   [[nodiscard]] bool cast_shadows() const { return mesh_component.cast_shadows; }

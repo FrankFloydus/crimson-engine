@@ -19,6 +19,7 @@
 #include "ui/qt_tool_settings_drag_spinner.hpp"
 #include "ui/qt_tool_settings_number_slider.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
 
 
 #include <QApplication>
@@ -42,6 +43,7 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QResizeEvent>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSizePolicy>
@@ -80,6 +82,8 @@ constexpr int kNumberDispatchIntervalMs = 16;
 constexpr int kMinimumControlLabelWidth = 88;
 constexpr int kMaximumControlLabelWidth = 220;
 constexpr int kControlColumnSpacing = 8;
+constexpr int kMinimumPanelWidth = 240;
+constexpr int kPreferredPanelWidth = 320;
 
 /// Font propagation may arrive after the host applies its scaled metrics.
 class QtToolSettingLabel final : public QLabel {
@@ -409,7 +413,8 @@ struct QtToolSettingsPanel::Impl {
   };
 
   explicit Impl(QtToolSettingsPanel &panel) : panel_(panel) {
-    panel_.setObjectName(QStringLiteral("viewport.settings_overlay"));
+    panel_.setObjectName(QStringLiteral("tool_settings.panel"));
+    panel_.setBackgroundRole(QPalette::Base);
     panel_.setAutoFillBackground(true);
     panel_.setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
 
@@ -417,10 +422,13 @@ struct QtToolSettingsPanel::Impl {
     root_layout->setObjectName(QStringLiteral("tool_settings.layout"));
     root_layout->setSizeConstraint(QLayout::SetNoConstraint);
     set_scalable_margins(*root_layout, QMargins(0, 0, 0, 0));
-    set_scalable_spacing(*root_layout, 4);
+    set_scalable_spacing(*root_layout, 0);
+    root_layout->setAlignment(Qt::AlignTop);
 
     target_title_ = new QtPanelSectionHeader(&panel_);
     target_title_->setObjectName(QStringLiteral("tool_settings.target_title"));
+    target_title_->set_presentation(QtPanelSectionHeader::Presentation::Flat);
+    target_title_->set_title_emphasized(true);
     target_title_->setChecked(expanded_);
     target_title_->setArrowType(Qt::DownArrow);
     target_title_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
@@ -434,6 +442,8 @@ struct QtToolSettingsPanel::Impl {
     scroll_area_ = new QScrollArea(&panel_);
     scroll_area_->setObjectName(QStringLiteral("tool_settings.scroll"));
     scroll_area_->setFrameShape(QFrame::NoFrame);
+    scroll_area_->setBackgroundRole(QPalette::Base);
+    scroll_area_->viewport()->setBackgroundRole(QPalette::Base);
     scroll_area_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scroll_area_->setWidgetResizable(true);
     scroll_area_->setMinimumSize(0, 0);
@@ -441,9 +451,10 @@ struct QtToolSettingsPanel::Impl {
 
     controls_container_ = new QWidget(scroll_area_);
     controls_container_->setObjectName(QStringLiteral("tool_settings.content"));
+    controls_container_->setBackgroundRole(QPalette::Base);
     controls_layout_ = new QVBoxLayout(controls_container_);
-    set_scalable_margins(*controls_layout_, QMargins(6, 2, 6, 6));
-    set_scalable_spacing(*controls_layout_, 6);
+    set_scalable_margins(*controls_layout_, QMargins(0, 0, 0, 0));
+    set_scalable_spacing(*controls_layout_, 0);
     controls_layout_->setAlignment(Qt::AlignTop);
     scroll_area_->setWidget(controls_container_);
     root_layout->addWidget(scroll_area_, 1);
@@ -451,8 +462,8 @@ struct QtToolSettingsPanel::Impl {
     actions_container_ = new QWidget(&panel_);
     actions_container_->setObjectName(QStringLiteral("tool_settings.actions"));
     auto *actions_layout = new QVBoxLayout(actions_container_);
-    set_scalable_margins(*actions_layout, QMargins(6, 0, 6, 6));
-    set_scalable_spacing(*actions_layout, 6);
+    set_scalable_margins(*actions_layout, QMargins(8, 0, 8, 8));
+    set_scalable_spacing(*actions_layout, 4);
 
     preview_actions_container_ = new QWidget(actions_container_);
     preview_actions_container_->setObjectName(
@@ -623,11 +634,9 @@ struct QtToolSettingsPanel::Impl {
 
   [[nodiscard]] QSize preferred_size() const {
     const QMargins margins = panel_.layout()->contentsMargins();
-    const int width = expanded_
-        ? std::max(ui_scale_metrics_.px(320),
-                   controls_layout_->minimumSize().width() +
-                       margins.left() + margins.right())
-        : ui_scale_metrics_.px(160);
+    const int width = std::max(ui_scale_metrics_.px(kPreferredPanelWidth),
+                              controls_layout_->minimumSize().width() +
+                                  margins.left() + margins.right());
     int height = std::max(target_title_->minimumHeight(),
                           target_title_->sizeHint().height()) +
                  margins.top() + margins.bottom();
@@ -643,6 +652,16 @@ struct QtToolSettingsPanel::Impl {
       }
     }
     return QSize(width, height);
+  }
+
+  [[nodiscard]] QSize minimum_size() const {
+    return {ui_scale_metrics_.px(kMinimumPanelWidth),
+            target_title_->minimumHeight()};
+  }
+
+  void layout_width_changed() {
+    control_label_width_dirty_ = true;
+    synchronize_control_label_width();
   }
 
   [[nodiscard]] bool numeric_interaction_active() const {
@@ -908,7 +927,9 @@ private:
         // Reserve composite editors' actual child minima before widening labels.
         field_width = std::max(field_width, field->layout()->minimumSize().width());
       }
-      int margins = panel_margins.left() + panel_margins.right();
+      const QMargins row_margins = row_layout->contentsMargins();
+      int margins = panel_margins.left() + panel_margins.right() +
+                    row_margins.left() + row_margins.right();
       for (const QWidget *parent = control.container->parentWidget();
            parent != nullptr; parent = parent->parentWidget()) {
         const QMargins content_margins = parent->contentsMargins();
@@ -922,11 +943,12 @@ private:
         }
       }
       width_limit = std::min(width_limit,
-          ui_scale_metrics_.px(320) - margins -
+          std::clamp(panel_.width(), ui_scale_metrics_.px(kMinimumPanelWidth),
+                     ui_scale_metrics_.px(kPreferredPanelWidth)) - margins -
               row_layout->horizontalSpacing() - field_width);
     }
     // Ordinary labels fit on one line; unusually long translations wrap before
-    // they displace the numeric and composite editors from a compact overlay.
+    // they displace the numeric and composite editors from a narrow dock.
     width = std::min(width,
         std::max(ui_scale_metrics_.px(kMinimumControlLabelWidth), width_limit));
     for (const ControlWidget &control : controls_) {
@@ -994,6 +1016,9 @@ private:
   }
 
   void synchronize_body_visibility() {
+    if (target_title_->isHidden() == !inactive_presented_) {
+      target_title_->setVisible(!inactive_presented_);
+    }
     const bool visible = expanded_ && !inactive_presented_;
     if (scroll_area_->isHidden() == visible) {
       scroll_area_->setVisible(visible);
@@ -1009,7 +1034,6 @@ private:
     last_target_.reset();
     inactive_presented_ = true;
     synchronize_body_visibility();
-    panel_.hide();
     notify_presentation_changed();
   }
 
@@ -1523,6 +1547,8 @@ private:
       return;
     }
     localized_text_dirty_ = false;
+    panel_.setWindowTitle(localized_text(
+        localization_, "ui.panel.tool_settings", "Tool Settings"));
     apply_button_->setText(
         localized_text(localization_, "ui.action.apply", "Apply"));
     cancel_button_->setText(
@@ -1531,7 +1557,6 @@ private:
       const QString title = localized_target_title(localization_, *last_target_);
       target_title_->setText(target_title_button_text(title));
       target_title_->setAccessibleName(title);
-      panel_.setWindowTitle(title);
     }
   }
 
@@ -1564,6 +1589,7 @@ private:
 
       auto *section = new QtSettingsSection(
           group_object_name(group.id, index), controls_container_);
+      section->set_presentation(QtPanelSectionHeader::Presentation::Flat);
       section->set_title(localized_descriptor_label(
           localization_, group.id, group.label));
       const std::string state_key =
@@ -1578,8 +1604,8 @@ private:
       };
 
       auto *layout = new QVBoxLayout(section->content());
-      set_scalable_margins(*layout, QMargins(6, 6, 6, 6));
-      set_scalable_spacing(*layout, 6);
+      set_scalable_margins(*layout, QMargins(8, 8, 8, 8));
+      set_scalable_spacing(*layout, 8);
       controls_layout_->addWidget(section);
       control_groups_.push_back(ControlGroupWidget{
           .id = group.id,
@@ -1602,6 +1628,7 @@ private:
                                    : controls_container_,
                   group != nullptr ? *group->layout : *controls_layout_);
     }
+    inset_ungrouped_rows();
     synchronize_values(target);
     apply_current_ui_scale();
     reveal_rebuilt_controls();
@@ -1618,6 +1645,23 @@ private:
       if (control.container != nullptr) {
         control.container->show();
       }
+    }
+  }
+
+  /// Header edges remain full-width; only the retained property rows are inset.
+  void inset_ungrouped_rows() {
+    for (int index = 0; index < controls_layout_->count(); ++index) {
+      QWidget *row = controls_layout_->itemAt(index)->widget();
+      if (row == nullptr || dynamic_cast<QtSettingsSection *>(row) != nullptr) {
+        continue;
+      }
+      const bool first = index == 0 || dynamic_cast<QtSettingsSection *>(
+          controls_layout_->itemAt(index - 1)->widget()) != nullptr;
+      const bool last = index + 1 == controls_layout_->count() ||
+          dynamic_cast<QtSettingsSection *>(
+              controls_layout_->itemAt(index + 1)->widget()) != nullptr;
+      set_scalable_margins(*row->layout(),
+                          QMargins(8, first ? 8 : 4, 8, last ? 8 : 4));
     }
   }
 
@@ -1932,6 +1976,8 @@ private:
 
         auto *spin = new QtDoubleSpinBox(fields);
         spin->setObjectName(component_name);
+        spin->setProperty(kQtEditorAxisProperty,
+                          static_cast<int>(kAxes[axis]));
         spin->setAccessibleName(
             QStringLiteral("%1 %2").arg(label,
                                          QString::fromLatin1(kAxisNames[axis])));
@@ -2249,6 +2295,9 @@ private:
       set_scalable_minimum_width(*binding.integer, 80);
       binding.integer->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     }
+    for (QWidget *child : row->findChildren<QWidget *>()) {
+      child->setProperty(kQtSquareEditorSurfaceProperty, true);
+    }
     control_layout.addWidget(row);
 
     if (binding.container != nullptr && !control.tooltip.empty()) {
@@ -2352,7 +2401,6 @@ private:
     if (target_title_->text() != button_title) {
       target_title_->setText(button_title);
       target_title_->setAccessibleName(target_title);
-      panel_.setWindowTitle(target_title);
     }
     if (apply_button_->isHidden() == target.apply_visible) {
       apply_button_->setVisible(target.apply_visible);
@@ -2636,8 +2684,14 @@ void QtToolSettingsPanel::set_expanded(bool expanded) {
 QSize QtToolSettingsPanel::sizeHint() const { return impl_->preferred_size(); }
 
 QSize QtToolSettingsPanel::minimumSizeHint() const {
-  const QSize preferred = impl_->preferred_size();
-  return {preferred.width(), QWidget::minimumSizeHint().height()};
+  return impl_->minimum_size();
+}
+
+void QtToolSettingsPanel::resizeEvent(QResizeEvent *event) {
+  QWidget::resizeEvent(event);
+  if (impl_ != nullptr && event->oldSize().width() != event->size().width()) {
+    impl_->layout_width_changed();
+  }
 }
 
 bool QtToolSettingsPanel::numeric_interaction_active() const {
@@ -2688,7 +2742,7 @@ bool qt_object_belongs_to_tool_settings_panel(
   const QWidget *recipient = hit != nullptr ? hit : window_widget;
   // An ancestor's visible region excludes native children. Test the resolved
   // child instead so pointer delivery through that ancestor still owns the
-  // overlay, without accepting hidden or obscured settings controls.
+  // panel, without accepting hidden or obscured settings controls.
   return qt_object_belongs_to_tool_settings_panel(recipient) &&
          recipient->visibleRegion().contains(
              recipient->mapFromGlobal(global_position));

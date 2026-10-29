@@ -37,19 +37,20 @@ void proofs(const std::filesystem::path&root){
     store(file,original.substr(0,original.size()/2));check(!readDecalCache(file,recipe,surface,buildRequest),"Truncated cache accepted.");
     auto damaged=original;damaged.back()^=0x13;store(file,damaged);check(!readDecalCache(file,recipe,surface,buildRequest),"Damaged checksum accepted.");
     // Recompute the checksum to exercise semantic checks independently of byte integrity.
-    // Header 36, fixed payload 20, first chunk header 24; first vertex begins at 80.
-    auto invalid=original;replace(invalid,80,std::numeric_limits<float>::quiet_NaN());store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Nonfinite cache position accepted.");
-    invalid=original;replace(invalid,92,1.5f);store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Out-of-domain cache UV accepted.");
-    invalid=original;replace(invalid,100,uint32_t{999999});store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Missing source triangle accepted.");
-    invalid=original;replace(invalid,104,5.f);store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Invalid source barycentrics accepted.");
-    invalid=original;replace(invalid,80,500.f);store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Off-surface cached position accepted.");
-    invalid=original;for(size_t i=0;i<sizeof(Vec2);++i)std::swap(invalid[92+i],invalid[128+i]);reseal(invalid);store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Folded cache UV orientation accepted.");
+    // Header 36, fixed payload 20, receiver identity 24, counts 8.
+    constexpr size_t firstVertex=88,firstUv=firstVertex+12,firstSourceTriangle=firstVertex+20,firstBarycentrics=firstVertex+24;
+    auto invalid=original;replace(invalid,firstVertex,std::numeric_limits<float>::quiet_NaN());store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Nonfinite cache position accepted.");
+    invalid=original;replace(invalid,firstUv,1.5f);store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Out-of-domain cache UV accepted.");
+    invalid=original;replace(invalid,firstSourceTriangle,uint32_t{999999});store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Missing source triangle accepted.");
+    invalid=original;replace(invalid,firstBarycentrics,5.f);store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Invalid source barycentrics accepted.");
+    invalid=original;replace(invalid,firstVertex,500.f);store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Off-surface cached position accepted.");
+    invalid=original;for(size_t i=0;i<sizeof(Vec2);++i)std::swap(invalid[firstUv+i],invalid[firstUv+36+i]);reseal(invalid);store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Folded cache UV orientation accepted.");
     auto upsideDown=patch;for(auto&chunk:upsideDown.chunks)for(auto&vertex:chunk.vertices)vertex.uv[1]=1-vertex.uv[1];
     check(writeDecalCache(file,recipe,upsideDown,buildRequest.limits)&&!readDecalCache(file,recipe,surface,buildRequest),"Obsolete upward raster V escaped cache orientation validation.");
     auto erased=patch;for(auto&chunk:erased.chunks)for(auto&vertex:chunk.vertices)vertex.uv={.5f,.5f};
     check(writeDecalCache(file,recipe,erased,buildRequest.limits)&&!readDecalCache(file,recipe,surface,buildRequest),"Collapsed UVs on a finite-area source escaped cache metric validation.");
-    invalid=original;replace(invalid,72,uint32_t{0xffffffff});store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Unbounded vertex allocation accepted.");
-    invalid=original;replace(invalid,76,uint32_t{0xffffffff});store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Unbounded index allocation accepted.");
+    invalid=original;replace(invalid,80,uint32_t{0xffffffff});store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Unbounded vertex allocation accepted.");
+    invalid=original;replace(invalid,84,uint32_t{0xffffffff});store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Unbounded index allocation accepted.");
     invalid=original;replace(invalid,52,uint32_t{0xffffffff});store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Unbounded receiver allocation accepted.");
     // Corruption never touches authored geometry, and normal rebuilding replaces it.
     patch=buildDecalPatch(surface,buildRequest);check(patch.usable()&&writeDecalCache(file,recipe,patch,buildRequest.limits),"Corrupt cache did not recover through the real builder.");

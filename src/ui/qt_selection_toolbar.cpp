@@ -15,6 +15,8 @@
 #include "core/localization_service.hpp"
 
 #include <QAction>
+#include <QComboBox>
+#include <QSignalBlocker>
 #include <QActionGroup>
 #include <QIcon>
 #include <QSize>
@@ -69,6 +71,12 @@ QtSelectionToolbar::QtSelectionToolbar(QWidget *parent) : QToolBar(parent) {
   setIconSize(QSize(32, 32));
   setToolButtonStyle(Qt::ToolButtonIconOnly);
 
+  workspace_selector_=new QComboBox(this);
+  workspace_selector_->setObjectName(QStringLiteral("workspaceModeSelector"));
+  workspace_selector_->setAccessibleName(QStringLiteral("Workspace mode"));
+  workspace_selector_->addItem(QStringLiteral("Default"));workspace_selector_->addItem(QStringLiteral("Modeling"));
+  workspace_selector_->setToolTip(QStringLiteral("Workspace mode"));addWidget(workspace_selector_);addSeparator();
+  QObject::connect(workspace_selector_,&QComboBox::currentIndexChanged,this,[this](int index){if(workspace_requested_)workspace_requested_(index==1?QuaderWorkspaceMode::Modeling:QuaderWorkspaceMode::Default);});
   auto *action_group = new QActionGroup(this);
   action_group->setExclusive(true);
   for (std::size_t index = 0; index < kSelectionModeSpecs.size(); ++index) {
@@ -135,6 +143,8 @@ void QtSelectionToolbar::set_localization(
     const LocalizationService &localization) {
   setWindowTitle(localized_text(localization, "ui.toolbar.selection.title",
                                 "Selection"));
+  workspace_selector_->setItemText(0,localized_text(localization,"ui.workspace.default","Default"));
+  workspace_selector_->setItemText(1,localized_text(localization,"ui.workspace.modeling","Modeling"));
   for (const ModeAction &entry : mode_actions_) {
     const QString text = localized_text(localization, entry.localization_key,
                                         entry.fallback);
@@ -156,7 +166,13 @@ void QtSelectionToolbar::synchronize(const QuaderEditorApi &editor,
   }
 
   set_selection_mode(mode);
+  const bool modeling=editor.mode().workspace_mode()==QuaderWorkspaceMode::Modeling;
+  {const QSignalBlocker blocked(workspace_selector_);workspace_selector_->setCurrentIndex(modeling?1:0);}
   for (const ModeAction &entry : mode_actions_) {
+    const bool visible = modeling || entry.mode == QuaderSelectionMode::Object ||
+                         entry.mode == QuaderSelectionMode::Group;
+    if (entry.action->isVisible() != visible) entry.action->setVisible(visible);
+    if (entry.mode != QuaderSelectionMode::Group) entry.action->setEnabled(visible);
     if (entry.mode == QuaderSelectionMode::Group) {
       const auto command = editor.commands().descriptor(
           quader_command::kSelectToggleGroupSelection);

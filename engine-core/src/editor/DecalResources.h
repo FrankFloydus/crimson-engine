@@ -3,6 +3,7 @@
 #include "resources/ResourceManager.h"
 #include "scene/SceneExtraction.h"
 #include "MeshPaintResources.h"
+#include "ExternalMeshSources.h"
 #include <crimson/renderer/forward/DecalRenderTypes.h>
 #include <unordered_map>
 #include <optional>
@@ -16,7 +17,8 @@ class DecalResources {
 public:
     DecalResources(AssetLibrary&,ResourceManager&);
     DecalSourceResult modelSurface(const ExtractedModel&,ResourcePriority=ResourcePriority::Visible);
-    DecalPlacementResult resolvePlacement(const Scene&,uint64_t entity,uint32_t draw,uint32_t primitive,uint64_t resourceRevision,Vec3 visibleWorldPoint);
+    void setExternalMeshes(std::shared_ptr<const ExternalMeshSnapshot> sources){externalMeshes_=std::move(sources);}
+    DecalPlacementResult resolvePlacement(const Scene&,uint64_t entity,uint32_t draw,uint32_t primitive,uint64_t resourceRevision,Vec3 visibleWorldPoint,uint64_t sourceInstanceId=0);
     DecalPreparedScene prepare(const Scene&,const ExtractedScene&,ResourcePriority=ResourcePriority::Visible);
     DecalPreparedScene prepareTransient(const Scene&,const ExtractedScene&,const SceneDecal&,const Mat4&,uint64_t transientId=UINT64_MAX,ResourcePriority=ResourcePriority::Placement);
     std::string status(EntityId)const;
@@ -31,7 +33,7 @@ private:
         uint64_t inputs{},signature{},bindings{};
         Mat4 frame;
         std::vector<EntityId> receivers;
-        std::unordered_map<EntityId,uint64_t> revisions;
+        std::map<std::pair<EntityId,uint64_t>,uint64_t> revisions;
         std::vector<std::pair<std::string,ResourceSnapshot<decals::ModelSurface>>> sources;
         std::vector<std::shared_ptr<const ModelAsset>> models;
         std::string diagnostic;
@@ -40,6 +42,10 @@ private:
     struct PatchEntry {ResourceHandle<decals::DecalPatch> resource;uint64_t signature{},publishedRevision{},publishedBindings{};std::shared_ptr<const DecalPatchData> render;std::optional<Mat4> surfaceFrame;std::optional<SpatialEntry> spatial;std::chrono::steady_clock::time_point used;std::string status;bool current{};};
     AssetLibrary&assets_;ResourceManager&resources_;
     MeshPaintResources meshPaint_;
+    std::shared_ptr<const ExternalMeshSnapshot> externalMeshes_;
+    const ExternalMeshSource* externalSource(const ExtractedModel& model)const{return externalMeshes_?externalMeshes_->find(model.id,model.sourceInstanceId):nullptr;}
+    std::vector<bool> eligibleMaterials(const ExtractedModel&,const ModelAsset&,std::string* diagnostic=nullptr);
+    void appendExternalModels(ExtractedScene&)const;
     std::unordered_map<std::string,SourceEntry>sources_;
     std::unordered_map<uint64_t,PatchEntry>patches_;
     DecalResourceStats stats_;

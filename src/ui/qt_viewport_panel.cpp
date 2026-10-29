@@ -729,8 +729,8 @@ bool qt_event_target_belongs_to_tool_settings(
          qt_object_belongs_to_face_texture_panel(target, global_position);
 }
 
-QtViewportPanel::QtViewportPanel(QWidget *parent, bool composed, RenderCompositionApi api)
-    : QWidget(parent), composed_(composed), composition_api_(api), delete_popup_presenter_(*this) {
+QtViewportPanel::QtViewportPanel(QWidget *parent, bool composed, RenderCompositionApi api, bool scene_rendering_available)
+    : QWidget(parent), scene_rendering_available_(scene_rendering_available), composed_(composed), composition_api_(api), delete_popup_presenter_(*this) {
   // Native panes retain their clipping hierarchy without promoting workspace
   // and central-stack widgets into additional windows resized with every dock.
   setAttribute(Qt::WA_DontCreateNativeAncestors);
@@ -783,7 +783,6 @@ QtViewportPanel::~QtViewportPanel() {
     if (ancestor != nullptr) ancestor->removeEventFilter(this);
   }
   native_geometry_ancestors_.clear();
-  set_settings_panel(nullptr);
   shutdown();
   if (composed_) {
     for (Pane &pane_state : panes_) {
@@ -840,7 +839,6 @@ void QtViewportPanel::shutdown() {
   if (environment_popup_ != nullptr) {
     environment_popup_->abandon_runtime();
   }
-  abandon_settings_overlay();
   hide_primitive_feedback();
   set_modal_tool_owns_viewport_snapshot(false);
   for (Pane &pane_state : panes_) {
@@ -926,7 +924,6 @@ void QtViewportPanel::abandon_interactions() {
   if (environment_popup_ != nullptr) {
     environment_popup_->abandon_runtime();
   }
-  abandon_settings_overlay();
   hide_primitive_feedback();
   ++runtime_binding_generation_;
   interaction_editor_ = nullptr;
@@ -980,7 +977,6 @@ void QtViewportPanel::attach_workspace(ViewportWorkspaceService &workspace) {
       pane_state.camera_settings_popup->close();
       pane_state.layout_menu->close();
     }
-    abandon_settings_overlay();
     hide_primitive_feedback();
     cancel_navigation();
     if (interaction_native_tools_ != nullptr) {
@@ -1239,124 +1235,6 @@ void QtViewportPanel::sync_pane_actions(Pane &pane_state) {
   pane_state.controls_valid = true;
 }
 
-void QtViewportPanel::set_settings_panel(QtToolSettingsPanel *panel) {
-  if (settings_panel_ == panel) {
-    return;
-  }
-  if (settings_panel_ != nullptr) {
-    settings_panel_->presentation_changed = {};
-    settings_panel_->hide();
-  }
-  settings_panel_ = panel;
-  abandon_settings_overlay();
-  if (panel == nullptr) {
-    return;
-  }
-  panel->setParent(this);
-  panel->setAttribute(Qt::WA_NativeWindow, !composed_);
-  panel->hide();
-  panel->presentation_changed = [this]() {
-    settings_overlay_geometry_dirty_ = true;
-    update_settings_overlay_geometry();
-  };
-}
-
-void QtViewportPanel::abandon_settings_overlay() {
-  if (settings_panel_ != nullptr && !settings_panel_->isHidden()) {
-    settings_panel_->hide();
-  }
-  settings_target_id_.clear();
-  settings_origin_serial_ = 0;
-  settings_origin_pane_.reset();
-  settings_host_pane_.reset();
-  settings_overlay_geometry_dirty_ = true;
-}
-
-void QtViewportPanel::refresh_settings_overlay(QuaderEditorApi &editor) {
-  if (settings_panel_ == nullptr || workspace_ == nullptr ||
-      !settings_panel_->has_settings()) {
-    if (settings_origin_pane_.has_value()) {
-      abandon_settings_overlay();
-    }
-    return;
-  }
-  const auto &origin = editor.tools().active_settings_presentation_origin();
-  const std::string_view target_id = settings_panel_->target_id();
-  if (!settings_origin_pane_.has_value() ||
-      settings_target_id_ != target_id ||
-      settings_origin_serial_ != origin.serial) {
-    settings_target_id_ = target_id;
-    settings_origin_serial_ = origin.serial;
-    settings_origin_pane_ = origin.pane;
-    settings_overlay_geometry_dirty_ = true;
-  }
-  update_settings_overlay_geometry();
-}
-
-void QtViewportPanel::update_settings_overlay_geometry() {
-  if (settings_panel_ == nullptr) {
-    return;
-  }
-  if (workspace_ == nullptr || startup_presentation_blocked_ ||
-      !settings_origin_pane_.has_value() || !settings_panel_->has_settings() ||
-      settings_panel_->target_id() != settings_target_id_) {
-    if (!settings_panel_->isHidden()) {
-      settings_panel_->hide();
-    }
-    settings_overlay_geometry_dirty_ = true;
-    return;
-  }
-
-  ViewportPaneId host_id = *settings_origin_pane_;
-  if (!pane(host_id).frame_presented) {
-    host_id = workspace_->focused_pane();
-  }
-  if (!pane(host_id).frame_presented) {
-    const auto visible = std::find_if(panes_.begin(), panes_.end(),
-        [](const Pane &candidate) { return candidate.frame_presented; });
-    if (visible == panes_.end()) {
-      if (!settings_panel_->isHidden()) {
-        settings_panel_->hide();
-      }
-      settings_overlay_geometry_dirty_ = true;
-      return;
-    }
-    host_id = visible->id;
-  }
-  if (settings_host_pane_ != host_id) {
-    settings_host_pane_ = host_id;
-    settings_overlay_geometry_dirty_ = true;
-  }
-  if (!settings_overlay_geometry_dirty_ && !settings_panel_->isHidden()) {
-    return;
-  }
-
-  ++settings_overlay_update_count_;
-  Pane &host = pane(host_id);
-  if (settings_panel_->parentWidget() != host.frame) {
-    settings_panel_->setParent(host.frame);
-  }
-  const QRect bounds = pane_content_rect(host);
-  const int inset = std::min({ui_scale_metrics_.px(6),
-                              std::max(0, (bounds.width() - 1) / 2),
-                              std::max(0, (bounds.height() - 1) / 2)});
-  const QSize preferred = settings_panel_->sizeHint();
-  const int width = std::clamp(preferred.width(), 1,
-                               std::max(1, bounds.width() - 2 * inset));
-  const int height = std::clamp(preferred.height(), 1,
-                                std::max(1, bounds.height() - 2 * inset));
-  const QRect geometry{bounds.left() + inset,
-                       bounds.bottom() + 1 - inset - height, width, height};
-  if (settings_panel_->geometry() != geometry) {
-    settings_panel_->setGeometry(geometry);
-  }
-  if (settings_panel_->isHidden()) {
-    settings_panel_->show();
-  }
-  settings_panel_->raise();
-  settings_overlay_geometry_dirty_ = false;
-}
-
 void QtViewportPanel::set_viewport_settings(const ViewportSettings &settings) {
   viewport_settings_ = &settings;
 }
@@ -1435,7 +1313,6 @@ void QtViewportPanel::set_startup_presentation_blocked(bool blocked) {
         handle.visible = false;
       }
     }
-    update_settings_overlay_geometry();
     return;
   }
   displayed_placements_.clear();
@@ -1493,7 +1370,6 @@ void QtViewportPanel::refresh_workspace_layout() {
     sync_pane_actions(pane_state);
   }
   update_focused_pane_indicator();
-  update_settings_overlay_geometry();
 }
 
 void QtViewportPanel::process_input(
@@ -2682,7 +2558,7 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
   display_group->setExclusive(true);
   for (std::size_t index = 0; index < kShadingModes.size(); ++index) {
     if (kShadingModes[index] == ViewportShadingMode::Rendered &&
-        !release_has_feature(ReleaseFeature::RenderedViewport)) {
+        !scene_rendering_available_ && !release_has_feature(ReleaseFeature::RenderedViewport)) {
       continue;
     }
     QAction *action = pane_state.display_menu->addAction(QString());
@@ -2699,7 +2575,8 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
               const std::optional<QuaderCommandId> command_id =
                   shading_command_id(shading);
               if (interaction_editor_ != nullptr && command_id.has_value()) {
-                (void)interaction_editor_->commands().execute(*command_id);
+                if(scene_rendering_available_ && viewport_shading_uses_rendered_materials(shading))set_pane_shading(pane_state,shading);
+                else (void)interaction_editor_->commands().execute(*command_id);
                 sync_pane_control_selection(pane_state);
               } else {
                 set_pane_shading(pane_state, shading);
@@ -2735,7 +2612,7 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
             });
   }
 
-  if (release_has_feature(ReleaseFeature::RenderedViewport)) {
+  if (scene_rendering_available_ || release_has_feature(ReleaseFeature::RenderedViewport)) {
     pane_state.display_menu->addSeparator();
     pane_state.debug_view_menu = new QMenu(pane_state.display_menu);
     pane_state.display_menu->addMenu(pane_state.debug_view_menu);
@@ -3224,8 +3101,6 @@ void QtViewportPanel::update_pane_geometry() {
       });
   update_split_handles();
   update_focused_pane_indicator();
-  settings_overlay_geometry_dirty_ = true;
-  update_settings_overlay_geometry();
 }
 
 void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
@@ -3297,11 +3172,6 @@ void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
     pane_state.info_overlay->raise();
     if (!pane_state.primitive_feedback->isHidden()) {
       pane_state.primitive_feedback->raise();
-    }
-    if (settings_panel_ != nullptr &&
-        settings_panel_->parentWidget() == pane_state.frame &&
-        !settings_panel_->isHidden()) {
-      settings_panel_->raise();
     }
     pane_state.overlay_stack_valid = true;
   }
@@ -3379,7 +3249,6 @@ void QtViewportPanel::request_pane_focus(
   if (workspace_->focused_pane() != pane_id) {
     (void)workspace_->focus_pane(pane_id);
     update_focused_pane_indicator();
-    update_settings_overlay_geometry();
   }
   if (!decision.focus_native_surface) {
     return;
@@ -5345,7 +5214,6 @@ void QtViewportPanel::process_viewport_input(
   }
   if (active_tool_result.settings_operation_started) {
     editor.tools().record_active_settings_origin(*input_pane);
-    refresh_settings_overlay(editor);
     if (runtime_binding_generation_ != input_binding_generation) {
       return;
     }
@@ -5575,7 +5443,7 @@ void QtViewportPanel::set_pane_view(Pane &pane_state, ViewportView view) {
 
 void QtViewportPanel::set_pane_shading(Pane &pane_state,
                                        ViewportShadingMode shading) {
-  if (!release_has_feature(ReleaseFeature::RenderedViewport) &&
+  if (!scene_rendering_available_ && !release_has_feature(ReleaseFeature::RenderedViewport) &&
       shading != ViewportShadingMode::Wireframe &&
       shading != ViewportShadingMode::Solid &&
       shading != ViewportShadingMode::Shaded) {

@@ -118,6 +118,8 @@ struct QuaderProjectRuntimeHooks {
   /// True only after a replacement is bound and its lifecycle events published;
   /// false restores the current presentation after preflight, failure or no-op.
   std::function<void(bool succeeded)> end_loading;
+  /// Explicit folder-workspace adoption for the Crimson application.
+  bool allow_nonempty_project_folder = false;
 };
 
 /**

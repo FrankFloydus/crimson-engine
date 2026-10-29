@@ -155,6 +155,17 @@ RenderResourceTable concrete(const RenderPassPlan& plan) {
 }
 
 void profiles() {
+    for(unsigned pane=0;pane<4;++pane){
+        RenderPassPlanConfig config;config.view={static_cast<RenderViewPurpose>(unsigned(RenderViewPurpose::ModelingRendered0)+pane),501+pane};
+        config.picking=true;config.surfacePicking=true;config.collisionOverlays=true;config.modelingEditor=true;
+        const auto plan=buildRenderPassPlan(config);
+        check(bool(validateRenderPassPlan(plan)),"Native modeling picking/overlay plan failed validation.");
+        check(bool(validateRenderPassPlan(plan,concrete(plan))),"Native modeling pick resources lost their view ownership.");
+        check(plan.find(Kind::Picking)->physicalView==PickView&&plan.find(Kind::PickReadback)->physicalView==PickReadView,
+            "Native target picking changed the established readback view IDs.");
+        check(plan.find(Kind::CollisionOverlays)->physicalView<plan.find(Kind::Encode)->physicalView,
+            "Native Engine overlays execute after final encoding.");
+    }
     for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail,RenderViewPurpose::RagdollPreview})
         for(bool glow:{false,true})for(bool grid:{false,true})for(bool collisions:{false,true})for(bool gi:{false,true})for(bool ao:{false,true})for(bool smaa:{false,true})for(bool refraction:{false,true})for(bool ssr:{false,true}) {
             const bool world=purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::Game;
@@ -198,7 +209,7 @@ void profiles() {
     const auto game=buildRenderPassPlan(fullConfig(RenderViewPurpose::Game));
     check(game.find(Kind::Background)->physicalView==370 && game.find(Kind::Opaque)->physicalView==371 && game.find(Kind::Transparent)->physicalView==384,"Game split-stage layout changed.");
     check(game.find(Kind::CollisionOverlays)->physicalView==408 && game.find(Kind::Encode)->physicalView==415,"Game overlays no longer follow tone mapping.");
-    check(RendererViewCapacity==512 && ExternalFrameViewLimit==248 && ToolsView==496 && FirstPlatformView==504 && PlatformTerminalView==511,"Shared view capacity or external/native-window headroom changed.");
+    check(RendererViewCapacity==1024 && ExternalFrameViewLimit==248 && ToolsView==496 && FirstPlatformView==504 && PlatformTerminalView==511,"Shared view capacity or external/native-window headroom changed.");
 }
 void attachmentAndDependencyContracts() {
     const auto correct=buildRenderPassPlan(fullConfig());
@@ -579,7 +590,7 @@ void ssrContracts() {
         const auto slots=renderViewPassSlots(purpose);
         const std::array<std::uint16_t,5> expectedTrace{116,372,338,162,300};
         const auto first=expectedTrace[static_cast<std::size_t>(purpose)];
-        check(RenderViewLayoutVersion==5&&slots.ssr_prepare==first&&slots.ssr_trace==first&&slots.ssr_reconstruct==first+1&&
+        check(RenderViewLayoutVersion==7&&slots.ssr_prepare==first&&slots.ssr_trace==first&&slots.ssr_reconstruct==first+1&&
             slots.ssr_opaque==first+2&&slots.refraction_capture==first+3&&slots.refraction_capture<slots.transparent,
             "SSR reconstruction escaped reserved view gaps or changed the numeric profile layout.");
         check(plan.has(Kind::DepthPrepass)&&!plan.has(Kind::RefractionDepth)&&plan.find(Kind::DepthPrepass)->physicalView<plan.find(Kind::Background)->physicalView,

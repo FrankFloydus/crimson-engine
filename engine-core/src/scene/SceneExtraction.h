@@ -29,6 +29,7 @@ struct ExtractedModel {
     std::shared_ptr<const ModelPose> physicsPose; // Transient, immutable per-Play presentation.
     std::optional<SceneMeshPaint> meshPaint;
     SceneBlendSettings blendSettings;
+    std::uint64_t sourceInstanceId{}; // Optional native geometry occurrence, not an asset identity.
 };
 struct ExtractedDecal {EntityId id{};Mat4 world{};SceneDecal decal;bool visible{true};};
 struct ExtractedParticle {

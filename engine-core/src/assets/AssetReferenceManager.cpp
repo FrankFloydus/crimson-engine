@@ -47,31 +47,31 @@ void validateDeletedIdentity(const std::filesystem::path& root,const std::string
 bool gameplayEffectIdentity(const std::filesystem::path& root,const std::string& id) {
     if(id==PlayerStartingEffectId||id==EnemyStartingEffectId)return true;
     if(!isAssetUuid(id)||builtin(id))return false;
-    try{return resolveAssetPath(root,id).extension()==".crimson-effect";}catch(...){return true;}
+    try{return assetPathExtension(resolveAssetPath(root,id))==".crimson-effect";}catch(...){return true;}
 }
 bool navigationProfileIdentity(const std::filesystem::path& root,const std::string& id) {
     if(id==DefaultNavigationAgentProfileId)return true;
     if(!isAssetUuid(id)||builtin(id))return false;
-    try{return resolveAssetPath(root,id).extension()==".crimson-agent-profile";}catch(...){return true;}
+    try{return assetPathExtension(resolveAssetPath(root,id))==".crimson-agent-profile";}catch(...){return true;}
 }
 bool animationIdentity(const std::filesystem::path& root,const std::string& id) {
     if(!isAssetUuid(id)||builtin(id))return false;
-    try{return resolveAssetPath(root,id).extension()==".crimson-animation";}catch(...){return true;}
+    try{return assetPathExtension(resolveAssetPath(root,id))==".crimson-animation";}catch(...){return true;}
 }
 bool ragdollIdentity(const std::filesystem::path& root,const std::string& id) {
     if(!isAssetUuid(id)||builtin(id))return false;
-    try{return resolveAssetPath(root,id).extension()==".crimson-ragdoll";}catch(...){return true;}
+    try{return assetPathExtension(resolveAssetPath(root,id))==".crimson-ragdoll";}catch(...){return true;}
 }
 bool decalIdentity(const std::filesystem::path& root,const std::string& id) {
     if(!isAssetUuid(id)||builtin(id))return false;
-    try{return resolveAssetPath(root,id).extension()==".crimson-decal";}catch(...){return true;}
+    try{return assetPathExtension(resolveAssetPath(root,id))==".crimson-decal";}catch(...){return true;}
 }
-bool particleIdentity(const std::filesystem::path& root,const std::string& id){if(isAssetUuid(id)){if(builtin(id))return false;try{return resolveAssetPath(root,id).extension()==".crimson-particle";}catch(...){return true;}}const auto relative=path(id);return relative.parent_path()==std::filesystem::path("assets/particles")&&relative.extension()==".crimson-particle";}
-bool materialIdentity(const std::filesystem::path& root,const std::string& id){if(isAssetUuid(id)){if(builtin(id))return false;try{return resolveAssetPath(root,id).extension()==".crimson-material";}catch(...){return true;}}const auto relative=path(id);return relative.parent_path()==std::filesystem::path("assets/materials")&&relative.extension()==".crimson-material";}
+bool particleIdentity(const std::filesystem::path& root,const std::string& id){if(isAssetUuid(id)){if(builtin(id))return false;try{return assetPathExtension(resolveAssetPath(root,id))==".crimson-particle";}catch(...){return true;}}const auto relative=path(id);return relative.parent_path()==std::filesystem::path("assets/particles")&&assetPathExtension(relative)==".crimson-particle";}
+bool materialIdentity(const std::filesystem::path& root,const std::string& id){if(isAssetUuid(id)){if(builtin(id))return false;try{return assetPathExtension(resolveAssetPath(root,id))==".crimson-material";}catch(...){return true;}}const auto relative=path(id);return relative.parent_path()==std::filesystem::path("assets/materials")&&assetPathExtension(relative)==".crimson-material";}
 void validateMaterialTarget(const std::filesystem::path& root,const std::string& target){if(!target.empty()&&target!=DefaultMaterialId&&target!=DefaultParticleMaterialId&&!materialIdentity(root,target))throw std::runtime_error("Material replacement must reference a managed material or protected material default.");}
 }
 AssetReferenceManager::AssetReferenceManager(std::filesystem::path root):root_(std::move(root)){
-    recoverAssetTransactions(root_);const auto file=resolveAssetPath(root_,"assets/references.json");
+    recoverAssetTransactions(root_);const auto file=resolveAssetPath(root_,".crimson/references.json");
     try{if(!std::filesystem::exists(file))return;const auto j=Json::parse(text(file));if(j.at("version")!=1)throw std::runtime_error("Unsupported asset reference state version.");
         for(const auto& id:j.at("deleted")){const auto value=id.get<std::string>();validateDeletedIdentity(root_,value);deleted_.insert(value);}
         for(auto it=j.at("replacements").begin();it!=j.at("replacements").end();++it){const auto replacement=it.value().get<std::string>();
@@ -79,12 +79,12 @@ AssetReferenceManager::AssetReferenceManager(std::filesystem::path root):root_(s
             if(builtin(replacement)&&!knownBuiltin(replacement))throw std::runtime_error("Replacement references an unknown built-in resource.");
             if(!replacement.empty()&&!builtin(replacement)&&!deleted_.contains(replacement))checkedManagedAssetPath(root_,replacement);replacements_.emplace(it.key(),replacement);}
         for(const auto& [id,target]:replacements_){(void)target;const auto source=managedIdentityPath(root_,id);
-            if(source&&source->extension()==".crimson-ragdoll")resolveRagdoll(id);
-        else if(source&&source->extension()==".crimson-animation")resolveAnimation(id);
-            else if(source&&source->extension()==".crimson-effect")resolveGameplayEffect(id);
-            else if(source&&source->extension()==".crimson-particle")resolveParticle(id);
-            else if(source&&source->extension()==".crimson-decal")resolveDecal(id);
-            else if(source&&source->extension()==".crimson-material")validateMaterialTarget(root_,resolve(id));
+            if(source&&assetPathExtension(*source)==".crimson-ragdoll")resolveRagdoll(id);
+        else if(source&&assetPathExtension(*source)==".crimson-animation")resolveAnimation(id);
+            else if(source&&assetPathExtension(*source)==".crimson-effect")resolveGameplayEffect(id);
+            else if(source&&assetPathExtension(*source)==".crimson-particle")resolveParticle(id);
+            else if(source&&assetPathExtension(*source)==".crimson-decal")resolveDecal(id);
+            else if(source&&assetPathExtension(*source)==".crimson-material")validateMaterialTarget(root_,resolve(id));
             else resolve(id);}
     }catch(const std::exception& e){deleted_.clear();replacements_.clear();writable_=false;status_="Asset reference state could not be loaded: "+std::string(e.what())+" The existing file was preserved; destructive asset operations are disabled.";}
 }
@@ -204,8 +204,8 @@ void AssetReferenceManager::replace(std::span<const AssetEntry> assets,const std
                 throw std::runtime_error("Particle replacement must reference another managed particle effect.");
         }
         if(a.kind==AssetKind::Decal&&!target.empty()&&!decalIdentity(root_,target))throw std::runtime_error("Decal replacement must reference another managed decal surface.");
-        if(a.kind==AssetKind::Material){validateMaterialTarget(root_,target);if(!target.empty()&&!builtin(target)&&checkedManagedAssetPath(root_,target).extension()!=".crimson-material")throw std::runtime_error("Material replacement has an incompatible asset kind.");}
-        if(a.kind==AssetKind::Particle&&!target.empty()&&checkedManagedAssetPath(root_,target).extension()!=".crimson-particle")throw std::runtime_error("Particle replacement has an incompatible asset kind.");
+        if(a.kind==AssetKind::Material){validateMaterialTarget(root_,target);if(!target.empty()&&!builtin(target)&&assetPathExtension(checkedManagedAssetPath(root_,target))!=".crimson-material")throw std::runtime_error("Material replacement has an incompatible asset kind.");}
+        if(a.kind==AssetKind::Particle&&!target.empty()&&assetPathExtension(checkedManagedAssetPath(root_,target))!=".crimson-particle")throw std::runtime_error("Particle replacement has an incompatible asset kind.");
         if(a.kind==AssetKind::NavigationAgentProfile&&!target.empty()&&!navigationProfileIdentity(root_,target))throw std::runtime_error("Navigation Agent Profile replacement has an incompatible asset kind.");
         if(a.kind==AssetKind::GameplayEffect&&!target.empty()&&!gameplayEffectIdentity(root_,target))throw std::runtime_error("Gameplay Effect replacement has an incompatible asset kind.");
         if(a.kind==AssetKind::Animation&&!target.empty()&&!animationIdentity(root_,target))throw std::runtime_error("Animation replacement has an incompatible asset kind.");
@@ -224,15 +224,15 @@ void AssetReferenceManager::replace(std::span<const AssetEntry> assets,const std
     }
     auto previousDeleted=std::move(deleted_);auto previousRedirects=std::move(replacements_);deleted_=std::move(deleted);replacements_=std::move(redirects);
     try{for(const auto& [id,target]:replacements_){(void)target;const auto source=managedIdentityPath(root_,id);
-        if(source&&source->extension()==".crimson-ragdoll")resolveRagdoll(id);
-        else if(source&&source->extension()==".crimson-animation")resolveAnimation(id);
-        else if(source&&source->extension()==".crimson-effect")resolveGameplayEffect(id);
-        else if(source&&source->extension()==".crimson-particle")resolveParticle(id);
-            else if(source&&source->extension()==".crimson-decal")resolveDecal(id);
-        else if(source&&source->extension()==".crimson-material")validateMaterialTarget(root_,resolve(id));
+        if(source&&assetPathExtension(*source)==".crimson-ragdoll")resolveRagdoll(id);
+        else if(source&&assetPathExtension(*source)==".crimson-animation")resolveAnimation(id);
+        else if(source&&assetPathExtension(*source)==".crimson-effect")resolveGameplayEffect(id);
+        else if(source&&assetPathExtension(*source)==".crimson-particle")resolveParticle(id);
+            else if(source&&assetPathExtension(*source)==".crimson-decal")resolveDecal(id);
+        else if(source&&assetPathExtension(*source)==".crimson-material")validateMaterialTarget(root_,resolve(id));
         else resolve(id);}}
     catch(...){deleted_=std::move(previousDeleted);replacements_=std::move(previousRedirects);throw;}++revision_;
 }
 std::string AssetReferenceManager::serialize()const{std::vector<std::string> deleted(deleted_.begin(),deleted_.end());std::sort(deleted.begin(),deleted.end());return Json{{"version",1},{"deleted",deleted},{"replacements",replacements_}}.dump(2)+"\n";}
-void AssetReferenceManager::save()const{if(!writable_)throw std::runtime_error(status_);writeFileAtomically(resolveAssetPath(root_,"assets/references.json"),serialize());}
+void AssetReferenceManager::save()const{if(!writable_)throw std::runtime_error(status_);writeFileAtomically(resolveAssetPath(root_,".crimson/references.json"),serialize());}
 }

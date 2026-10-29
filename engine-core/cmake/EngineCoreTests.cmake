@@ -47,6 +47,11 @@ crimson_engine_add_test(ragdoll_physics ragdoll_physics_tests.cpp crimson-physic
 crimson_engine_add_test(ragdoll_runtime ragdoll_runtime_tests.cpp crimson-runtime)
 crimson_engine_add_test(ragdoll_document ragdoll_document_tests.cpp crimson-editor-domain)
 crimson_engine_add_test(content_storage content_storage_tests.cpp crimson-assets)
+crimson_engine_add_test(project_asset_mutations project_asset_mutation_tests.cpp CrimsonEngine::Widgets quader_project_session quader_release_profile_full)
+target_include_directories(crimson_engine_project_asset_mutations_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_compile_definitions(crimson_engine_project_asset_mutations_tests PRIVATE QT_NO_KEYWORDS "QUADER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
+set_tests_properties(crimson_engine_project_asset_mutations_core PROPERTIES TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=minimal;QT_QPA_PLATFORM_PLUGIN_PATH=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
 crimson_engine_add_test(model model_tests.cpp crimson-assets)
 crimson_engine_add_test(asset_resources asset_resource_tests.cpp crimson-assets)
 crimson_engine_add_test(camera_bookmarks camera_bookmark_tests.cpp crimson-scene)
@@ -63,7 +68,8 @@ target_compile_definitions(crimson_engine_inspector_widgets_tests PRIVATE QT_NO_
 set_tests_properties(crimson_engine_inspector_widgets_core PROPERTIES
     TIMEOUT 60
     ENVIRONMENT "QT_QPA_PLATFORM=minimal;QT_QPA_PLATFORM_PLUGIN_PATH=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
-crimson_engine_add_test(level_session integration_level_session_tests.cpp CrimsonEngine::Host)
+crimson_engine_add_test(level_session integration_level_session_tests.cpp CrimsonEngine::Host quader_document quader_release_profile_full)
+target_include_directories(crimson_engine_level_session_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 crimson_engine_add_test(shader_reload_session shader_reload_session_tests.cpp CrimsonEngine::Host)
 crimson_engine_add_test(profiling_capture profiling_capture_tests.cpp crimson-profiling)
 crimson_engine_add_test(native_profiling native_profiling_tests.cpp CrimsonEngine::Widgets)
@@ -82,6 +88,7 @@ target_compile_definitions(crimson_engine_vertex_paint_tool_tests PRIVATE QT_NO_
 set_tests_properties(crimson_engine_vertex_paint_tool_core PROPERTIES TIMEOUT 60
     ENVIRONMENT "QT_QPA_PLATFORM=minimal;QT_QPA_PLATFORM_PLUGIN_PATH=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
 crimson_engine_add_test(native_asset_browser native_asset_browser_tests.cpp CrimsonEngine::Widgets)
+target_include_directories(crimson_engine_native_asset_browser_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_compile_definitions(crimson_engine_native_asset_browser_tests PRIVATE QT_NO_KEYWORDS)
 set_tests_properties(crimson_engine_native_asset_browser_core PROPERTIES TIMEOUT 60
     ENVIRONMENT "QT_QPA_PLATFORM=minimal;QT_QPA_PLATFORM_PLUGIN_PATH=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
@@ -100,6 +107,37 @@ set_tests_properties(crimson_engine_native_document_preview_core PROPERTIES TIME
 # Exercise the native C ABI directly without compiling the full editor test
 # catalog. Reuse its isolated profile runner and the existing bridge fixtures.
 find_package(GTest CONFIG REQUIRED)
+crimson_engine_add_test(native_geometry_bindings native_geometry_bindings_tests.cpp CrimsonEngine::Host GTest::gtest_main Qt6::Core)
+set_tests_properties(crimson_engine_native_geometry_bindings_core PROPERTIES TIMEOUT 30)
+crimson_engine_add_test(decal_cache decal_cache_tests.cpp crimson-decals crimson-resources)
+crimson_engine_add_test(render_pass_plan render_pass_plan_tests.cpp Crimson::Renderer)
+crimson_engine_add_test(decal_model_surface decal_model_surface_tests.cpp crimson-decals crimson-resources)
+crimson_engine_add_test(decal_spatial_cache decal_spatial_cache_tests.cpp CrimsonEngine::Host)
+set_tests_properties(crimson_engine_decal_spatial_cache_core PROPERTIES TIMEOUT 60)
+crimson_engine_add_test(native_scene_owner native_scene_owner_tests.cpp quader_project_session quader_release_profile_full GTest::gtest_main)
+crimson_engine_add_test(native_scene_authoring native_scene_authoring_tests.cpp CrimsonEngine::Widgets quader_editor_api quader_release_profile_public GTest::gtest_main)
+target_sources(crimson_engine_native_scene_authoring_tests PRIVATE "${CRIMSON_ENGINE_SOURCE_ROOT}/tests/native_decal_identity_tests.cpp")
+
+crimson_engine_add_test(native_asset_retention native_asset_retention_tests.cpp CrimsonEngine::Widgets quader_editor_api quader_release_profile_full GTest::gtest_main)
+target_include_directories(crimson_engine_native_asset_retention_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_compile_definitions(crimson_engine_native_asset_retention_tests PRIVATE "QUADER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"" QT_NO_KEYWORDS)
+set_tests_properties(crimson_engine_native_asset_retention_core PROPERTIES TIMEOUT 60)
+target_include_directories(crimson_engine_native_scene_authoring_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_compile_definitions(crimson_engine_native_scene_authoring_tests PRIVATE "QUADER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"" QT_NO_KEYWORDS)
+set_tests_properties(crimson_engine_native_scene_authoring_core PROPERTIES TIMEOUT 60)
+crimson_engine_add_test(single_scene_workspace single_scene_workspace_tests.cpp crimson-engine-app quader_render_crimson_host quader_release_profile_public GTest::gtest)
+
+target_sources(crimson_engine_single_scene_workspace_tests PRIVATE "${CRIMSON_ENGINE_SOURCE_ROOT}/tests/public_modeling_profile_tests.cpp"
+    "${CRIMSON_ENGINE_SOURCE_ROOT}/tests/public_browser_actions_tests.cpp")
+target_include_directories(crimson_engine_single_scene_workspace_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_compile_definitions(crimson_engine_single_scene_workspace_tests PRIVATE "QUADER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"" QT_NO_KEYWORDS)
+set_tests_properties(crimson_engine_single_scene_workspace_core PROPERTIES TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=minimal:enable_fonts;QT_QPA_PLATFORM_PLUGIN_PATH=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
+target_include_directories(crimson_engine_native_scene_owner_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_tests_properties(crimson_engine_native_scene_owner_core PROPERTIES TIMEOUT 60)
+crimson_engine_add_test(modeling_world modeling_world_tests.cpp CrimsonEngine::Host quader_document quader_release_profile_full GTest::gtest_main)
+target_include_directories(crimson_engine_modeling_world_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_tests_properties(crimson_engine_modeling_world_core PROPERTIES TIMEOUT 60)
 add_executable(crimson_engine_native_reader_tests EXCLUDE_FROM_ALL
     "${PROJECT_SOURCE_DIR}/tests/quader_tests_main.cpp"
     "${PROJECT_SOURCE_DIR}/tests/bridge_reader_tests.cpp")
@@ -122,9 +160,3 @@ add_test(NAME crimson_engine_native_reader_core COMMAND crimson_engine_native_re
     "--gtest_filter=BridgeReaderTests.*-BridgeReaderTests.ExportGodotAcceptanceFixtures:BridgeReaderTests.SaveGodotAcceptanceFixture")
 set_tests_properties(crimson_engine_native_reader_core PROPERTIES TIMEOUT 120
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
-
-crimson_engine_add_test(quader_bridge quader_bridge_tests.cpp crimson-quader)
-target_compile_definitions(crimson_engine_quader_bridge_tests PRIVATE
-    "CRIMSON_QUADER_FIXTURE_DIR=\"${CRIMSON_ENGINE_SOURCE_ROOT}/tests/fixtures/quader\"")
-crimson_engine_attach_runtime(crimson_engine_quader_bridge_tests)
-set_tests_properties(crimson_engine_quader_bridge_core PROPERTIES TIMEOUT 180)

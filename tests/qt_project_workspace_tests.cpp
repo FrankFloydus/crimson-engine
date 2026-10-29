@@ -6328,7 +6328,7 @@ TEST(QtProjectWorkspaceTests,
   ui.main_window()->activateWindow();
   auto *settings = dynamic_cast<quader::QtToolSettingsPanel *>(
       ui.main_window()->findChild<QWidget *>(
-          QStringLiteral("viewport.settings_overlay")));
+          QStringLiteral("tool_settings.panel")));
   ASSERT_NE(settings, nullptr);
   settings->set_expanded(true);
 

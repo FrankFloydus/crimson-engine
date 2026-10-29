@@ -43,11 +43,12 @@ QuaderApiResult<T> browser_failure(QuaderApiSession session,
 }
 
 QuaderProjectAssetInfo public_asset(const ProjectAssetEntry &entry) {
-  QuaderProjectAssetKind kind = QuaderProjectAssetKind::Folder;
+  QuaderProjectAssetKind kind = QuaderProjectAssetKind::File;
   switch (entry.kind) {
   case ProjectAssetKind::Scene: kind = QuaderProjectAssetKind::Scene; break;
   case ProjectAssetKind::Material: kind = QuaderProjectAssetKind::Material; break;
   case ProjectAssetKind::Texture: kind = QuaderProjectAssetKind::Texture; break;
+  case ProjectAssetKind::Folder: kind = QuaderProjectAssetKind::Folder; break;
   default: break;
   }
   return {.kind = kind, .asset_id = entry.asset_id, .scene_id = entry.scene_id,

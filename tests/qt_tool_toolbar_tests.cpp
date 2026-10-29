@@ -281,9 +281,9 @@ TEST(QtToolToolbarTests, AlignIconButtonDispatchesForLightsAndScalesWithNativeTo
       ASSERT_NE(button, nullptr);
       EXPECT_EQ(button->toolButtonStyle(), Qt::ToolButtonIconOnly);
       EXPECT_FALSE(align->icon().isNull());
-      EXPECT_EQ(button->iconSize(), metrics.size(QSize(32, 32)));
+      EXPECT_EQ(button->iconSize(), metrics.size(QSize(20, 20)));
       EXPECT_GE(button->width(), metrics.px(40));
-      EXPECT_GE(button->height(), metrics.px(40));
+      EXPECT_EQ(button->height(), metrics.px(30));
       for (const auto mode : {QIcon::Normal, QIcon::Disabled, QIcon::Active}) {
         const auto pixmap = align->icon().pixmap(button->iconSize(), 1.0, mode);
         ASSERT_FALSE(pixmap.isNull());
@@ -305,7 +305,7 @@ TEST(QtToolToolbarTests, AlignIconButtonDispatchesForLightsAndScalesWithNativeTo
   }
   auto *button = qobject_cast<QToolButton *>(toolbar.widgetForAction(align));
   ASSERT_NE(button, nullptr);
-  EXPECT_EQ(button->minimumSize(), QSize(40, 40));
+  EXPECT_EQ(button->minimumSize(), QSize(40, 30));
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
   ASSERT_TRUE(editor.selection().clear().ok());
   toolbar.synchronize(editor, editor.selection().summary());
@@ -366,7 +366,7 @@ TEST(QtToolToolbarTests,
       auto *button = qobject_cast<QToolButton *>(toolbar.widgetForAction(stairs));
       ASSERT_NE(button, nullptr);
       EXPECT_EQ(button->toolButtonStyle(), Qt::ToolButtonIconOnly);
-      EXPECT_EQ(button->iconSize(), metrics.size(QSize(32, 32)));
+      EXPECT_EQ(button->iconSize(), metrics.size(QSize(20, 20)));
       for (const auto mode : {QIcon::Normal, QIcon::Disabled, QIcon::Active}) {
         const auto pixmap = stairs->icon().pixmap(button->iconSize(), 1.0, mode);
         ASSERT_FALSE(pixmap.isNull());

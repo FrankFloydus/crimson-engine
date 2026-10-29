@@ -8,6 +8,7 @@
 
 #include "editor/material/project_material_texture_snapshot.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/modes/editor_mode_types.hpp"
 #include "io/project/project_manifest.hpp"
 #include "io/project/project_material_catalog.hpp"
 #include "io/project/recent_scene_store.hpp"
@@ -69,6 +70,8 @@ class ProjectSession final {
 public:
   explicit ProjectSession(std::filesystem::path recent_scene_storage = {});
   ~ProjectSession();
+  [[nodiscard]] EditorWorkspaceMode workspace_mode()const noexcept{return workspace_mode_;}
+  CommandResult set_workspace_mode(EditorWorkspaceMode);
 
   ProjectSession(const ProjectSession &) = delete;
   ProjectSession &operator=(const ProjectSession &) = delete;
@@ -77,7 +80,8 @@ public:
 
   [[nodiscard]] ProjectSessionResult
   create(const std::filesystem::path &root,
-         bool discard_existing_dirty = false);
+         bool discard_existing_dirty = false,
+         bool allow_existing_content = false);
   /// Checks product compatibility before any close, recovery, or provisioning.
   [[nodiscard]] static ProjectSessionResult preflight_open(
       const std::filesystem::path &manifest_path,
@@ -281,6 +285,7 @@ private:
                                           nullptr) const;
   [[nodiscard]] std::string unique_untitled_name() const;
 
+  EditorWorkspaceMode workspace_mode_=EditorWorkspaceMode::Modeling;
   std::optional<ProjectWorkspaceStorage> workspace_;
   std::vector<std::unique_ptr<OpenSceneSession>> open_scenes_;
   std::vector<std::uint32_t> slot_generations_;

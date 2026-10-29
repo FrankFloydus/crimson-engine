@@ -21,6 +21,10 @@ const BoundsResizeFrame *MeshBoundsResizePresentation::prepare(
     const ViewportInteractionSelectionState &selection,
     QuaderTransformSpace space, std::uint64_t preview_revision,
     float raster_scale, const BoundsResizeFrame *shared) {
+  if (editor.mode().workspace_mode() != QuaderWorkspaceMode::Modeling) {
+    reset();
+    return nullptr;
+  }
   RenderSignatureBuilder signature;
   const auto binding = editor.query().document_binding();
   signature.add_value(binding.document_binding_generation)
@@ -101,6 +105,13 @@ ViewportBeforeToolInteractionResult MeshBoundsResizeInteraction::handle_frame(
   if (release_suppression_.consume(QuaderMouseButton::Left, frame.left_pressed,
                                     frame.left_down, frame.left_released)) {
     return {.gizmo_consumed = true};
+  }
+  if (editor.mode().workspace_mode() != QuaderWorkspaceMode::Modeling) {
+    const bool owned = gesture_.has_value();
+    (void)cancel(editor);
+    interaction_.clear();
+    presentation_.reset();
+    return {.gizmo_consumed = owned};
   }
   if (gesture_) {
     if (editor.scene_documents().active_scene_id() != gesture_->scene ||

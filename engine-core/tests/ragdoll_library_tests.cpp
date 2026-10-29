@@ -41,10 +41,10 @@ void finish(AssetLibrary& library,ResourceManager& resources,const AssetDeletion
 }
 void publicationAndReferences(){
     Project project;ResourceManager resources;AssetLibrary library(project.root,&resources);const auto imported=library.importModel(writeSource(project.root/"source"));require(bool(imported),library.status().c_str());const auto model=waitModel(library,resources,imported->id);
-    const auto folder=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Enemy physics");const auto created=library.createRagdoll(model->id,"Enemy ragdoll",folder);
+    const auto folder=library.browserCatalog().createFolder(BrowserCatalog::RootFolder,"Enemy physics");const auto created=library.createRagdoll(model->id,"Enemy ragdoll",folder);
     require(created&&created->bodies.empty()&&has(library,created->id)&&library.findRagdoll(created->id)&&library.browserCatalog().parent(created->id)==folder,"Native Ragdoll creation lost its empty setup, catalog kind or destination folder.");
     const auto items=library.browserCatalog().items(folder,{},BrowserAssetFilter::Ragdolls);require(items.size()==1&&items.front().id==created->id,"Ragdoll type filter omitted the native asset.");
-    auto& browser=library.browserCatalog();const auto blocked=browser.createFolder(BrowserCatalog::ContentFolder,"Blocked destination");const auto blockedPath=browser.folderPath(blocked);
+    auto& browser=library.browserCatalog();const auto blocked=browser.createFolder(BrowserCatalog::RootFolder,"Blocked destination");const auto blockedPath=browser.folderPath(blocked);
     require(blockedPath.parent_path()==project.root/"Content"&&std::filesystem::remove(blockedPath),"Could not prepare a disposable blocked folder.");writeFileAtomically(blockedPath,"Occupied by a file");
     const auto catalogSize=library.catalog().size();const auto locationBytes=read(project.root/".crimson/asset-locations.json");
     rejects([&]{library.createRagdoll(model->id,"Unpublished setup",blocked);},"Ragdoll creation accepted a folder that became a file.");

@@ -36,6 +36,7 @@ enum class QuaderProjectAssetKind : std::uint8_t {
   Scene,
   Material,
   Texture,
+  File,
 };
 
 /// Immutable metadata for one physical asset or folder in the current project.

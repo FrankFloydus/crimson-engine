@@ -92,19 +92,19 @@ std::shared_ptr<const NavigationAgentProfile> PlaySession::acceptedAgentProfile(
 NavigationProjection PlaySession::projectToNavigation(const std::string& profile,const Vec3& point) const {
     return navigation_?navigation_->project(profile,point):NavigationProjection{NavigationStatus::Unavailable,{},"Play is not active."};
 }
-bool PlaySession::start(const SceneDocument& authored) {
-    return startInternal(authored,nullptr);
+bool PlaySession::start(const SceneDocument& authored,std::span<const EntityRecord> additional) {
+    return startInternal(authored,nullptr,additional);
 }
-bool PlaySession::startFromPoint(const SceneDocument& authored,const Vec3& position,const Camera& view) {
+bool PlaySession::startFromPoint(const SceneDocument& authored,const Vec3& position,const Camera& view,std::span<const EntityRecord> additional) {
     const PlayStartPoint start{position,view};
-    return startInternal(authored,&start);
+    return startInternal(authored,&start,additional);
 }
-bool PlaySession::startInternal(const SceneDocument& authored,const PlayStartPoint* start) {
+bool PlaySession::startInternal(const SceneDocument& authored,const PlayStartPoint* start,std::span<const EntityRecord> additional) {
     CRIMSON_PROFILE_ZONE("Play session startup");
     if(playing())return true;
     try {
         auto document=std::make_unique<SceneDocument>(projectRoot_);
-        if(!document->resetTransientFrom(authored)){status_=document->status();return false;}
+        if(!document->resetTransientFrom(authored,additional)){status_=document->status();return false;}
         const auto relocated=start?placePlayerAtPoint(*document,*start):NoEntity;
         if(start) {
             const auto camera=playerCamera(document->scene(),relocated);

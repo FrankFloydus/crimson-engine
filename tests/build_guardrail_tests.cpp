@@ -3495,8 +3495,8 @@ TEST(BuildGuardrailTests, QtShellUsesMainWindowDocksAndStableNames) {
                   "UIPanelId::Console, *console_panel_, "
                   "Qt::BottomDockWidgetArea");
   expect_contains(ui_system_source,
-                  "viewport_panel_->set_settings_panel(tool_settings_panel_)");
-  expect_missing(ui_system_source, "UIPanelId::ToolSettings");
+                  "UIPanelId::ToolSettings, *tool_settings_panel_");
+  expect_contains(ui_system_source, "UIPanelId::ToolSettings");
   expect_contains(ui_system_source, "new QDockWidget(");
   expect_contains(ui_system_source,
                   "QStringLiteral(\"dock_%1\").arg("
@@ -3601,7 +3601,7 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   expect_contains(frame_refresh,
                   "!numeric_interaction_active || settings_lifecycle_changed");
   expect_contains(frame_refresh,
-                  "viewport_panel_->refresh_settings_overlay(*editor_)");
+                  "tool_settings_panel_->refresh()");
   expect_contains(frame_refresh,
                   "presented_settings->operation_serial != "
                   "settings_operation_serial");

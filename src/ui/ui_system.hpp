@@ -50,8 +50,11 @@ class QStackedWidget;
 class QSize;
 class QTimer;
 class QWidget;
+namespace crimson {struct PickRequest;}
 
 namespace quader {
+
+enum class QuaderWorkspaceMode;
 
 class AssetRegistry;
 class ConsolePanel;
@@ -65,6 +68,7 @@ class ViewportPointPlacementService;
 class QtSettingsDialog;
 class QtCommandEventFilter;
 class QtCommandPalette;
+class QtCommandsLibraryPanel;
 class QtMaterialFindReplaceDialog;
 class QtMaterialBrowserWindow;
 class QtAssetBrowser;
@@ -92,6 +96,7 @@ struct QtMaterialBrowserActionRequest;
 struct QtAssetBrowserActionRequest;
 struct QtAssetBrowserItem;
 struct QtAssetBrowserSnapshot;
+struct QtAssetBrowserExtension;
 struct QuaderSceneSavePathResult;
 class QtUiScaleApplicationController;
 class QtUiScaleMetrics;
@@ -153,12 +158,15 @@ public:
       std::span<const std::string> excluded_paths = {});
   void show_home();
   void show_workspace();
+  void set_scene_component_extension(QWidget *extension);
   void show();
   /// Retires visible presentation while App queues a fresh shell generation.
   void prepare_shell_replacement();
   [[nodiscard]] bool main_window_close_in_progress() const {
     return main_window_close_in_progress_;
   }
+  void set_asset_browser_extension(std::shared_ptr<QtAssetBrowserExtension>);
+  bool request_native_pick(const crimson::PickRequest&);
   void set_external_close_guard(std::function<bool()> callback){external_close_guard_=std::move(callback);}
   void set_external_command_input_owner(std::function<bool()> callback){external_command_input_owner_=std::move(callback);}
   [[nodiscard]] bool loading_operation_active() const {
@@ -262,6 +270,7 @@ private:
   void apply_ui_scale_to_retained_surfaces(const QtUiScaleMetrics &metrics);
   void apply_viewport_settings_to_workspace();
   void synchronize_settings_surfaces(bool refresh_dialog);
+  void synchronize_workspace_mode_presentation(bool force = false);
   void synchronize_tool_toolbar(const QuaderSelectionSummary &selection,
                                 bool force = false);
   void show_settings_dialog();
@@ -274,7 +283,7 @@ private:
   void refresh_asset_thumbnails();
   void retain_visible_asset_thumbnails();
   [[nodiscard]] QtAssetBrowserSnapshot asset_browser_snapshot(
-      bool refresh_files, bool passive_refresh = false);
+      bool refresh_files, bool passive_refresh = false, bool include_extension = false);
   void handle_asset_browser_action(QtAssetBrowserActionRequest request);
   void show_asset_texture_info(ProjectAssetId texture_id, bool activate = true);
   void select_project_material_texture(QtStandardMaterialTextureSlot slot);
@@ -354,6 +363,8 @@ private:
   bool asset_thumbnail_picker_presented_ = false;
   std::function<QIcon(const QtAssetBrowserItem &, QSize, qreal)>
       asset_thumbnail_provider_;
+  std::shared_ptr<QtAssetBrowserExtension> asset_browser_extension_;
+  std::uint64_t asset_browser_extension_revision_=0,asset_browser_extension_thumbnails_=0;
   std::uint64_t asset_browser_revision_ = 0u;
   std::uint64_t asset_browser_generation_ = 0u;
   std::vector<std::string> asset_clipboard_paths_;
@@ -368,6 +379,7 @@ private:
   QtMaterialPreviewSurface *material_preview_surface_ = nullptr;
   QtStandardMaterialEditorWindow *standard_material_editor_window_ = nullptr;
   QtToolSettingsPanel *tool_settings_panel_ = nullptr;
+  QtCommandsLibraryPanel *commands_library_panel_ = nullptr;
   QtUnsavedConfirmationDialog *unsaved_confirmation_ = nullptr;
   QtUnsavedConfirmationDialog *standard_material_unsaved_confirmation_ =
       nullptr;
@@ -672,6 +684,7 @@ private:
   std::optional<QuaderNotification> status_notification_;
   std::uint64_t status_notification_command_revision_ = 0u;
   std::uint64_t status_notification_generation_ = 0u;
+  std::optional<QuaderWorkspaceMode> presented_workspace_mode_;
   bool home_visible_ = false;
   bool main_window_close_in_progress_ = false;
   std::function<bool()> external_close_guard_;

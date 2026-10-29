@@ -17,8 +17,12 @@ enum class QtLogMessageSeverity { Subdued, Information, Warning, Error };
                                          const QPalette &palette,
                                          bool themed);
 
-/** Shared orange outline for the current material and active viewport pane. */
+/** Orange outline for the current material. */
 [[nodiscard]] QColor qt_current_item_outline_color();
+
+/** Resolves subordinate disabled button labels without changing native roles. */
+[[nodiscard]] QColor qt_muted_disabled_button_text_color(
+    const QPalette &palette, bool themed);
 
 /**
  * Builds Quader's dark colors with logo-purple accents on Fusion's contract.

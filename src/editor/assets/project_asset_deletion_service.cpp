@@ -372,6 +372,7 @@ void restore_journal(const ProjectFileSystem &fs,
   };
   std::vector<Restore> restores;
   std::vector<std::filesystem::path> private_files;
+  std::vector<std::filesystem::path> created_files;
   std::set<std::string> unique;
   for (const auto &entry : journal.at("files")) {
     const auto path = relative_path(entry.at("path").get<std::string>());
@@ -380,6 +381,20 @@ void restore_journal(const ProjectFileSystem &fs,
       throw std::runtime_error("Invalid duplicate or private recovery destination.");
     }
     const auto target = resolved_path(fs, path);
+    if (entry.value("absent", false)) {
+      if (std::filesystem::exists(target)) {
+        verify_bytes(read_bytes(target), entry, true);
+        created_files.push_back(target);
+      }
+      if (entry.contains("stage")) {
+        const auto stage = private_path(fs, path, entry.at("stage").get<std::string>());
+        if (std::filesystem::exists(stage)) {
+          verify_bytes(read_bytes(stage), entry, true);
+          private_files.push_back(stage);
+        }
+      }
+      continue;
+    }
     auto bytes = read_bytes(backup_path(fs, directory, entry));
     verify_bytes(bytes, entry);
     const bool exists = std::filesystem::exists(target);
@@ -465,6 +480,14 @@ void restore_journal(const ProjectFileSystem &fs,
     }
   }
   for (const auto &path : private_files) {
+    std::filesystem::remove(path);
+  }
+  for (const auto &path : created_files) {
+    const auto relative = fs.relative_from_absolute(path);
+    const auto entry = std::ranges::find_if(journal.at("files"), [&](const auto &file) {
+      return relative.ok() && file.at("path").template get<std::string>() == relative.value().portable_string();
+    });
+    verify_bytes(read_bytes(path), *entry, true);
     std::filesystem::remove(path);
   }
 }
@@ -555,6 +578,10 @@ ProjectAssetDeletionPreview ProjectAssetDeletionService::preview(
     const auto &workspace = *project_->workspace();
     result.project_id = workspace.manifest.id();
     result.paths = selection_roots(paths);
+    ProjectAssetMutation mutation{.kind = ProjectAssetMutationKind::Delete};
+    for (const auto &path : result.paths) mutation.paths.push_back({path, std::nullopt});
+    const auto extension = project_->project_assets().prepare_mutation(mutation);
+    if (!extension.ok()) throw std::runtime_error(extension.error().message);
     ProjectAssetService assets(*project_);
     const auto catalog = assets.inspect(result.paths);
     if (!catalog.ok()) {
@@ -570,6 +597,12 @@ ProjectAssetDeletionPreview ProjectAssetDeletionService::preview(
     std::string identity = std::string(result.project_id.str()) + ":" +
                            std::to_string(graph->project_generation) + ":" +
                            std::to_string(graph->revision);
+    identity += ":extension:" + std::to_string(extension.value().revision);
+    for (const auto &write : extension.value().writes) {
+      if (write.created_by_copy) throw std::runtime_error("Invalid deletion dependency rewrite.");
+      identity += ":rewrite:" + write.path.portable_string() + ":" +
+          std::to_string(hash_bytes(write.before)) + ":" + std::to_string(hash_bytes(write.after)) + ":" + std::to_string(write.create_new);
+    }
     for (const auto &root : result.paths) {
       identity += ":root:" + root.portable_string();
     }
@@ -712,6 +745,14 @@ ProjectSessionResult ProjectAssetDeletionService::erase(
   bool committed = false;
   ProjectSessionResult result;
   try {
+    ProjectAssetMutation mutation{.kind = ProjectAssetMutationKind::Delete};
+    for (const auto &path : checked.paths) mutation.paths.push_back({path, std::nullopt});
+    auto extension = browser_assets.prepare_mutation(mutation);
+    if (!extension.ok()) throw std::runtime_error(extension.error().message);
+    if (extension.value().validate) {
+      const auto valid = extension.value().validate();
+      if (!valid.ok()) throw std::runtime_error(valid.error().message);
+    }
     ProjectAssetService assets(*project_);
     const auto catalog = assets.inspect(checked.paths);
     if (!catalog.ok()) {
@@ -781,8 +822,10 @@ ProjectSessionResult ProjectAssetDeletionService::erase(
     const auto stage = [&](const ProjectRelativePath &path, std::string_view bytes,
                            std::optional<SceneId> scene_id = std::nullopt,
                            std::optional<QdrProjectWriteSnapshot> snapshot = std::nullopt,
-                           std::optional<ProjectAssetId> material_id = std::nullopt) {
-      const auto index = backup(path);
+                           std::optional<ProjectAssetId> material_id = std::nullopt,
+                           bool create_new = false) {
+      const auto index = create_new ? journal["files"].size() : backup(path);
+      if (create_new) journal["files"].push_back({{"path", path.portable_string()}, {"absent", true}});
       auto &entry = journal["files"][index];
       entry["replacement_size"] = bytes.size();
       entry["replacement_hash"] = hash_bytes(bytes);
@@ -797,7 +840,8 @@ ProjectSessionResult ProjectAssetDeletionService::erase(
       file.scene_id = scene_id;
       file.scene_snapshot = std::move(snapshot);
       file.material_id = material_id;
-      const auto prepared = file.transaction->prepare(resolved_path(fs, path));
+      const auto prepared = file.transaction->prepare(resolved_path(fs, path), create_new
+          ? quader_io::QdrAtomicWriteDisposition::CreateNew : quader_io::QdrAtomicWriteDisposition::ReplaceExisting);
       if (!prepared.ok) {
         throw std::runtime_error(prepared.message);
       }
@@ -869,6 +913,17 @@ ProjectSessionResult ProjectAssetDeletionService::erase(
       throw std::runtime_error(manifest_path.error().message);
     }
     stage(manifest_path.value(), ProjectManifestStore::serialize(candidate));
+    for (const auto &write : extension.value().writes) {
+      if (write.created_by_copy || std::ranges::any_of(checked.paths, [&](const auto &path) {
+            return inside(write.path, path);
+          }) || std::ranges::any_of(staged, [&](const auto &file) {
+            return file.path == write.path;
+          }) || (write.create_new ? std::filesystem::exists(resolved_path(fs, write.path))
+                                  : read_bytes(resolved_path(fs, write.path)) != write.before)) {
+        throw std::runtime_error("An asset dependency changed while preparing deletion.");
+      }
+      stage(write.path, write.after, std::nullopt, std::nullopt, std::nullopt, write.create_new);
+    }
     for (const auto &open : project_->open_scenes()) {
       if (contains(checked.scene_ids, open->scene_id)) {
         continue;
@@ -920,7 +975,9 @@ ProjectSessionResult ProjectAssetDeletionService::erase(
     for (std::size_t index = 0u; index < staged.size(); ++index) {
       auto &file = staged[index];
       auto &entry = journal["files"][staged_indices[index]];
-      verify_bytes(read_bytes(file.transaction->target_path()), entry);
+      if (entry.value("absent", false)) {
+        if (std::filesystem::exists(file.transaction->target_path())) throw std::runtime_error("New dependency destination changed.");
+      } else verify_bytes(read_bytes(file.transaction->target_path()), entry);
       const auto published = file.transaction->publish([&](const auto &rollback) {
         try {
           const auto path = fs.relative_from_absolute(rollback);
@@ -937,7 +994,7 @@ ProjectSessionResult ProjectAssetDeletionService::erase(
       if (!published.ok) {
         throw std::runtime_error(published.message);
       }
-      verify_bytes(read_bytes(file.transaction->backup_path()), entry);
+      if (!entry.value("absent", false)) verify_bytes(read_bytes(file.transaction->backup_path()), entry);
     }
     if (hooks_.after_dependency_publication) {
       hooks_.after_dependency_publication();
@@ -1081,6 +1138,13 @@ ProjectSessionResult ProjectAssetDeletionService::erase(
     }
     if (browser_snapshot && material_revision == project_->material_catalog().material_revision()) {
       browser_assets.retain_committed_changes(std::move(*browser_snapshot), checked.paths, {});
+    }
+    if (extension.value().committed) {
+      try {
+        extension.value().committed();
+      } catch (const std::exception &error) {
+        result.warnings.push_back(error.what());
+      }
     }
     return result;
   } catch (const std::exception &error) {

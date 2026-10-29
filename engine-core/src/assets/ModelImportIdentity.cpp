@@ -110,7 +110,7 @@ ModelImportIdentity identifyModelImport(const fs::path& directory) {
     result.digest=hash.finish();return result;
 }
 std::unordered_set<std::string> reservedModelImportIds(const fs::path& root) {
-    const auto file=resolveAssetPath(root,"assets/references.json");if(!fs::exists(file))return {};
+    const auto file=resolveAssetPath(root,".crimson/references.json");if(!fs::exists(file))return {};
     std::ifstream input(file);const auto state=Json::parse(input);
     if(state.at("version")!=1 || !state.at("deleted").is_array())throw std::runtime_error("Cannot read reserved asset identities for model import.");
     std::unordered_set<std::string> result;for(const auto& item:state.at("deleted"))result.insert(canonicalAssetId(item.get<std::string>()));return result;
@@ -132,7 +132,7 @@ bool modelImportManifestMatches(const fs::path& directory,const std::string& dig
     catch(...) {return false;}
 }
 std::optional<MatchingModelImport> findMatchingModelImport(const fs::path& root,const std::string& digest,const std::unordered_set<std::string>& reservedIds) {
-    const auto models=fs::weakly_canonical(resolveAssetPath(root,"assets/models"));
+    const auto models=fs::weakly_canonical(root);
     std::vector<fs::path> packages;
     if(contentStorageReady(root)) {
         for(const auto& entry:storedAssetPaths(root))if(entry.file.filename()=="manifest.json"&&fs::is_regular_file(entry.file))packages.push_back(entry.file.parent_path());

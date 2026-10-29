@@ -75,11 +75,12 @@ void qtPublishThumbnail(const std::string& id,const DecodedImage& image) {
     std::lock_guard lock(thumbnailMutex);const auto cost=std::max(1,int((copy.sizeInBytes()+1023)/1024));thumbnails.insert(QString::fromStdString(id),new QImage(copy.copy()),cost);thumbnailEpoch.fetch_add(1);
 }
 QImage qtThumbnail(const std::string& id){std::lock_guard lock(thumbnailMutex);const auto found=thumbnails.object(QString::fromStdString(id));return found?*found:QImage{};}
+std::uint64_t qtThumbnailRevision(){return thumbnailEpoch.load();}
 void qtClearThumbnails(){std::lock_guard lock(thumbnailMutex);thumbnails.clear();thumbnailEpoch.fetch_add(1);}
 struct QtAssetBrowser::Impl {
     QObject connections;
     QtAssetBrowser& owner;AssetLibrary* assets{};AssetModel* model{};AssetView* view{};QLineEdit* search{};QComboBox* filter{};QComboBox* location{};QPushButton* importButton{};QLabel* status{};
-    std::string folder;std::string displayedQuery;BrowserAssetFilter displayedFilter{};std::uint64_t revision{},icons{};BrowserActions actions;bool syncing{};
+    std::string folder{BrowserCatalog::RootFolder};std::string displayedQuery;BrowserAssetFilter displayedFilter{};std::uint64_t revision{},icons{};BrowserActions actions;bool syncing{};
     explicit Impl(QtAssetBrowser& widget):owner(widget) {
         auto layout=new QVBoxLayout(&owner);layout->setContentsMargins(4,4,4,4);auto bar=new QHBoxLayout;layout->addLayout(bar);
         auto up=new QToolButton(&owner);up->setIcon(owner.style()->standardIcon(QStyle::SP_ArrowUp));up->setToolTip("Parent folder");bar->addWidget(up);
@@ -97,7 +98,7 @@ struct QtAssetBrowser::Impl {
         QObject::connect(view,&QWidget::customContextMenuRequested,&connections,[this](QPoint point){context(point);});
         QObject::connect(view->selectionModel(),&QItemSelectionModel::selectionChanged,&connections,[this]{if(syncing||!assets)return;std::vector<std::string> ids;for(const auto& index:view->selectionModel()->selectedRows())ids.push_back(model->items[std::size_t(index.row())].id);assets->browserSelection().setAll(ids);});
         view->dropped=[this](const QMimeData* mime,const QModelIndex& index){if(!assets)return;auto target=folder;if(index.isValid()&&model->items[std::size_t(index.row())].folder)target=model->items[std::size_t(index.row())].id;if(!assets->browserCatalog().writableFolder(target))return;
-            try{if(mime->hasUrls()){std::vector<std::filesystem::path> files;for(const auto& url:mime->urls())if(url.isLocalFile())files.emplace_back(url.toLocalFile().toStdWString());assets->queueImportFiles(files,target);}else if(mime->hasFormat(QtAssetMime)){const auto payload=nlohmann::json::parse(mime->data(QtAssetMime).toStdString());std::vector<std::string> ids;for(const auto& row:payload)ids.push_back(row.at("id").get<std::string>());assets->browserCatalog().move(ids,target);assets->noteAssetWrite("assets/browser.json");revision=0;}}catch(const std::exception& error){view->setToolTip(QString::fromUtf8(error.what()));}};
+            try{if(mime->hasUrls()){std::vector<std::filesystem::path> files;for(const auto& url:mime->urls())if(url.isLocalFile())files.emplace_back(url.toLocalFile().toStdWString());assets->queueImportFiles(files,target);}else if(mime->hasFormat(QtAssetMime)){const auto payload=nlohmann::json::parse(mime->data(QtAssetMime).toStdString());std::vector<std::string> ids;for(const auto& row:payload)ids.push_back(row.at("id").get<std::string>());assets->browserCatalog().move(ids,target);assets->noteAssetWrite(".crimson/browser.json");revision=0;}}catch(const std::exception& error){view->setToolTip(QString::fromUtf8(error.what()));}};
     }
     void createMenu(QMenu& menu) {
         if(!assets)return;const auto create=[this,&menu](const char* text,auto fn){auto action=menu.addAction(text);action->setEnabled(assets->browserCatalog().writableFolder(folder));QObject::connect(action,&QAction::triggered,&owner,fn);};
@@ -129,7 +130,7 @@ bool QtAssetBrowser::ownsInput()const{const auto focus=QApplication::focusWidget
 void QtAssetBrowser::synchronize(AssetLibrary& assets,int previewSize) {
     auto& p=*impl_;p.assets=&assets;auto& catalog=assets.browserCatalog();
     p.importButton->setEnabled(catalog.writableFolder(p.folder));const auto status=QString::fromStdString(assets.status().empty()?catalog.status():assets.status());if(p.status->text()!=status)p.status->setText(status);p.status->setVisible(!status.isEmpty());
-    if(!p.folder.empty()&&!catalog.isFolder(p.folder))p.folder=BrowserCatalog::ContentFolder;
+    if(!catalog.isFolder(p.folder))p.folder=BrowserCatalog::RootFolder;
     p.view->setIconSize(QSize(previewSize,previewSize));p.view->setGridSize(QSize(std::max(76,previewSize+22),std::max(60,previewSize+42)));
     const auto text=p.search->text().toStdString();const auto filter=static_cast<BrowserAssetFilter>(p.filter->currentIndex());
     if(p.revision!=catalog.revision()||p.displayedQuery!=text||p.displayedFilter!=filter) {

@@ -9,6 +9,7 @@ inline constexpr const char* QtAssetMime="application/x-crimson-assets";
 void qtPublishThumbnail(const std::string&,const DecodedImage&);
 QImage qtThumbnail(const std::string&);
 void qtClearThumbnails();
+std::uint64_t qtThumbnailRevision();
 class QtAssetBrowser final : public QWidget {
 public:
     explicit QtAssetBrowser(QWidget* parent=nullptr);

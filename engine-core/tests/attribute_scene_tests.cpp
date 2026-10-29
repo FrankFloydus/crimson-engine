@@ -92,14 +92,7 @@ void privateLegacySpeedConversion(){
             startingOverride(document,actor.id,stats::MovementSpeed)==8.25,"Explicit Save retained membership/legacy speed or lost current Movement and the converted value.");
     }
 }
-void tagsAndEffectsQuaderPreservation(){
-    Project project;SceneDocument document(project.root);const auto owner=document.createQuader();EntityRecord input;input.id=1;input.name="Source member";input.quaderGenerated=QuaderGenerated{owner,"member"};
-    require(document.replaceQuaderImport(owner,QuaderLink{},{input}),document.status());std::vector<EntityId> generated;
-    for(const auto& record:document.scene().records())if(record.quaderGenerated)generated.push_back(record.id);
-    for(const auto id:generated){auto record=*document.scene().find(id);record.tags=GameplayTagContainer{{GameplayTag{"Project.Creature"}}};record.effects=SceneEffects{{AssetRef<GameplayEffectAsset>{EnemyStartingEffectId}}};require(document.updateEntity(id,record),document.status());}
-    input.local=math::translation({4,0,2});require(document.replaceQuaderImport(owner,QuaderLink{},{input}),document.status());
-    for(const auto id:generated){const auto record=*document.scene().find(id);require(record.tags->has(GameplayTag{"Project.Creature"},true)&&record.effects->starting.front().id==EnemyStartingEffectId,"Quader refresh dropped tags or starting effects.");}
+
 }
-}
-int main(){try{retiredCapabilityAndRoleEffects();effectsAndTagsStorageHistory();privateLegacySpeedConversion();tagsAndEffectsQuaderPreservation();
+int main(){try{retiredCapabilityAndRoleEffects();effectsAndTagsStorageHistory();privateLegacySpeedConversion();
     std::cout<<"Retired authored membership, effect initialization, legacy conversion and scene history checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

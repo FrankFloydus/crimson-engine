@@ -760,7 +760,7 @@ TEST(QdrBinarySceneCodecTests, EmptyScenePersistsDocumentSettingsAndExplicitEmpt
   ASSERT_TRUE(parsed.ok) << parsed.message;
   ASSERT_EQ(parsed.chunks.size(), 1u);
   const auto &metadata = parsed.chunks.front();
-  EXPECT_EQ(metadata.schema_version, 20u);
+  EXPECT_EQ(metadata.schema_version, 21u);
   const auto *payload = qdr_fb::GetScenePayload(metadata.bytes().data());
   ASSERT_NE(payload->root_entities(), nullptr);
   EXPECT_EQ(payload->root_entities()->size(), 0u);
@@ -1984,7 +1984,7 @@ TEST(QdrBinarySceneCodecTests,
                           quader_io::QdrBinaryChunkType::SceneMetadata)) {
       continue;
     }
-    EXPECT_EQ(chunk.schema_version, 20u);
+    EXPECT_EQ(chunk.schema_version, 21u);
     flatbuffers::Verifier verifier(
         reinterpret_cast<const std::uint8_t *>(chunk.bytes().data()),
         chunk.bytes().size());
@@ -2317,7 +2317,7 @@ TEST(QdrBinarySceneCodecTests, EmbeddedDiffuseModelsRoundTripWithBurleyWireDefau
       return chunk.type == static_cast<std::uint32_t>(quader_io::QdrBinaryChunkType::SceneMetadata);
     });
     ASSERT_NE(metadata, parsed.chunks.end());
-    EXPECT_EQ(metadata->schema_version, 20u);
+    EXPECT_EQ(metadata->schema_version, 21u);
     const auto *payload = qdr_fb::GetScenePayload(metadata->bytes().data());
     ASSERT_NE(payload->materials(), nullptr);
     ASSERT_EQ(payload->materials()->size(), 1u);
@@ -2409,7 +2409,7 @@ TEST(QdrBinarySceneCodecTests,
                                    quader_io::QdrBinaryChunkType::SceneMetadata);
         });
     ASSERT_NE(metadata, parsed.chunks.end());
-    EXPECT_EQ(metadata->schema_version, 20u);
+    EXPECT_EQ(metadata->schema_version, 21u);
 
     const auto read = QdrDocumentReader::deserialize_project_document(
         quader_io::build_qdr_binary_container(parsed.scene_uuid,
@@ -2616,7 +2616,7 @@ TEST(QdrBinarySceneCodecTests, FogSettingsRoundTripWithAuthoredValues) {
                                quader_io::QdrBinaryChunkType::SceneMetadata);
     });
     ASSERT_NE(metadata, parsed.chunks.end());
-    EXPECT_EQ(metadata->schema_version, 20u);
+    EXPECT_EQ(metadata->schema_version, 21u);
     const auto *stored = stored_scene_settings(metadata->bytes());
     ASSERT_NE(stored, nullptr);
     ASSERT_NE(stored->fog(), nullptr);
@@ -2805,7 +2805,7 @@ TEST(QdrBinarySceneCodecTests,
           return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
         });
     ASSERT_NE(metadata, chunks.end());
-    ASSERT_EQ(metadata->schema_version, 20u);
+    ASSERT_EQ(metadata->schema_version, 21u);
     make_legacy_scene_metadata(*metadata, 12u);
     const qdr_fb::ScenePayload *payload =
         qdr_fb::GetScenePayload(metadata->bytes.data());
@@ -2907,7 +2907,7 @@ TEST(QdrBinarySceneCodecTests,
         return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
       });
   ASSERT_NE(metadata, chunks.end());
-  ASSERT_EQ(metadata->schema_version, 20u);
+  ASSERT_EQ(metadata->schema_version, 21u);
   make_legacy_scene_metadata(*metadata, 10u);
 
   const QdrProjectReadResult read =
@@ -2975,7 +2975,7 @@ TEST(QdrBinarySceneCodecTests,
                                  quader_io::QdrBinaryChunkType::SceneMetadata);
       });
   ASSERT_NE(metadata, parsed.chunks.end());
-  EXPECT_EQ(metadata->schema_version, 20u);
+  EXPECT_EQ(metadata->schema_version, 21u);
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(
@@ -4159,7 +4159,7 @@ TEST(QdrBinarySceneCodecTests, RejectsUnsupportedMetadataSchema) {
   ASSERT_TRUE(parsed.ok) << parsed.message;
   std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
   ASSERT_FALSE(chunks.empty());
-  chunks.front().schema_version = 21u;
+  chunks.front().schema_version = 22u;
 
   const auto bytes = quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks));
   const QdrProjectReadResult read = QdrDocumentReader::deserialize_project_document(bytes);

@@ -1,6 +1,5 @@
 #include "BrowserCatalog.h"
 #include "AtomicFile.h"
-#include "QuaderSceneBundle.h"
 #include "resources/AssetId.h"
 #include "resources/Paths.h"
 
@@ -43,8 +42,7 @@ bool below(const fs::path& path,const fs::path& parent) {
 bool contentRelative(const std::string& value) {
     const auto path=pathFromUtf8(value).lexically_normal();
     if(path.is_absolute()||path.has_root_path())return false;
-    const auto first=path.begin();
-    if(first==path.end()||(*first!="Content"&&*first!="Engine"))return false;
+    if(!path.empty()&&(folded(utf8(*path.begin()))==".crimson"||folded(utf8(*path.begin()))==".git"))return false;
     for(const auto& part:path)if(part=="..")return false;
     return utf8(path)==value;
 }
@@ -68,15 +66,14 @@ bool matchesFilter(AssetKind kind,BrowserAssetFilter filter) {
 
 BrowserCatalog::BrowserCatalog(fs::path projectRoot):root_(fs::absolute(std::move(projectRoot)).lexically_normal()),file_(root_/".crimson/browser.json") {
     const auto roots=[&] {
-        folders_[ContentFolder]={ContentFolder,{},"Content","Content"};
-        folders_[EngineFolder]={EngineFolder,{},"Engine","Engine"};
+        folders_[RootFolder]={RootFolder,{},utf8(root_.filename()),{}};
     };
     try {
         initializeContentStorage(root_);
         if(!fs::exists(file_)){roots();rebuildViews();return;}
         std::ifstream input(file_);if(!input)throw std::runtime_error("Cannot read browser metadata.");
         const auto json=Json::parse(input);
-        if(json.at("version")!=2)throw std::runtime_error("Unsupported browser metadata version.");
+        if(json.at("version")!=3)throw std::runtime_error("Unsupported browser metadata version.");
         if(!json.at("folders").is_array()||!json.at("assets").is_object())throw std::runtime_error("Invalid browser folder or asset metadata.");
         std::unordered_set<std::string> directoryPaths;
         for(const auto& item:json.at("folders")) {
@@ -84,12 +81,12 @@ BrowserCatalog::BrowserCatalog(fs::path projectRoot):root_(fs::absolute(std::mov
             if((!isAssetUuid(folder.id)&&(!folder.id.starts_with("folder:")||folder.id.size()==7))||!contentRelative(folder.path)||!directoryPaths.insert(folded(folder.path)).second||!folders_.emplace(folder.id,folder).second)
                 throw std::runtime_error("Invalid or duplicate browser folder identity or path.");
         }
-        if(!folders_.contains(ContentFolder)||!folders_.contains(EngineFolder)||folders_.at(ContentFolder).path!="Content"||folders_.at(EngineFolder).path!="Engine")
-            throw std::runtime_error("The Content and Engine roots are missing.");
+        if(!folders_.contains(RootFolder)||!folders_.at(RootFolder).path.empty())
+            throw std::runtime_error("The project browser root is missing.");
         for(const auto& [id,folder]:folders_) {
             validateFolder(folder.parent);validateFolderName(folder.parent,folder.name,id);
             if(folder.parent.empty()) {
-                if(id!=ContentFolder&&id!=EngineFolder)throw std::runtime_error("A browser directory is outside Content or Engine.");
+                if(id!=RootFolder)throw std::runtime_error("A browser directory is outside the project.");
             } else if(pathFromUtf8(folder.path).parent_path()!=pathFromUtf8(folders_.at(folder.parent).path))
                 throw std::runtime_error("A browser directory does not match its physical parent.");
             std::unordered_set<std::string> visited{id};
@@ -97,7 +94,7 @@ BrowserCatalog::BrowserCatalog(fs::path projectRoot):root_(fs::absolute(std::mov
                 if(!visited.insert(parent).second)throw std::runtime_error("Browser folder hierarchy contains a cycle.");
         }
         for(auto it=json.at("assets").begin();it!=json.at("assets").end();++it) {
-            Presentation value{it.value().value("folder",std::string(ContentFolder)),it.value().value("name",std::string{})};
+            Presentation value{it.value().value("folder",std::string(RootFolder)),it.value().value("name",std::string{})};
             validateFolder(value.folder);if(!value.name.empty())value.name=savedDisplayName(value.name);
             presentation_.emplace(it.key(),std::move(value));
         }
@@ -108,45 +105,44 @@ BrowserCatalog::BrowserCatalog(fs::path projectRoot):root_(fs::absolute(std::mov
     rebuildViews();
 }
 void BrowserCatalog::synchronize(std::span<const AssetEntry> assets) {
-    assets_.clear();assets_.reserve(assets.size());for(const auto& asset:assets)assets_.emplace(asset.id,asset);
+    assets_.clear();assets_.reserve(assets.size());for(const auto& asset:assets)if(!isEngineAssetId(asset.id))assets_.emplace(asset.id,asset);
     const auto previousFolders=folders_;const auto previousPresentation=presentation_;
     std::unordered_map<std::string,std::string> byPath;
     for(const auto& [id,folder]:folders_)byPath[folded(folder.path)]=id;
-    std::unordered_set<std::string> present{ContentFolder,EngineFolder};
+    std::unordered_set<std::string> present{RootFolder};
     const auto scan=[&](const auto& self,const std::string& parent)->void {
         std::error_code error;
         for(fs::directory_iterator it(folderPath(parent),fs::directory_options::skip_permission_denied,error),end;!error&&it!=end;it.increment(error)) {
             if(!it->is_directory(error)||it->is_symlink(error)||error){error.clear();continue;}
+            if(folded(utf8(it->path().filename()))==".crimson"||folded(utf8(it->path().filename()))==".git")continue;
+            try{(void)checkedContentPath(root_,it->path());}catch(const std::exception&){continue;}
             if(fs::is_regular_file(it->path()/"manifest.json",error)){error.clear();continue;}
             error.clear();const auto relative=utf8(it->path().lexically_relative(root_));
             const auto found=byPath.find(folded(relative));const auto id=found==byPath.end()?folderId():found->second;
             folders_[id]={id,parent,utf8(it->path().filename()),relative};present.insert(id);self(self,id);
         }
     };
-    scan(scan,ContentFolder);scan(scan,EngineFolder);
+    scan(scan,RootFolder);
     std::erase_if(folders_,[&](const auto& entry){return !present.contains(entry.first);});
     byPath.clear();for(const auto& [id,folder]:folders_)byPath[folded(folder.path)]=id;
     for(const auto& [id,asset]:assets_) {
         fs::path physical;
         try{physical=resolveAssetPath(root_,id);}catch(const std::exception&){}
         auto& metadata=metadata_[id];metadata.filename=folded(utf8(physical.filename()));
-        metadata.writable=!isEngineAssetId(id)&&!physical.empty()&&below(physical,root_/"Content");
+        metadata.writable=!isEngineAssetId(id)&&!physical.empty()&&below(physical,root_)&&!below(physical,root_/".crimson");
         metadata.deletable=metadata.writable;
         auto directory=physical.parent_path();
         if(asset.kind==AssetKind::Model&&physical.filename()=="manifest.json") {
-            if(const auto bundle=quaderBundleSource(root_,id)) {
-                directory=bundle->parent_path();metadata.filename=folded(utf8(bundle->filename()));metadata.writable=false;
-                metadata.deletable=!isEngineAssetId(id);
-            }else directory=directory.parent_path();
+            directory=directory.parent_path();
         }
         else if(packageImage(physical)) {
-            for(auto parent=directory;below(parent,root_/"Content")||below(parent,root_/"Engine");parent=parent.parent_path())
+            for(auto parent=directory;below(parent,root_)&&parent!=root_;parent=parent.parent_path())
                 if(fs::is_regular_file(parent/"manifest.json")){directory=parent.parent_path();break;}
         }
         const auto found=byPath.find(folded(utf8(directory.lexically_relative(root_))));
-        presentation_[id].folder=found==byPath.end()?(isEngineAssetId(id)?EngineFolder:ContentFolder):found->second;
+        presentation_[id].folder=found==byPath.end()?RootFolder:found->second;
     }
-    for(auto& [id,value]:presentation_){(void)id;if(!folders_.contains(value.folder))value.folder=ContentFolder;}
+    for(auto& [id,value]:presentation_){(void)id;if(!folders_.contains(value.folder))value.folder=RootFolder;}
     bool changed=previousFolders.size()!=folders_.size()||previousPresentation.size()!=presentation_.size();
     for(const auto& [id,value]:folders_) {
         const auto found=previousFolders.find(id);if(found==previousFolders.end()||found->second.parent!=value.parent||found->second.name!=value.name||found->second.path!=value.path)changed=true;
@@ -176,18 +172,18 @@ std::string BrowserCatalog::name(const std::string& id)const {
     return {};
 }
 fs::path BrowserCatalog::folderPath(const std::string& id)const {
-    const auto found=folders_.find(id);if(found==folders_.end())throw std::runtime_error("The destination folder no longer exists.");return root_/pathFromUtf8(found->second.path);
+    const auto found=folders_.find(id);if(found==folders_.end())throw std::runtime_error("The destination folder no longer exists.");return found->second.path.empty()?root_:root_/pathFromUtf8(found->second.path);
 }
 bool BrowserCatalog::writableFolder(const std::string& id)const {
-    const auto found=folders_.find(id);return writable_&&found!=folders_.end()&&(found->second.path=="Content"||found->second.path.starts_with("Content/"));
+    const auto found=folders_.find(id);return writable_&&found!=folders_.end()&&contentRelative(found->second.path);
 }
 bool BrowserCatalog::mutableItem(const std::string& id)const {
-    if(!writable_||!contains(id)||id==ContentFolder||id==EngineFolder)return false;
+    if(!writable_||!contains(id)||id==RootFolder)return false;
     if(isFolder(id))return writableFolder(id);
     const auto found=metadata_.find(id);return found!=metadata_.end()&&found->second.writable;
 }
 bool BrowserCatalog::deletableItem(const std::string& id)const {
-    if(!writable_||!contains(id)||id==ContentFolder||id==EngineFolder)return false;
+    if(!writable_||!contains(id)||id==RootFolder)return false;
     if(isFolder(id))return writableFolder(id);
     const auto found=metadata_.find(id);return found!=metadata_.end()&&found->second.deletable;
 }
@@ -197,7 +193,7 @@ fs::path BrowserCatalog::itemPath(const std::string& id)const {
 }
 bool BrowserCatalog::packageImage(const fs::path& file)const {
     std::error_code error;
-    for(auto parent=file.parent_path();below(parent,root_/"Content")||below(parent,root_/"Engine");parent=parent.parent_path())
+    for(auto parent=file.parent_path();below(parent,root_)&&parent!=root_;parent=parent.parent_path())
         if(fs::is_regular_file(parent/"manifest.json",error))return true;
     return false;
 }
@@ -253,7 +249,7 @@ void BrowserCatalog::relocate(std::vector<ContentPathMove> moves) {
     std::stable_sort(moves.begin(),moves.end(),[](const auto& a,const auto& b){return a.copy&&!b.copy;});relocateContentPaths(root_,moves,serialize());rebuildViews();
 }
 std::string BrowserCatalog::createFolder(const std::string& parent,std::string name) {
-    if(!writableFolder(parent))throw std::runtime_error("Create folders inside Content. Engine content is protected.");
+    if(!writableFolder(parent))throw std::runtime_error("The destination project folder is unavailable.");
     name=cleanName(std::move(name));validateFolderName(parent,name);const auto path=checkedContentPath(root_,folderPath(parent)/pathFromUtf8(name));
     if(fs::exists(path))throw std::runtime_error("A file or folder with that name already exists here.");
     const auto id=folderId();folders_[id]={id,parent,name,utf8(path.lexically_relative(root_))};
@@ -283,7 +279,7 @@ void BrowserCatalog::rename(const std::string& id,std::string name) {
     }catch(...){folders_=oldFolders;presentation_=oldPresentation;metadata_=oldMetadata;throw;}
 }
 void BrowserCatalog::move(std::span<const std::string> ids,const std::string& destination,bool uniqueNames) {
-    if(!writableFolder(destination))throw std::runtime_error("Move assets into Content. Engine content is protected.");
+    if(!writableFolder(destination))throw std::runtime_error("The destination project folder is unavailable.");
     const std::unordered_set<std::string> selected(ids.begin(),ids.end());std::vector<std::string> top;
     for(const auto& id:selected) {
         if(!mutableItem(id))throw std::runtime_error("A dragged item is protected or no longer exists.");
@@ -325,14 +321,14 @@ std::vector<std::string> BrowserCatalog::descendants(const std::string& folder)c
 std::string BrowserCatalog::serializeWithout(std::span<const std::string> ids)const {
     if(!writable_)throw std::runtime_error(status_);const std::unordered_set<std::string> erased(ids.begin(),ids.end());
     for(const auto& id:erased) {
-        if(contains(id)&&!deletableItem(id))throw std::runtime_error("Engine content and the Content root are protected.");
+        if(contains(id)&&!deletableItem(id))throw std::runtime_error("The project root and private defaults are protected.");
         if(isFolder(id))for(const auto& descendant:descendants(id))if(!erased.contains(descendant))throw std::runtime_error("Folder deletion must include its complete contents.");
     }
     Json folders=Json::array(),assets=Json::object();std::vector<std::string> keys;
     for(const auto& [id,folder]:folders_){(void)folder;if(!erased.contains(id))keys.push_back(id);}std::sort(keys.begin(),keys.end());
     for(const auto& id:keys){const auto& f=folders_.at(id);folders.push_back({{"id",id},{"parent",f.parent},{"name",f.name},{"path",f.path}});}
     for(const auto& [id,p]:presentation_)if(!erased.contains(id)&&!erased.contains(p.folder))assets[id]={{"folder",p.folder},{"name",p.name}};
-    return Json{{"version",2},{"folders",folders},{"assets",assets}}.dump(2)+"\n";
+    return Json{{"version",3},{"folders",folders},{"assets",assets}}.dump(2)+"\n";
 }
 void BrowserCatalog::erase(std::span<const std::string> ids) {
     const auto contents=serializeWithout(ids);auto prepared=prepareErase(ids);std::vector<fs::path> directories;
@@ -346,6 +342,30 @@ BrowserCatalog BrowserCatalog::prepareErase(std::span<const std::string> ids)con
     (void)serializeWithout(ids);auto prepared=*this;const std::unordered_set<std::string> erased(ids.begin(),ids.end());
     std::erase_if(prepared.presentation_,[&](const auto& item){return erased.contains(item.first)||erased.contains(item.second.folder);});
     for(const auto& id:ids){prepared.folders_.erase(id);prepared.assets_.erase(id);}prepared.rebuildViews();return prepared;
+}
+std::string BrowserCatalog::serializeRelocated(std::span<const ContentPathMove> moves)const {
+    auto prepared=*this;
+    for(auto& [id,folder]:prepared.folders_) {
+        if(id==RootFolder)continue;
+        const auto physical=root_/pathFromUtf8(folder.path);
+        for(const auto& move:moves)if(!move.copy&&(physical==move.from||below(physical,move.from))) {
+            folder.path=utf8((physical==move.from?move.to:move.to/physical.lexically_relative(move.from)).lexically_relative(root_));
+            folder.name=utf8(pathFromUtf8(folder.path).filename());break;
+        }
+    }
+    const auto ensureFolder=[&](auto&& self,const fs::path& path)->std::string {
+        if(path.empty())return RootFolder;
+        const auto found=std::find_if(prepared.folders_.begin(),prepared.folders_.end(),[&](const auto& entry){return folded(entry.second.path)==folded(utf8(path));});
+        if(found!=prepared.folders_.end())return found->first;
+        const auto parent=self(self,path.parent_path()),id=folderId();
+        prepared.folders_.emplace(id,BrowserFolder{id,parent,utf8(path.filename()),utf8(path)});return id;
+    };
+    std::vector<std::string> keys;for(const auto& [id,folder]:prepared.folders_){(void)folder;if(id!=RootFolder)keys.push_back(id);}
+    for(const auto& id:keys) {
+        const auto parent=pathFromUtf8(prepared.folders_.at(id).path).parent_path();
+        const auto parentId=ensureFolder(ensureFolder,parent);prepared.folders_.at(id).parent=parentId;
+    }
+    return prepared.serialize();
 }
 bool BrowserSelection::contains(const std::string& id) const { return selected_.contains(id); }
 void BrowserSelection::clear() { ids_.clear(); selected_.clear(); primary_.clear(); anchor_.clear(); }

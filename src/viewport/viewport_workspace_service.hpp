@@ -222,6 +222,8 @@ public:
 
   [[nodiscard]] ViewportShadingMode shading_mode(ViewportPaneId pane) const;
   bool set_shading_mode(ViewportPaneId pane, ViewportShadingMode mode);
+  [[nodiscard]] bool rendered_presentation_available() const;
+  void set_scene_rendering_available(bool available) { scene_rendering_available_ = available; }
 
   [[nodiscard]] ViewportView view(ViewportPaneId pane) const;
   bool set_view(ViewportPaneId pane, ViewportView view);
@@ -314,6 +316,7 @@ private:
       ViewportWorkspaceLayoutPolicy::MultiPane;
   ViewportPaneId focused_pane_ = ViewportPaneId::Perspective;
   bool focused_pane_maximized_ = false;
+  bool scene_rendering_available_ = false;
   int grid_preset_ = 0;
   std::uint64_t transform_space_revision_ = 0u;
   ViewportSettings control_defaults_;

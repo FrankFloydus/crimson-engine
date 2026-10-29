@@ -127,6 +127,7 @@ struct SceneEnvironment {
     float exposure{1.0f};
     EntityId sun{NoEntity}; // Optional explicit directional-light reference.
 };
+struct NativeGeometryReference { ModelReference appearance; };
 // Explicit capabilities compose ordinary entities; Actor marks a visual boundary.
 struct SceneActor { bool operator==(const SceneActor&) const = default; };
 struct MovementComponent {
@@ -205,19 +206,6 @@ struct SceneCollider {
             shape==other.shape && radius==other.radius && height==other.height && source==other.source && sameCollisionMesh(mesh,other.mesh) && mode==other.mode && collision==other.collision;
     }
 };
-struct QuaderLink {
-    std::string projectPath,projectId,sceneId;
-    float importScale{1.f};
-    bool autoSync{true},refreshMaterials{false};
-    std::string saveKey;
-    bool syncLights{true};
-    bool operator==(const QuaderLink&) const = default;
-};
-struct QuaderGenerated {
-    EntityId owner{};
-    std::string sourceKey;
-    bool operator==(const QuaderGenerated&) const = default;
-};
 struct SceneCamera {
     float verticalFov{45.f}, nearPlane{.1f}, farPlane{2048.f};
     bool operator==(const SceneCamera&) const = default;
@@ -239,6 +227,7 @@ struct EntityRecord {
     uint32_t order{};
     Mat4 local{};
     std::optional<AssetRef<ModelAsset>> model;
+    bool nativeGeometry{}; // Transient native-mesh role; never a second geometry asset.
     std::optional<SceneDirectionalLight> directional;
     std::optional<ScenePointLight> point;
     std::optional<SceneSpotLight> spot;
@@ -263,8 +252,6 @@ struct EntityRecord {
     ModelMaterialOverrides modelMaterials;
     // Per rendered model entity; these settings are never inherited by children.
     bool castShadows{true},receiveShadows{true};
-    std::optional<QuaderLink> quader;
-    std::optional<QuaderGenerated> quaderGenerated;
     SurfaceLightingScopes lightingScopes{};
     SceneModelAnimation modelAnimation{};
     bool visible{true}; // Authored rendering visibility, inherited by descendants.

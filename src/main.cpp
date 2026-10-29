@@ -77,7 +77,6 @@ std::filesystem::path executable_path(int argc, char **argv) {
 struct CommandLineOptions {
   quader::RendererBackend render_backend = quader::RendererBackend::Vulkan;
   std::optional<quader::RenderCompositionApi> composition_api;
-  std::filesystem::path engine_project_root;
   std::string profile_mode,error;
   std::uint32_t profile_duration{15};
   bool profile_duration_explicit{};
@@ -105,12 +104,6 @@ CommandLineOptions parse_command_line(int argc, char **argv) {
       if(backend=="dx11")options.composition_api=quader::RenderCompositionApi::Direct3D11;
       else if(backend=="dx12")options.composition_api=quader::RenderCompositionApi::Direct3D12;
       else options.error="Renderer must be dx11 or dx12.";
-    } else if (argument == "--project-root" && index + 1 < argc) {
-      options.engine_project_root=std::filesystem::u8path(argv[++index]);
-    } else if(argument=="--project-root"){
-      options.error="Missing value for --project-root.";
-    } else if (argument.starts_with("--project-root=")) {
-      options.engine_project_root=std::filesystem::u8path(std::string(argument.substr(15)));
     } else if (argument == "--vulkan" ||
                argument == "--render-backend=vulkan") {
       options.render_backend = quader::RendererBackend::Vulkan;
@@ -255,7 +248,6 @@ int main(int argc, char** argv) {
     if (!app->initialize(qt_application, exe,
                          {.render_backend = command_line.render_backend,
                           .composition_api = command_line.composition_api,
-                          .engine_project_root = command_line.engine_project_root,
                           .profile_mode = command_line.profile_mode,
                           .profile_duration = command_line.profile_duration,
                           .profile_output = command_line.profile_output,

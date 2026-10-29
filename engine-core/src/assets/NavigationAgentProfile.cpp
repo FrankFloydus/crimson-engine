@@ -38,7 +38,7 @@ NavigationAgentProfile deserializeNavigationAgentProfile(std::string_view text,c
 std::filesystem::path navigationAgentProfilePath(const std::filesystem::path& root,const std::string& id) {
     if(!isAssetUuid(id))throw std::runtime_error("Navigation Agent Profile reference must be a UUID.");
     auto file=resolveAssetPath(root,id);
-    if(file.extension()!=".crimson-agent-profile")throw std::runtime_error("Navigation Agent Profile reference has an incompatible asset kind.");
+    if(assetPathExtension(file)!=".crimson-agent-profile")throw std::runtime_error("Navigation Agent Profile reference has an incompatible asset kind.");
     return file;
 }
 NavigationAgentProfile loadNavigationAgentProfile(const std::filesystem::path& root,const std::string& id) {
@@ -54,7 +54,7 @@ void saveNavigationAgentProfile(const std::filesystem::path& root,const Navigati
     if(!contentStorageReady(root))initializeContentStorage(root);
     const auto contents=serializeNavigationAgentProfile(profile);
     const auto entries=storedAssetPaths(root);const auto existing=std::find_if(entries.begin(),entries.end(),[&](const auto& entry){return entry.id==profile.id;});
-    const auto file=existing==entries.end()?checkedContentPath(root,root/"Content"/"Navigation"/fromUtf8(profile.id+".crimson-agent-profile")):navigationAgentProfilePath(root,profile.id);
+    const auto file=existing==entries.end()?checkedContentPath(root,root/fromUtf8(profile.id+".crimson-agent-profile")):navigationAgentProfilePath(root,profile.id);
     (void)checkedContentPath(root,file);
     if(existing==entries.end()&&std::filesystem::exists(file))throw std::runtime_error("An unregistered Navigation Agent Profile destination already exists.");
     const std::array<StoredAssetPath,1> registration{{{profile.id,file}}};

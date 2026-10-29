@@ -48,7 +48,9 @@ files. Portable SDK modeling-document QDR is a separate interchange contract.
 
 ## Compatibility that must survive
 
-Current scene metadata schema is 20; schema versions and defaults are enforced in the codec.
+Current scene metadata schema is 21; schema versions and defaults are enforced in the codec.
+Schema 21 stores optional host component/settings envelopes and declared native entity UUID
+references in the same authored scene. Portable SDK geometry and container versions are unchanged.
 
 Native Location uses the existing `TransformComponent.position` wire slot. Native
 `SelectableComponent.selectable` is stored as the inverse of the existing

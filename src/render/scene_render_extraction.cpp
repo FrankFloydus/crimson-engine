@@ -1062,6 +1062,9 @@ RenderSceneSnapshot build_render_scene_snapshot(
           .sampling_from_local = record.sampling_from_local,
           .selected = selected(document, record.entity_id),
           .dimmed = options.instance_edit_scope.active(),
+          .generate_collisions = record.mesh_component.generate_collisions &&
+                                 mesh_collision_supported(record.mesh_component),
+          .entity_uuid=record.entity_uuid,
       });
     };
     append_occurrence(first);
@@ -1108,6 +1111,8 @@ RenderSceneSnapshot build_render_scene_snapshot(
           .dimmed = options.instance_edit_scope.active() &&
                     placement->display_entity !=
                         options.instance_edit_scope.occurrence,
+          .generate_collisions = component->generate_collisions && mesh_collision_supported(*component),
+          .entity_uuid=document.uuid(placement->display_entity),
       });
     }
     if (!occurrences.empty()) {
@@ -1215,6 +1220,7 @@ void append_instance_primitive_record(
       .material = source.material,
       .local_bounds = local_bounds,
       .occurrences = {occurrences.begin(), occurrences.end()},
+      .member_uuid=source.entity_uuid,
   });
 }
 
@@ -1299,6 +1305,7 @@ RenderSceneMeshRecord make_render_scene_mesh_record(
       .transform_revision =
           RenderSignatureBuilder::light_transform_signature(world_transform),
   };
+  entry.entity_uuid=document.uuid(entity_id);
   entry.backface_culling_enabled = backface_culling_enabled;
   mark_mesh_dirty(entry, previous_mesh_record(previous, entity_id));
   return entry;
@@ -1362,6 +1369,7 @@ RenderSceneMeshRecord make_render_scene_curve_solid_record(
       .transform_revision =
           RenderSignatureBuilder::light_transform_signature(world_transform),
   };
+  entry.entity_uuid=document.uuid(entity_id);
   entry.backface_culling_enabled = backface_culling_enabled;
   mark_mesh_dirty(entry, previous_mesh_record(previous, entity_id));
   return entry;

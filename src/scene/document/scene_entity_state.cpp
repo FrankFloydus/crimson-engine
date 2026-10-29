@@ -58,6 +58,7 @@ capture_scene_entity_state(const SceneDocument &scene, EntityId entity) {
   capture_optional_component(scene.texture_mapping(entity),
                              state.texture_mapping);
   capture_optional_component(scene.light(entity), state.light);
+  capture_optional_component(scene.engine_components(entity), state.engine_components);
   capture_optional_component(scene.instance_definition(entity),
                              state.instance_definition);
   capture_optional_component(scene.instance_occurrence(entity),
@@ -107,7 +108,10 @@ bool apply_scene_entity_common_state(SceneDocument &scene, EntityId entity,
                                          entity, *state.texture_mapping)
                                    : scene.clear_texture_mapping(entity) ||
                                          scene.texture_mapping(entity) == nullptr;
-  return mapping_applied && scene.set_entity_layer(entity, state.layer_id);
+  const bool engine_applied = state.engine_components
+      ? scene.set_engine_components(entity, *state.engine_components)
+      : scene.engine_components(entity) == nullptr || scene.clear_engine_components(entity);
+  return mapping_applied && engine_applied && scene.set_entity_layer(entity, state.layer_id);
 }
 
 bool apply_scene_entity_state(SceneDocument &scene, EntityId entity,
@@ -153,6 +157,8 @@ bool apply_scene_entity_state(SceneDocument &scene, EntityId entity,
       !scene.clear_light(entity)) {
     return false;
   }
+  if (!state.engine_components && scene.engine_components(entity) != nullptr &&
+      !scene.clear_engine_components(entity)) return false;
   if (options.include_modeling_object && !state.modeling_object.has_value() &&
       scene.modeling_object(entity) != nullptr &&
       !scene.clear_modeling_object(entity)) {
@@ -178,6 +184,7 @@ bool apply_scene_entity_state(SceneDocument &scene, EntityId entity,
   if (state.light.has_value() && !scene.set_light(entity, *state.light)) {
     return false;
   }
+  if (state.engine_components && !scene.set_engine_components(entity, *state.engine_components)) return false;
   if (options.include_modeling_object && state.modeling_object.has_value() &&
       !scene.set_modeling_object(entity, *state.modeling_object)) {
     return false;

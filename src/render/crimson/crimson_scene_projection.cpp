@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/crimson/crimson_scene_projection.hpp"
+#include "render/native_instance_identity.hpp"
 
 #include "core/color_space.hpp"
 #include "render/mesh_quad_uv_interpolation.hpp"
@@ -539,6 +540,7 @@ bool CrimsonSceneProjectionCache::prepare(
             record.material, record.world_transform, record.sampling_from_local,
             record.double_sided(),record.cast_shadows(), record.transform_revision,
             candidate->source->texture_mapping_revision, error)) return false;
+    if(!record.entity_uuid.empty())candidate->native_instances[candidate->instances.back().id]={record.entity_uuid,{},native_source_instance_id(record.entity_uuid)};
   }
   for (const auto &record : candidate->source->instance_primitives) {
     if (record.mesh.vertices.empty() && record.mesh.indices.empty()) continue;
@@ -561,6 +563,7 @@ bool CrimsonSceneProjectionCache::prepare(
           record.material, occurrence.world_transform, occurrence.sampling_from_local,
           record.key.double_sided,record.key.cast_shadows, candidate->source->transform_revision,
           candidate->source->texture_mapping_revision, error,occurrence.dimmed)) return false;
+      if(!occurrence.entity_uuid.empty()){crimson::shared::Matrix4 relative;relative.values=record.member_from_definition.values;const auto member=record.definition_entity!=kInvalidEntityId?record.member_uuid:std::string{};candidate->native_instances[candidate->instances.back().id]={occurrence.entity_uuid,relative,native_source_instance_id(occurrence.entity_uuid,member,record.primitive.index_offset,record.primitive.index_count),member,record.primitive.index_offset,record.primitive.index_count};}
     }
   }
   if (candidate->preview) {

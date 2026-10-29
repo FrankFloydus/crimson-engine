@@ -99,6 +99,7 @@ public:
     return runtime_.native_lifecycle_pending(tool_id);
   }
   [[nodiscard]] bool can_activate(std::string_view tool_id) const;
+  void set_workspace_tool_policy(std::function<bool(std::string_view)> policy){workspace_tool_policy_=std::move(policy);}
   void set_editor_mode_provider(std::function<EditorMode()> provider) {
     editor_mode_provider_ = std::move(provider);
   }
@@ -202,6 +203,7 @@ private:
   AlignToolService &align_;
   std::function<CommandResult(MaterialReference)> settle_modeling_;
   std::function<EditorMode()> editor_mode_provider_;
+  std::function<bool(std::string_view)> workspace_tool_policy_;
   bool settling_transient_state_ = false;
   MaterialReference creation_material_;
   ViewportToolRuntime runtime_;

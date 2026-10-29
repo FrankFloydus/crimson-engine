@@ -86,6 +86,7 @@ private:
       QuaderSelectionMode::Object;
   std::uint64_t synchronized_selection_revision_ = 0;
   std::uint64_t synchronized_keybindings_revision_ = 0;
+  std::uint64_t synchronized_editor_mode_revision_ = 0;
   std::array<std::uint64_t, 8> synchronized_availability_revisions_{};
   QuaderPrimitiveCreationShape synchronized_primitive_shape_ =
       QuaderPrimitiveCreationShape::Box;

@@ -42,6 +42,7 @@ public:
     ViewportWorkspaceService *workspace = &owned_workspace;
     ViewportLocalVisibilityService *local_visibility = nullptr;
     QuaderViewportRuntimeHooks hooks;
+    bool scene_rendering_available = false;
 };
 
 ViewportWorkspaceService& QuaderViewportApiRuntimeAccess::workspace(QuaderViewportApi& api) {
@@ -55,6 +56,12 @@ const ViewportWorkspaceService& QuaderViewportApiRuntimeAccess::workspace(const 
 void QuaderViewportApiRuntimeAccess::bind_scene_workspace(
     QuaderViewportApi &api, ViewportWorkspaceService &next) {
   api.impl_->workspace = &next;
+  next.set_scene_rendering_available(api.impl_->scene_rendering_available);
+}
+
+void QuaderViewportApiRuntimeAccess::set_scene_rendering_available(QuaderViewportApi& api,bool available) {
+  api.impl_->scene_rendering_available=available;
+  api.impl_->workspace->set_scene_rendering_available(available);
 }
 
 void QuaderViewportApiRuntimeAccess::bind_scene_local_visibility(
@@ -290,10 +297,14 @@ QuaderShadingMode QuaderViewportApi::shading_mode(ViewportPaneId pane) const {
       impl_->workspace->shading_mode(pane));
 }
 
+bool QuaderViewportApi::rendered_presentation_available() const {
+  return impl_->workspace->rendered_presentation_available();
+}
+
 QuaderApiVoidResult
 QuaderViewportApi::set_shading_mode(ViewportPaneId pane,
                                     QuaderShadingMode mode) {
-  if (!release_has_feature(ReleaseFeature::RenderedViewport) &&
+  if (!rendered_presentation_available() &&
       mode != QuaderShadingMode::Wireframe &&
       mode != QuaderShadingMode::Solid && mode != QuaderShadingMode::Shaded) {
     return unavailable(release_feature_unavailable_message());

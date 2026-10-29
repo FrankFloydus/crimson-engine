@@ -173,6 +173,25 @@ public:
 
   [[nodiscard]] QWidget *content() const { return content_; }
 
+  /// Flat property panels share one continuous content surface. Other callers
+  /// retain the containing rounded section by default.
+  void set_presentation(QtPanelSectionHeader::Presentation presentation) {
+    if (header_->presentation() == presentation) {
+      return;
+    }
+    header_->set_presentation(presentation);
+    set_scalable_margins(*layout(),
+        presentation == QtPanelSectionHeader::Presentation::Flat
+            ? QMargins(0, 0, 0, 0)
+            : QMargins(1, 1, 1, 1));
+    updateGeometry();
+    update();
+  }
+
+  [[nodiscard]] QtPanelSectionHeader::Presentation presentation() const {
+    return header_->presentation();
+  }
+
   void apply_ui_scale(const QtUiScaleMetrics &metrics) {
     metrics_ = metrics;
     header_->apply_ui_scale(metrics);
@@ -192,6 +211,14 @@ protected:
     QStyleOptionFrame option;
     option.initFrom(this);
     QStylePainter painter(this);
+    if (header_->presentation() == QtPanelSectionHeader::Presentation::Flat) {
+      const QPalette::ColorGroup group =
+          isEnabled() ? (isActiveWindow() ? QPalette::Active
+                                         : QPalette::Inactive)
+                      : QPalette::Disabled;
+      painter.fillRect(rect(), palette().brush(group, QPalette::Base));
+      return;
+    }
     if (!qt_application_style_active(&option)) {
       option.lineWidth = style()->pixelMetric(QStyle::PM_DefaultFrameWidth,
                                               &option, this);

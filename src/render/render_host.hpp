@@ -16,7 +16,8 @@
 #include <functional>
 #include <memory>
 
-namespace crimson { struct PreparedRenderFrame; namespace shared { class Renderer; } }
+namespace crimson::integration { struct ModelingWorldSnapshot;struct NativeSceneRenderBindings; }
+namespace crimson { struct PickRequest;struct PreparedRenderFrame; namespace shared { class Renderer; } }
 
 namespace quader {
 
@@ -42,6 +43,11 @@ public:
   // Engine domains publish through this same device/frame owner. The complete
   // modeling application retains its document, input and native composition.
   virtual crimson::shared::Renderer *crimson_renderer() { return nullptr; }
+  virtual bool request_native_pick(RenderView&,const crimson::PickRequest&){return false;}
+  virtual void publish_native_scene_bindings(std::shared_ptr<const crimson::integration::NativeSceneRenderBindings>) {}
+  virtual void publish_modeling_authoring_source(std::shared_ptr<const RenderSceneSnapshot>) {}
+  [[nodiscard]] virtual std::shared_ptr<const crimson::integration::ModelingWorldSnapshot> modeling_world_snapshot() const { return {}; }
+  [[nodiscard]] virtual bool modeling_world_ready() const { return true; }
   virtual void publish_engine_frame(std::shared_ptr<const crimson::PreparedRenderFrame>) {}
   virtual bool render_engine_viewport(bool, const RenderVulkanCompositionTarget &) { return false; }
   // Document owners record before the same shared submit as Scene/Game and the
