@@ -2,6 +2,31 @@
   "version": 6,
   "configurePresets": [
     {
+      "name": "windows-Release",
+      "displayName": "Crimson Engine with complete Quader modeling",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/Release",
+      "environment": {
+        "VCPKG_MAX_CONCURRENCY": "8",
+        "VCPKG_DOWNLOADS": "${sourceDir}/build/vcpkg_downloads",
+        "VCPKG_BINARY_SOURCES": "clear;files,$env{LOCALAPPDATA}/vcpkg/archives,read;files,${sourceDir}/build/vcpkg_cache,readwrite"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "$env{USERPROFILE}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/thirdparty/crimson-renderer/cmake/vcpkg-ports;${sourceDir}/engine-core/cmake/vcpkg-ports",
+        "VCPKG_INSTALL_OPTIONS": "--x-buildtrees-root=${sourceDir}/build/vcpkg_buildtrees;--x-packages-root=${sourceDir}/build/vcpkg_packages",
+        "VCPKG_APPLOCAL_DEPS": "OFF",
+        "CRIMSON_ENGINE_APPLICATION": "ON",
+        "CRIMSON_ENGINE_BUILD_TESTS": "ON",
+        "QUADER_BUILD_FILAMENT_REFERENCE": "OFF",
+        "QUADER_BUILD_TESTS": "ON",
+        "QUADER_ENABLE_SENTRY": "OFF"
+      }
+    },
+    {
       "name": "vs2026",
       "displayName": "Visual Studio 2026 x64",
       "generator": "Visual Studio 18 2026",
@@ -22,6 +47,12 @@
   ],
   "buildPresets": [
     {
+      "name": "windows-Release",
+      "configurePreset": "windows-Release",
+      "targets": ["crimson-renderer", "crimson-material-cache"],
+      "jobs": 8
+    },
+    {
       "name": "vs2026-debug",
       "configurePreset": "vs2026",
       "configuration": "Debug",
@@ -37,6 +68,11 @@
     }
   ],
   "testPresets": [
+    {
+      "name": "windows-Release",
+      "configurePreset": "windows-Release",
+      "output": {"outputOnFailure": true}
+    },
     {
       "name": "vs2026-debug",
       "configurePreset": "vs2026",

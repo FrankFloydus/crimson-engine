@@ -1,0 +1,431 @@
+{
+  "graph": {
+    "links": [
+      {
+        "fromNode": 2,
+        "fromPin": 7,
+        "id": 1,
+        "toNode": 3,
+        "toPin": 7
+      },
+      {
+        "fromNode": 23,
+        "fromPin": 0,
+        "id": 52,
+        "toNode": 24,
+        "toPin": 8
+      },
+      {
+        "fromNode": 23,
+        "fromPin": 0,
+        "id": 56,
+        "toNode": 26,
+        "toPin": 8
+      },
+      {
+        "fromNode": 26,
+        "fromPin": 27,
+        "id": 58,
+        "toNode": 27,
+        "toPin": 8
+      },
+      {
+        "fromNode": 27,
+        "fromPin": 0,
+        "id": 59,
+        "toNode": 28,
+        "toPin": 23
+      },
+      {
+        "fromNode": 26,
+        "fromPin": 27,
+        "id": 60,
+        "toNode": 28,
+        "toPin": 9
+      },
+      {
+        "fromNode": 3,
+        "fromPin": 27,
+        "id": 61,
+        "toNode": 28,
+        "toPin": 8
+      },
+      {
+        "fromNode": 3,
+        "fromPin": 27,
+        "id": 63,
+        "toNode": 21,
+        "toPin": 8
+      },
+      {
+        "fromNode": 21,
+        "fromPin": 0,
+        "id": 66,
+        "toNode": 23,
+        "toPin": 8
+      },
+      {
+        "fromNode": 30,
+        "fromPin": 0,
+        "id": 67,
+        "toNode": 1,
+        "toPin": 10
+      },
+      {
+        "fromNode": 28,
+        "fromPin": 0,
+        "id": 68,
+        "toNode": 30,
+        "toPin": 8
+      }
+    ],
+    "nextLinkId": 69,
+    "nextNodeId": 31,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5,
+          "attenuationColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "attenuationDistance": 1.0,
+          "baseColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "blend": 0,
+          "doubleSided": true,
+          "emission": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "height": 0.5,
+          "ior": 1.5,
+          "metallic": 0.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "receiveFog": true,
+          "refraction": false,
+          "roughness": 1.0,
+          "shading": 0,
+          "specular": 0.5,
+          "tessellation": {
+            "amount": 0.10000000149011612,
+            "enabled": false,
+            "heightLod": 0.0,
+            "maxFactor": 8,
+            "midpoint": 0.5
+          },
+          "thickness": 0.0,
+          "transmission": 1.0
+        },
+        "position": [
+          1715.0,
+          161.0
+        ]
+      },
+      {
+        "id": 2,
+        "kind": 1,
+        "name": "UV",
+        "position": [
+          -1851.0,
+          805.0
+        ],
+        "uv": {
+          "mode": 0,
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "scaleLinked": true
+        }
+      },
+      {
+        "id": 3,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -1469.0,
+          582.0
+        ],
+        "texture": {
+          "image": "c57aec15-f049-5253-8bc1-1d20d2a4869b",
+          "normalStrength": 1.0,
+          "role": 0,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "id": 21,
+        "kind": 49,
+        "kuwahara": {
+          "mix": 1.0,
+          "radius": 3
+        },
+        "left": {
+          "type": 5,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "name": "Kuwahara",
+        "position": [
+          -1117.800048828125,
+          406.5999755859375
+        ]
+      },
+      {
+        "id": 23,
+        "kind": 47,
+        "left": {
+          "type": 5,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "name": "Posterization",
+        "position": [
+          -525.60009765625,
+          413.800048828125
+        ],
+        "stylization": {
+          "levels": 5
+        }
+      },
+      {
+        "id": 24,
+        "kind": 48,
+        "left": {
+          "type": 0,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "name": "Dither",
+        "position": [
+          -66.0,
+          1016.5999755859375
+        ],
+        "stylization": {
+          "levels": 17,
+          "pattern": 1,
+          "size": 1,
+          "strength": 1.0
+        }
+      },
+      {
+        "gradientMap": {
+          "interpolation": 2,
+          "nextStopId": 6,
+          "stops": [
+            {
+              "color": [
+                0.049658454954624176,
+                0.049658454954624176,
+                0.049658454954624176
+              ],
+              "id": 4,
+              "position": 0.0
+            },
+            {
+              "color": [
+                0.3142143487930298,
+                0.0,
+                0.0
+              ],
+              "id": 3,
+              "position": 0.2666666507720947
+            },
+            {
+              "color": [
+                0.5745707750320435,
+                0.7886420488357544,
+                0.017356589436531067
+              ],
+              "id": 5,
+              "position": 0.6505051255226135
+            },
+            {
+              "color": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "id": 2,
+              "position": 1.0
+            }
+          ]
+        },
+        "id": 26,
+        "kind": 50,
+        "left": {
+          "type": 0,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "name": "Gradient Map",
+        "position": [
+          113.0,
+          355.0
+        ]
+      },
+      {
+        "colorRangeMask": {
+          "color": [
+            0.27277764678001404,
+            0.27277764678001404,
+            0.27277764678001404
+          ],
+          "invert": false,
+          "softness": 0.3330000042915344,
+          "tolerance": 0.0
+        },
+        "id": 27,
+        "kind": 51,
+        "left": {
+          "type": 0,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "name": "Color Range Mask",
+        "position": [
+          355.0,
+          808.0
+        ]
+      },
+      {
+        "alpha": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "color": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "id": 28,
+        "image": {
+          "blendMode": 0,
+          "brightness": 0.0,
+          "contrast": 0.0,
+          "featureSize": 12.0,
+          "gamma": 1.0,
+          "grayMode": 0,
+          "inputBlack": 0.0,
+          "inputWhite": 1.0,
+          "noiseContrast": 0.5,
+          "noisePattern": 0,
+          "normalFlipY": false,
+          "normalStrength": 1.0,
+          "opacity": 1.0,
+          "outputBlack": 0.0,
+          "outputWhite": 1.0,
+          "radius": 0.0009765625,
+          "roughness": 0.5,
+          "seed": 0,
+          "sharpen": 1.0
+        },
+        "kind": 22,
+        "left": {
+          "type": 0,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "name": "Blend",
+        "position": [
+          789.499755859375,
+          559.49951171875
+        ],
+        "right": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      {
+        "id": 30,
+        "kind": 46,
+        "left": {
+          "type": 5,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "name": "Pixelization",
+        "position": [
+          1107.0,
+          255.0
+        ],
+        "stylization": {
+          "pixelSize": 7
+        }
+      }
+    ],
+    "version": 16
+  },
+  "id": "b57f88aa-d530-53f1-9dae-ff9a53d4760d",
+  "name": "tripo_mat_5889793b-432b-47b0-ba33-fa229275c2d1",
+  "originModel": "e6f20144-8525-5ec1-b10a-76d428fd8ccc",
+  "type": "crimson-material",
+  "version": 6
+}

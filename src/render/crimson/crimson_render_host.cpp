@@ -6,6 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/crimson/crimson_render_host.hpp"
 #include "render/crimson/crimson_editor_projection.hpp"
+#include "render/crimson/crimson_native_queue_handoff.hpp"
+#include "render/crimson/crimson_material_preview.hpp"
+#include "render/crimson/crimson_material_thumbnails.hpp"
+#if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+#include "render/crimson/crimson_rich_scene.hpp"
+#endif
 
 #include "core/color_space.hpp"
 #include "core/logger.hpp"
@@ -17,10 +23,18 @@
 
 #include <crimson/renderer/Scene.hpp>
 #include <crimson/renderer/BorrowedVulkan.hpp>
+#include <crimson/renderer/BorrowedD3D12.hpp>
+#include <crimson/renderer/BorrowedD3D11.hpp>
+#include "render/crimson/crimson_copy_identity.hpp"
+#include "render/crimson/crimson_d3d11_context_state.hpp"
+#include <bgfx/d3d11.h>
+#include <crimson/renderer/forward/RenderFrame.h>
+#include "crimson-renderer/Environment.h"
 #include <crimson/renderer/ShaderFamily.hpp>
 #include <crimson/renderer/BuildIdentity.hpp>
 
 #include <bgfx/bgfx.h>
+#include <bgfx/d3d12.h>
 
 #include <algorithm>
 #include <array>
@@ -76,6 +90,43 @@ struct CrimsonHostState final {
   std::size_t copy_count = 0u;
   bool presentation_open = false;
   bool gpu_instancing_enabled = true;
+  crimson::ModelingSurfaceGrid mesh_grid;
+  bool direct12 = false;
+  bool direct11 = false;
+  bool d3d11_external = false;
+  std::uint32_t d3d11_external_depth=0;
+  CrimsonD3D11ContextState d3d11_context_state;
+  RenderCompositionApi requested_api=RenderCompositionApi::Direct3D12;
+  bool native_forward()const noexcept{return direct12||direct11;}
+  void *borrowed_device = nullptr, *borrowed_queue = nullptr;
+  CrimsonNativeQueueHandoff queue_handoff;
+  std::shared_ptr<const crimson::PreparedRenderFrame> engine_frame;
+  std::uint64_t engine_revision = 0, engine_submitted_revision = 0;
+  std::uint32_t completed_frame = 0;
+  std::array<crimson::shared::Submission,2> engine_copies{};
+  struct EnginePreviewEntry {
+    std::weak_ptr<const void> lifetime;
+    std::function<bool()> record;
+    std::uint64_t revision=0,submitted_revision=0,source_owner=0;
+  };
+  static constexpr auto kEnginePreviewCount=static_cast<std::size_t>(EnginePreviewKind::Count);
+  std::array<EnginePreviewEntry,kEnginePreviewCount> engine_previews{};
+  // Clearing a document callback must not discard the completion marker that
+  // still protects the destination used by its last native copy.
+  std::array<crimson::shared::Submission,kEnginePreviewCount> engine_preview_copies{};
+  std::uint64_t engine_preview_revision=0;
+  struct PreviewEntry {CrimsonMaterialPreview* view=nullptr;std::weak_ptr<void> lifetime;};
+  std::vector<PreviewEntry> material_previews;
+  PreviewEntry selected_preview,submitted_preview;
+  std::unique_ptr<CrimsonMaterialThumbnails> material_thumbnails;
+#if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+  std::unique_ptr<CrimsonRichScene> rich_scene;
+#endif
+
+  CrimsonMaterialPreview* material_preview() const {
+    return selected_preview.view&&!selected_preview.lifetime.expired()&&selected_preview.view->initialized()
+        ?selected_preview.view:nullptr;
+  }
 
   bool accept(crimson::shared::Status status) {
     if (status.ok()) return true;
@@ -145,10 +196,15 @@ struct CrimsonViewState final {
   bool scene_visible = true;
   bool overlay_visible = true;
   bool solid = false;
+  bool rendered = false,shadowing = true,mesh_grid_visible=false;
+  ViewportMaterialDebugMode material_debug=ViewportMaterialDebugMode::None;
+  SceneSettings rendered_settings;
+#if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+  std::shared_ptr<const CrimsonRichFrame> rich_frame;
+#endif
   bool instance_context = false;
   bool configured_settings = false;
   bool unsupported_presentation_reported = false;
-  InstanceEditStyle instance_style;
   std::shared_ptr<const crimson::shared::EditorGrid> grid;
 };
 
@@ -249,10 +305,23 @@ public:
       state_->frame.camera_revision = ++state_->camera_revision;
     }
   }
-  void apply_scene_settings(const SceneSettings &, bool rendered,
+  void apply_scene_settings(const SceneSettings &scene_settings, bool rendered,
                             const ViewportSettings &settings) override {
-    if (rendered) LOG_ERROR("Crimson public renderer received unsupported Rendered presentation");
-    const auto color = settings.color(ViewportColorSettingId::Background);
+    if(state_->rendered!=rendered||state_->rendered_settings!=scene_settings){
+      state_->rendered=rendered;state_->rendered_settings=scene_settings;state_->dirty=true;
+    }
+#if !defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+    if(rendered)LOG_ERROR("Rendered presentation requires the Crimson Engine application integration");
+#endif
+    const auto style=InstanceEditStyle::from_settings(settings);
+    const auto background_setting=settings.color(ViewportColorSettingId::Background);
+    const auto source_color=rendered&&state_->material_debug==ViewportMaterialDebugMode::None?scene_settings.environment.clear_color:QVec3{srgb_to_linear(background_setting.r),srgb_to_linear(background_setting.g),srgb_to_linear(background_setting.b)};
+    const auto background=style.resolve_background_color({source_color.x,source_color.y,source_color.z,1},state_->instance_context);
+    const ViewportSettingColor color{linear_to_srgb(background.r),linear_to_srgb(background.g),linear_to_srgb(background.b),background.a};
+    crimson::ModelingContextStyle context;
+    context.color={srgb_to_linear(style.context.r),srgb_to_linear(style.context.g),srgb_to_linear(style.context.b),style.context.a};
+    context.strength=state_->instance_context?style.context_strength:0.f;context.tintAmount=style.context_tint_amount;context.desaturation=style.context_desaturation;
+    const bool context_changed=!state_->frame.modeling_presentation||state_->frame.modeling_presentation->context!=context;
     const auto light = crimson::shared::ModelingLight{
         {settings.float_value(ViewportFloatSettingId::ShadedKeyDirectionX),
          settings.float_value(ViewportFloatSettingId::ShadedKeyDirectionY),
@@ -264,15 +333,14 @@ public:
     const auto &old = state_->frame.light;
     const auto anti_aliasing = settings.anti_aliasing() == ViewportAntiAliasing::Smaa
         ? crimson::AntiAliasing::Smaa : crimson::AntiAliasing::Off;
-    if (state_->configured_settings && old.key_direction_view == light.key_direction_view &&
+    if (state_->configured_settings && !context_changed && old.key_direction_view == light.key_direction_view &&
         old.key_intensity == light.key_intensity && old.diffuse_wrap == light.diffuse_wrap &&
         old.ground_fill == light.ground_fill && old.sky_fill == light.sky_fill &&
         state_->frame.clear_color.red == color.r && state_->frame.clear_color.green == color.g &&
         state_->frame.clear_color.blue == color.b &&
         state_->frame.anti_aliasing == anti_aliasing) return;
-    state_->instance_style = InstanceEditStyle::from_settings(settings);
-    const auto background = state_->instance_style.resolve_background_color(color, state_->instance_context);
-    state_->frame.clear_color = {background.r, background.g, background.b, 1.0f};
+    state_->frame.clear_color = {color.r,color.g,color.b,color.a};
+    if(context_changed){auto packet=std::make_shared<crimson::ModelingPresentation>();packet->context=context;state_->frame.modeling_presentation=std::move(packet);}
     state_->frame.light = light;
     state_->frame.anti_aliasing = anti_aliasing;
     state_->dirty = true;
@@ -325,8 +393,9 @@ public:
     state_->grid=std::make_shared<const crimson::shared::EditorGrid>(grid);
     state_->dirty=true;
   }
-  void set_instance_edit_context_active(bool active, const ViewportSettings &) override {
-    if (state_->instance_context != active) { state_->instance_context = active; state_->dirty = true; }
+  void set_instance_edit_context_active(bool active,const ViewportSettings &settings) override {
+    if(state_->instance_context!=active){state_->instance_context=active;state_->dirty=true;}
+    apply_scene_settings(state_->rendered_settings,state_->rendered,settings);
   }
   void set_overlay_visible(bool visible) override {
     if (state_->overlay_visible != visible) { state_->overlay_visible = visible; state_->dirty = true; }
@@ -337,13 +406,13 @@ public:
   void set_scene_layer_mask(std::uint8_t mask) override {
     if (state_->scene_layer_mask!=mask) { state_->scene_layer_mask=mask; state_->dirty=true; }
   }
-  void set_shadowing_enabled(bool) override {}
+  void set_shadowing_enabled(bool enabled) override {
+    if(state_->shadowing!=enabled){state_->shadowing=enabled;state_->dirty=true;}
+  }
   void set_material_presentation(ViewportMaterialDebugMode mode, bool solid, bool mesh_grid) override {
-    if ((mode != ViewportMaterialDebugMode::None || mesh_grid) && !state_->unsupported_presentation_reported) {
-      LOG_WARN("Crimson advanced material diagnostics and mesh-grid presentation remain pending");
-      state_->unsupported_presentation_reported = true;
+    if (state_->solid != solid||state_->material_debug!=mode||state_->mesh_grid_visible!=mesh_grid) {
+      state_->solid=solid;state_->material_debug=mode;state_->mesh_grid_visible=mesh_grid;state_->dirty=true;state_->configured_settings=false;
     }
-    if (state_->solid != solid) { state_->solid = solid; state_->dirty = true; }
   }
   bool update_selected_mesh_outlines(const RenderOverlaySelectedObjectSnapshot *snapshot,
       const RenderOverlaySelectionSnapshot *hierarchy, const ViewportPersistentOverlayStyleSnapshot &style, bool visible) override {
@@ -432,7 +501,19 @@ public:
     owner_->source = std::make_shared<const RenderSceneSnapshot>(std::move(snapshot));
     owner_->scene_dirty = true;
   }
-  void update_mesh_surface_grid(float, const ViewportSettings &) override {}
+  void update_mesh_surface_grid(float spacing,const ViewportSettings &settings) override {
+    crimson::ModelingSurfaceGrid grid;
+    grid.enabled=settings.bool_value(ViewportBoolSettingId::ShowMeshGrid);
+    grid.size=std::max(spacing,.0001f);grid.majorSize=grid.size*4.f;
+    const auto minor=settings.color(ViewportColorSettingId::MeshGridMinor),major=settings.color(ViewportColorSettingId::MeshGridMajor);
+    grid.minorColor={srgb_to_linear(minor.r),srgb_to_linear(minor.g),srgb_to_linear(minor.b),minor.a};
+    grid.majorColor={srgb_to_linear(major.r),srgb_to_linear(major.g),srgb_to_linear(major.b),major.a};
+    grid.minorLineThickness=settings.float_value(ViewportFloatSettingId::GridMinorLineSize);
+    grid.majorLineThickness=settings.float_value(ViewportFloatSettingId::GridMajorLineSize);
+    const auto& old=owner_->mesh_grid;
+    if(old.enabled==grid.enabled&&old.size==grid.size&&old.majorSize==grid.majorSize&&old.minorColor==grid.minorColor&&old.majorColor==grid.majorColor&&old.minorLineThickness==grid.minorLineThickness&&old.majorLineThickness==grid.majorLineThickness)return;
+    owner_->mesh_grid=grid;for(const auto& weak:owner_->views)if(const auto view=weak.lock())view->dirty=true;
+  }
   void sync_scene_asset_overlays(const RenderOverlaySelectedObjectSnapshot &selected,
       const RenderOverlaySceneWireframeSnapshot &wireframe, const RenderOverlayCollisionSnapshot &collision) override {
     const auto projection=owner_->pending ? owner_->pending : owner_->accepted;
@@ -484,40 +565,8 @@ private:
   RenderSceneBindingKey binding_;
   bool culling_ = true;
 
-  static bool same_preview(const RenderToolPreviewSceneSnapshot &left,
-                            const RenderToolPreviewSceneSnapshot &right) {
-    if (left.revision != right.revision || left.suppression.signature != right.suppression.signature ||
-        left.suppression.entities != right.suppression.entities ||
-        left.suppression.occurrences != right.suppression.occurrences ||
-        left.meshes.size() != right.meshes.size() ||
-        left.accepted_overlay_coordinates.size() != right.accepted_overlay_coordinates.size() ||
-        !left.curves.empty() || !right.curves.empty() || !left.lights.empty() || !right.lights.empty() ||
-        !left.group_markers.empty() || !right.group_markers.empty()) return false;
-    const auto same_matrix = [](const QMat4 &first, const QMat4 &second) { return first.values == second.values; };
-    const auto same_mesh = [&](const RenderToolPreviewMeshRecord &first, const RenderToolPreviewMeshRecord &second) {
-      if (first.source_entity != second.source_entity || first.source_object_id != second.source_object_id ||
-          first.visibility_entity != second.visibility_entity || first.layout_key != second.layout_key ||
-          first.position_revision != second.position_revision || first.material_revision != second.material_revision ||
-          first.mesh.geometry_payload() != second.mesh.geometry_payload() ||
-          first.geometry_projection != second.geometry_projection ||
-          first.dynamic_position_payload != second.dynamic_position_payload ||
-          first.double_sided != second.double_sided || first.suppress_source != second.suppress_source ||
-          !same_matrix(first.transform, second.transform) ||
-          !same_matrix(first.sampling_from_local, second.sampling_from_local) ||
-          !std::ranges::equal(first.instance_transforms, second.instance_transforms, same_matrix) ||
-          !std::ranges::equal(first.instance_sampling_from_local, second.instance_sampling_from_local, same_matrix) ||
-          !render_material_payloads_equal(&first.material.primary_material, &second.material.primary_material) ||
-          first.material.material_slots.size() != second.material.material_slots.size()) return false;
-      for (std::size_t index = 0u; index < first.material.material_slots.size(); ++index) {
-        const auto &first_slot = first.material.material_slots[index];
-        const auto &second_slot = second.material.material_slots[index];
-        if (first_slot.first != second_slot.first || !render_material_payloads_equal(&first_slot.second, &second_slot.second)) return false;
-      }
-      return true;
-    };
-    return std::ranges::equal(left.meshes, right.meshes, same_mesh) &&
-           std::ranges::equal(left.accepted_overlay_coordinates, right.accepted_overlay_coordinates, same_mesh);
-  }
+  static bool same_preview(const RenderToolPreviewSceneSnapshot& left,const RenderToolPreviewSceneSnapshot& right){return crimson_tool_preview_snapshots_equal(left,right);}
+
 };
 
 class CrimsonRenderHost final : public RenderHost {
@@ -526,7 +575,52 @@ public:
   ~CrimsonRenderHost() override { shutdown(); }
   bool initialize(void *, const std::filesystem::path &resources, RenderConfig,
                    const RenderVulkanSharedContext *context) override {
-    if (state_->initialized) return true;
+    if (state_->initialized) {
+      if(state_->direct11&&(!context||context->api!=RenderCompositionApi::Direct3D11||context->d3d11_device!=state_->borrowed_device||context->d3d11_context!=state_->borrowed_queue)){
+        state_->error="Qt renderer device/context generation changed before prior ownership retired";LOG_ERROR("{}",state_->error);return false;
+      }
+      if (state_->direct12 && (!context || context->api != RenderCompositionApi::Direct3D12
+          || context->d3d12_device != state_->borrowed_device || context->d3d12_queue != state_->borrowed_queue)) {
+        state_->error = "Qt renderer device/queue generation changed before prior ownership retired";
+        LOG_ERROR("{}",state_->error); return false;
+      }
+      return true;
+    }
+    if(context&&context->api==RenderCompositionApi::Direct3D11){
+      if(!context->d3d11_device||!context->d3d11_context)return false;
+      if(!state_->d3d11_context_state.initialize(static_cast<ID3D11Device*>(context->d3d11_device),static_cast<ID3D11DeviceContext*>(context->d3d11_context))){state_->error="Qt Direct3D11 native context-state isolation is unavailable";return false;}
+      auto native_scope=state_->d3d11_context_state.scope();
+      if(!native_scope)return false;
+      auto services=std::make_shared<crimson::ForwardServices>();services->prepare_environment=crimson::prepareEnvironmentCpu;
+      crimson::shared::BorrowedD3D11Context borrowed;borrowed.device=static_cast<ID3D11Device*>(context->d3d11_device);borrowed.context=static_cast<ID3D11DeviceContext*>(context->d3d11_context);borrowed.forward_services=std::move(services);
+      if(!state_->accept(state_->renderer.initialize(borrowed)))return false;
+      state_->resources=resources;state_->projection_cache=std::make_unique<CrimsonSceneProjectionCache>(resources);
+#if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+      state_->rich_scene=std::make_unique<CrimsonRichScene>(state_->renderer,resources);
+#endif
+      state_->initialized=true;state_->direct11=true;state_->scene_dirty=true;state_->borrowed_device=context->d3d11_device;state_->borrowed_queue=context->d3d11_context;
+      LOG_INFO("Crimson modeling and Engine initialized on Qt-owned Direct3D 11 device");return true;
+    }
+    if (context != nullptr && context->api == RenderCompositionApi::Direct3D12) {
+      if (!context->d3d12_device || !context->d3d12_queue) return false;
+      auto services = std::make_shared<crimson::ForwardServices>();
+      services->prepare_environment = crimson::prepareEnvironmentCpu;
+      crimson::shared::BorrowedD3D12Context borrowed;
+      borrowed.device = static_cast<ID3D12Device *>(context->d3d12_device);
+      borrowed.queue = static_cast<ID3D12CommandQueue *>(context->d3d12_queue);
+      borrowed.forward_services = std::move(services);
+      if (!state_->queue_handoff.initialize(borrowed.device,borrowed.queue)) return false;
+      if (!state_->accept(state_->renderer.initialize(borrowed))) return false;
+      state_->resources = resources;
+      state_->projection_cache = std::make_unique<CrimsonSceneProjectionCache>(resources);
+#if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+      state_->rich_scene=std::make_unique<CrimsonRichScene>(state_->renderer,resources);
+#endif
+      state_->initialized = true; state_->direct12 = true; state_->scene_dirty = true;
+      state_->borrowed_device = context->d3d12_device; state_->borrowed_queue = context->d3d12_queue;
+      LOG_INFO("Crimson modeling and Engine initialized on Qt-owned Direct3D 12 device");
+      return true;
+    }
     if (context == nullptr || !context->enabled_capabilities) {
       state_->error = "Crimson requires a Qt-owned Vulkan context with proven enabled capabilities";
       LOG_ERROR("{}", state_->error);
@@ -561,6 +655,20 @@ public:
   }
   void shutdown() override {
     if (!state_->initialized) return;
+    auto native_scope=state_->direct11?state_->d3d11_context_state.scope():CrimsonD3D11ContextState::Scope{};
+    if(state_->direct11&&!native_scope)std::terminate();
+    for(const auto& entry:state_->material_previews)if(!entry.lifetime.expired())entry.view->release_gpu();
+    state_->selected_preview={};state_->submitted_preview={};
+    state_->engine_frame.reset();
+    state_->engine_previews={};
+    if(state_->material_thumbnails)state_->material_thumbnails->shutdown();
+    state_->material_thumbnails.reset();
+#if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+    for(const auto& entry:state_->views)if(auto view=entry.lock())view->rich_frame.reset();
+    if(state_->rich_scene)state_->rich_scene->clear();
+    state_->rich_scene.reset();
+#endif
+    if(state_->direct12&&!state_->queue_handoff.prepare_shutdown())std::terminate();
     if (!state_->accept(state_->renderer.shutdown())) {
       // Qt's void releaseResources callback must not return and release its
       // device while an operational queue has unknown in-flight ownership.
@@ -568,6 +676,7 @@ public:
       std::terminate();
     }
     state_->initialized = false;
+    state_->queue_handoff.reset();
     for (const auto &entry : state_->surfaces) if (auto surface = entry.lock()) surface->target = {};
     state_->pending.reset();
     state_->accepted.reset();
@@ -582,6 +691,57 @@ public:
     state_->submitted_epoch = 0u;
     state_->preparation_epoch = 0u;
     state_->presentation.reset();
+    state_->engine_copies = {}; state_->engine_revision = state_->engine_submitted_revision = 0;
+    state_->engine_preview_copies={};state_->engine_preview_revision=0;
+    state_->direct12 = false;
+    state_->direct11=false;state_->d3d11_external=false;
+    state_->borrowed_device = state_->borrowed_queue = nullptr;
+    native_scope.reset();state_->d3d11_context_state.request_reset();
+  }
+  RenderCompositionApi composition_api() const override { return state_->requested_api; }
+  bool set_composition_api(RenderCompositionApi api)override{if(state_->initialized)return api==composition_api();if(api!=RenderCompositionApi::Direct3D11&&api!=RenderCompositionApi::Direct3D12&&api!=RenderCompositionApi::Vulkan)return false;state_->requested_api=api;return true;}
+  crimson::shared::Renderer *crimson_renderer() override { return state_->initialized ? &state_->renderer : nullptr; }
+  std::uint32_t completed_frame() const override { return state_->completed_frame; }
+  void publish_engine_frame(std::shared_ptr<const crimson::PreparedRenderFrame> frame) override {
+    if (state_->engine_frame == frame) return;
+    state_->engine_frame = std::move(frame); ++state_->engine_revision;
+  }
+  void publish_engine_preview(EnginePreviewKind kind,std::weak_ptr<const void> lifetime,std::function<bool()> record) override {
+    const auto index=static_cast<std::size_t>(kind);
+    if(index>=state_->engine_previews.size())return;
+    if(lifetime.expired()||!record){clear_engine_preview(kind);return;}
+    const auto& previous=state_->engine_previews[index];const bool same_owner=!lifetime.owner_before(previous.lifetime)&&!previous.lifetime.owner_before(lifetime);
+    const auto owner=same_owner&&previous.source_owner?previous.source_owner:next_crimson_copy_identity();
+    state_->engine_previews[index]={std::move(lifetime),std::move(record),++state_->engine_preview_revision,0,owner};
+  }
+  void clear_engine_preview(EnginePreviewKind kind) override {
+    const auto index=static_cast<std::size_t>(kind);
+    if(index<state_->engine_previews.size())state_->engine_previews[index]={};
+  }
+  bool render_engine_preview(EnginePreviewKind kind,const RenderVulkanCompositionTarget& target) override {
+    const auto index=static_cast<std::size_t>(kind);
+    if(index>=state_->engine_previews.size()||!state_->initialized||!state_->native_forward()||!native_target(target))return false;
+    (void)submit_views();const auto& entry=state_->engine_previews[index];const auto binding=entry.lifetime.lock();
+    if(!binding||!entry.revision||entry.submitted_revision!=entry.revision)return false;
+    bgfx::TextureHandle source=BGFX_INVALID_HANDLE;
+    switch(kind){
+      case EnginePreviewKind::Ragdoll:source=state_->renderer.ragdollPreviewTexture();break;
+      case EnginePreviewKind::Animation:source=state_->renderer.animationPreviewTexture();break;
+      case EnginePreviewKind::Particle:source=state_->renderer.particlePreviewTexture();break;
+      case EnginePreviewKind::Decal:source=state_->renderer.decalPreviewTexture();break;
+      case EnginePreviewKind::Count:return false;
+    }
+    crimson::shared::Submission candidate;const bool copied=copy_native(source,target,candidate,0,0,entry.source_owner);
+    if(candidate.serial)state_->engine_preview_copies[index]=candidate;
+    if(!copied)return false;++state_->copy_count;return true;
+  }
+  bool render_engine_viewport(bool game,const RenderVulkanCompositionTarget& target) override {
+    if(!state_->initialized||!state_->native_forward()||!state_->engine_frame||!native_target(target)||!submit_views())return false;
+    const auto source=game?state_->renderer.gameViewportTexture():state_->renderer.viewportTexture();
+    const auto owner=state_->engine_frame->world?state_->engine_frame->world->shadowWorldId:0;
+    crimson::shared::Submission candidate;const bool copied=copy_native(source,target,candidate,0,0,owner);
+    if(candidate.serial)state_->engine_copies[game?1:0]=candidate;
+    if(!copied)return false;++state_->copy_count;return true;
   }
   bool initialized() const override { return state_->initialized; }
   bool supports_hidden_native_pixels() const override { return true; }
@@ -593,7 +753,43 @@ public:
     state_->views.push_back(view->state());
     return view;
   }
-  std::unique_ptr<RenderMaterialPreviewView> create_material_preview_view() override { return {}; }
+  std::unique_ptr<RenderMaterialPreviewView> create_material_preview_view() override {
+    if(!state_->initialized||!state_->native_forward())return {};
+    auto view=std::make_unique<CrimsonMaterialPreview>(state_->resources);
+    std::erase_if(state_->material_previews,[](const auto& entry){return entry.lifetime.expired();});
+    state_->material_previews.push_back({view.get(),view->lifetime()});return view;
+  }
+  bool set_material_preview_recorder(RenderMaterialPreviewView& view,RenderMaterialPreviewRecorder recorder) override {
+    auto* preview=dynamic_cast<CrimsonMaterialPreview*>(&view);if(!preview)return false;
+    preview->set_recorder(std::move(recorder));return true;
+  }
+  bool prepare_material_preview(RenderMaterialPreviewView& view,bool active_window) override {
+    auto* preview=dynamic_cast<CrimsonMaterialPreview*>(&view);
+    if(!state_->initialized||!state_->native_forward()||!preview||!preview->initialized())return false;
+    if(active_window||!state_->material_preview())state_->selected_preview={preview,preview->lifetime()};
+    return true;
+  }
+  void release_material_preview(RenderMaterialPreviewView& view) override {
+    auto* preview=dynamic_cast<CrimsonMaterialPreview*>(&view);if(!preview)return;
+    if(state_->selected_preview.view==preview)state_->selected_preview={};
+    if(state_->submitted_preview.view==preview) {
+      state_->submitted_preview={};
+      if(state_->initialized)state_->renderer.releaseMaterialPreview();
+    }
+  }
+  bool render_composited_material_preview(RenderMaterialPreviewView& view,const RenderVulkanCompositionTarget& target) override {
+    auto* preview=dynamic_cast<CrimsonMaterialPreview*>(&view);
+    if(!state_->initialized||!state_->native_forward()||!preview||!native_target(target))return false;
+    const auto destination=target.api==RenderCompositionApi::Direct3D11?target.d3d11_texture:target.d3d12_resource;
+    const auto retained=[&]{return preview->last_destination==destination&&preview->last_destination_width==target.width&&preview->last_destination_height==target.height&&preview->last_destination_generation==target.destination_generation;};
+    if(state_->material_preview()!=preview)return retained();
+    if(!submit_views()||state_->submitted_preview.view!=preview||state_->submitted_preview.lifetime.expired())return retained();
+    crimson::shared::Submission candidate;const bool copied=copy_native(state_->renderer.materialPreviewTexture(),target,candidate,0,0,preview->source_owner());
+    if(candidate.serial)preview->last_copy=candidate;
+    if(!copied)return false;
+    preview->last_destination=destination;preview->last_destination_width=target.width;preview->last_destination_height=target.height;preview->last_destination_generation=target.destination_generation;
+    ++state_->copy_count;return true;
+  }
   std::unique_ptr<RenderSurface> create_composited_surface(std::uint32_t width, std::uint32_t height) override {
     if (!state_->initialized) return {};
     auto surface = std::make_shared<CrimsonSurfaceState>();
@@ -623,27 +819,23 @@ public:
   void render_viewport(RenderView &, RenderSurface &) override {
     state_->error = "Crimson requires a borrowed Qt destination image for scene presentation";
   }
-  bool render_composited_viewport(RenderView &view, RenderSurface &surface,
-      const RenderVulkanCompositionTarget &target) override {
-    if (!state_->initialized || state_->preparation_depth != 0u || !surface.valid()) return false;
-    bind_view_surface(view, surface);
-    auto *crimson_view = dynamic_cast<CrimsonRenderView *>(&view);
-    auto *crimson_surface = dynamic_cast<CrimsonRenderSurface *>(&surface);
-    if (!crimson_view || !crimson_surface || !submit_views()) return false;
-    const auto view_state = crimson_view->state();
-    const auto surface_state = crimson_surface->state();
-    const crimson::shared::VulkanImageTarget destination{
-        .image = target.image, .format = VK_FORMAT_R8G8B8A8_UNORM,
-        .oldLayout = target.old_layout, .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        .width = target.width, .height = target.height,
-        .sourceX = view_state->crop_left, .sourceY = view_state->crop_top};
-    if (!state_->accept(state_->renderer.copy_to_vulkan(surface_state->target,
-        destination, surface_state->last_submission))) return false;
-    surface_state->initial = false;
-    ++state_->copy_count;
-    return true;
+  bool render_composited_viewport(RenderView& view,RenderSurface& surface,const RenderVulkanCompositionTarget& target) override {
+    if(!state_->initialized||state_->preparation_depth!=0u||!surface.valid())return false;
+    bind_view_surface(view,surface);auto* crimson_view=dynamic_cast<CrimsonRenderView*>(&view);auto* crimson_surface=dynamic_cast<CrimsonRenderSurface*>(&surface);
+    if(!crimson_view||!crimson_surface||!submit_views())return false;
+    const auto view_state=crimson_view->state();const auto surface_state=crimson_surface->state();crimson::shared::Submission candidate;bool copied{};
+    if(target.api!=RenderCompositionApi::Vulkan)copied=copy_native(surface_state->target,target,candidate,view_state->crop_left,view_state->crop_top,0);
+    else {
+      const crimson::shared::VulkanImageTarget destination{.image=target.image,.format=VK_FORMAT_R8G8B8A8_UNORM,.oldLayout=target.old_layout,.finalLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,.width=target.width,.height=target.height,.sourceX=view_state->crop_left,.sourceY=view_state->crop_top};
+      copied=state_->accept(state_->renderer.copy_to_vulkan(surface_state->target,destination,candidate));
+    }
+    if(candidate.serial)surface_state->last_submission=candidate;
+    if(!copied)return false;surface_state->initial=false;++state_->copy_count;return true;
   }
   void render_material_preview(RenderMaterialPreviewView &, RenderSurface &) override {}
+  void begin_application_frame() override {
+    if(state_->initialized&&state_->native_forward())state_->renderer.advanceStreaming();
+  }
   void begin_view_preparation() override { ++state_->preparation_depth; }
   void complete_view_preparation() override {
     if (state_->preparation_depth && --state_->preparation_depth == 0u) ++state_->preparation_epoch;
@@ -659,7 +851,11 @@ public:
     state_->presentation_open = false;
   }
   void complete_composited_presentation_frame() override { complete_presentation_frame(state_->copy_count); }
-  bool finish_external_queue_submission() override { return true; }
+  bool finish_external_queue_submission() override {
+    if(state_->initialized&&state_->direct11)return bgfx::isD3D11ContextHealthy();
+    return !state_->initialized || !state_->direct12
+        || (state_->queue_handoff.healthy() && bgfx::isD3D12ContextHealthy());
+  }
   void begin_shared_command_batch() override {}
   void end_shared_command_batch() override {}
   void mark_shared_commands_pending() override {}
@@ -671,6 +867,11 @@ public:
     return state_->present_mode == VK_PRESENT_MODE_FIFO_KHR || state_->present_mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR;
   }
   bool ready_for_next_frame() const override {
+    for(const auto& entry:state_->material_previews)if(!entry.lifetime.expired()&&entry.view->last_copy.serial&&!state_->renderer.is_complete(entry.view->last_copy))return false;
+    for (const auto &copy : state_->engine_copies)
+      if (copy.serial && !state_->renderer.is_complete(copy)) return false;
+    for (const auto &copy : state_->engine_preview_copies)
+      if (copy.serial && !state_->renderer.is_complete(copy)) return false;
     for (const auto &entry : state_->surfaces) {
       if (const auto surface = entry.lock(); surface && surface->last_submission.serial &&
           !state_->renderer.is_complete(surface->last_submission)) return false;
@@ -679,10 +880,30 @@ public:
   }
   RenderFramePerformanceStats frame_performance_stats() const override { return state_->performance; }
   void apply_scene_settings(const SceneSettings &) override {}
-  std::shared_ptr<const MaterialThumbnailReadback> submit_material_thumbnail(RenderMaterialEvaluationSnapshot, std::uint32_t) override { return {}; }
-  void poll_material_thumbnails() override {}
+  std::shared_ptr<const MaterialThumbnailReadback> submit_material_thumbnail(RenderMaterialEvaluationSnapshot snapshot,std::uint32_t size) override {
+    if(!state_->initialized||!state_->native_forward())return {};
+    if(!state_->material_thumbnails)state_->material_thumbnails=std::make_unique<CrimsonMaterialThumbnails>(state_->resources);
+    return state_->material_thumbnails->submit(std::move(snapshot),size);
+  }
+  void poll_material_thumbnails() override {
+    if(state_->initialized&&state_->material_thumbnails)state_->material_thumbnails->poll(state_->renderer,state_->completed_frame);
+  }
+  bool submit_prepared_offscreen_work() override {
+    if(state_->direct11)return state_->initialized&&state_->d3d11_external&&state_->preparation_depth==0&&submit_views();
+    return state_->initialized&&state_->preparation_depth==0&&state_->material_thumbnails&&
+        state_->material_thumbnails->needs_recording()&&submit_views();
+  }
 
   std::uint64_t frame_submissions() const noexcept { return state_->frame_submissions; }
+  bool begin_native_external_content(void* context)override{
+    if(!state_->initialized||!state_->direct11||!context||!state_->d3d11_context_state.begin())return false;
+    ++state_->d3d11_external_depth;state_->d3d11_external=true;return true;
+  }
+  void end_native_external_content()noexcept override{
+    if(!state_->d3d11_external_depth)return;
+    --state_->d3d11_external_depth;state_->d3d11_external=state_->d3d11_external_depth!=0;
+    state_->d3d11_context_state.end();
+  }
 
   void set_gpu_instancing_enabled(bool enabled) {
     if (state_->gpu_instancing_enabled == enabled) return;
@@ -740,7 +961,49 @@ public:
   }
 
 private:
+  bool native_target(const RenderVulkanCompositionTarget& target)const {
+    return (state_->direct12&&target.api==RenderCompositionApi::Direct3D12&&target.d3d12_resource)
+        ||(state_->direct11&&target.api==RenderCompositionApi::Direct3D11&&target.d3d11_texture&&target.d3d11_context);
+  }
+  template<class Source> bool copy_native(Source source,const RenderVulkanCompositionTarget& target,crimson::shared::Submission& receipt,std::uint32_t x,std::uint32_t y,std::uint64_t source_owner){
+    if(target.api==RenderCompositionApi::Direct3D11){
+      if(!state_->direct11||!state_->d3d11_external)return false;
+      crimson::shared::D3D11ImageTarget destination;destination.texture=static_cast<ID3D11Texture2D*>(target.d3d11_texture);destination.context=static_cast<ID3D11DeviceContext*>(target.d3d11_context);destination.width=target.width;destination.height=target.height;destination.sourceX=x;destination.sourceY=y;destination.destinationGeneration=target.destination_generation;destination.sourceOwner=source_owner;
+      const auto copied=state_->renderer.copy_to_d3d11(source,destination,receipt);
+      // Healthy busy is an ordinary staged retry, never a repeated error log.
+      if(!copied.ok()){if(!bgfx::isD3D11ContextHealthy())state_->accept(copied);return false;}
+      return true;
+    }
+    if(!state_->direct12||target.api!=RenderCompositionApi::Direct3D12)return false;
+    crimson::shared::D3D12ImageTarget destination;destination.resource=static_cast<ID3D12Resource*>(target.d3d12_resource);destination.state=static_cast<D3D12_RESOURCE_STATES>(target.d3d12_state);destination.width=target.width;destination.height=target.height;destination.sourceX=x;destination.sourceY=y;
+    if(!state_->queue_handoff.acquire(target.d3d12_queue))return false;
+    const auto copied=state_->renderer.copy_to_d3d12(source,destination,receipt);
+    if(receipt.serial&&!state_->queue_handoff.handoff(target.d3d12_queue))return false;
+    return state_->accept(copied);
+  }
+
+#if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+  crimson::RenderScene rich_scene(const CrimsonViewState& view) const {
+    auto scene=view.rich_frame->scene();
+    scene.pinned=view.rich_frame;
+    if(!view.shadowing||!view.rendered){scene.shadowWorldId=0;scene.shadowInstances={};}
+    if(!view.rendered&&view.material_debug==ViewportMaterialDebugMode::None){
+      scene.previewShadedLighting.enabled=true;
+      const auto& light=view.frame.light;scene.previewShadedLighting.keyDirectionView={light.key_direction_view[0],light.key_direction_view[1],light.key_direction_view[2]};
+      scene.previewShadedLighting.keyIntensity=light.key_intensity;scene.previewShadedLighting.diffuseWrap=light.diffuse_wrap;scene.previewShadedLighting.groundFill=light.ground_fill;scene.previewShadedLighting.skyFill=light.sky_fill;
+    }
+    switch(view.material_debug){
+      case ViewportMaterialDebugMode::Albedo:scene.debugView=crimson::RenderDebugView::Albedo;break;
+      case ViewportMaterialDebugMode::Roughness:scene.debugView=crimson::RenderDebugView::Roughness;break;
+      case ViewportMaterialDebugMode::Metalness:scene.debugView=crimson::RenderDebugView::Metal;break;
+      case ViewportMaterialDebugMode::Normal:scene.debugView=crimson::RenderDebugView::Normal;break;
+      default:break;
+    }
+    return scene;
+  }
+#endif
   bool submit_views() {
+    if(state_->direct11&&!state_->d3d11_external)return false;
     std::vector<std::shared_ptr<CrimsonViewState>> active;
     std::erase_if(state_->views, [](const auto &entry) { return entry.expired(); });
     for (const auto &entry : state_->views) {
@@ -756,10 +1019,71 @@ private:
         return surface && surface->rendered;
       });
     };
-    if (!state_->prepare_scene()) return accepted_surfaces_available();
+    const bool engine_dirty = state_->native_forward() && state_->engine_frame && state_->engine_revision != state_->engine_submitted_revision;
+    auto* material_preview=state_->material_preview();
+    const bool preview_dirty=material_preview&&(material_preview->dirty()||
+        state_->submitted_preview.view!=material_preview||state_->submitted_preview.lifetime.expired());
+    const bool engine_previews_dirty=state_->native_forward()&&std::ranges::any_of(state_->engine_previews,[](const auto& entry){
+      return entry.record&&!entry.lifetime.expired()&&entry.revision!=entry.submitted_revision;
+    });
+    const bool thumbnails_dirty=state_->native_forward()&&state_->material_thumbnails&&state_->material_thumbnails->needs_recording();
+    const auto record_thumbnail=[&] {return thumbnails_dirty&&state_->material_thumbnails->record(state_->renderer);};
+    const auto acknowledge_thumbnail=[&](bool recorded){if(recorded)state_->material_thumbnails->submitted();};
+    std::array<std::uint64_t,CrimsonHostState::kEnginePreviewCount> recorded_engine_previews{};
+    const auto record_engine_previews=[&] {
+      bool recorded=false;
+      if(!state_->native_forward())return recorded;
+      for(std::size_t index=0;index<state_->engine_previews.size();++index){
+        auto& entry=state_->engine_previews[index];
+        const auto binding=entry.lifetime.lock();
+        if(!binding||!entry.record||entry.revision==entry.submitted_revision)continue;
+        if(entry.record()){recorded_engine_previews[index]=entry.revision;recorded=true;}
+      }
+      return recorded;
+    };
+    const auto acknowledge_engine_previews=[&] {
+      for(std::size_t index=0;index<state_->engine_previews.size();++index){
+        auto& entry=state_->engine_previews[index];
+        if(recorded_engine_previews[index]&&entry.revision==recorded_engine_previews[index]&&!entry.lifetime.expired())
+          entry.submitted_revision=entry.revision;
+      }
+    };
+    const auto record_preview=[&] {return preview_dirty&&material_preview->record(state_->renderer);};
+    const auto acknowledge_preview=[&](bool recorded) {
+      if(recorded){material_preview->submitted();state_->submitted_preview=state_->selected_preview;}
+    };
+    const auto submit_engine_only = [&] {
+      if (!engine_dirty&&!preview_dirty&&!engine_previews_dirty&&!thumbnails_dirty) return false;
+      if(engine_dirty)state_->renderer.renderFrame(state_->engine_frame);
+      const bool preview_recorded=record_preview();
+      const bool engine_previews_recorded=record_engine_previews();
+      const bool thumbnail_recorded=record_thumbnail();
+      if(!engine_dirty&&!preview_recorded&&!engine_previews_recorded&&!thumbnail_recorded)return false;
+      if (!state_->accept(state_->renderer.submit(&state_->completed_frame))) return false;
+      if(engine_dirty)state_->engine_submitted_revision = state_->engine_revision;
+      acknowledge_preview(preview_recorded);
+      acknowledge_engine_previews();
+      acknowledge_thumbnail(thumbnail_recorded);
+      ++state_->frame_submissions;
+      return true;
+    };
+    if (!state_->prepare_scene()) {
+      const bool engine_submitted = submit_engine_only();
+      return engine_submitted || accepted_surfaces_available();
+    }
     const auto projection = state_->pending ? state_->pending : state_->accepted;
-    if (!projection) return false;
-    bool dirty = state_->pending != nullptr;
+    if (!projection) return submit_engine_only();
+#if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+    const bool rich_visible=state_->rich_scene&&std::ranges::any_of(active,[](const auto& view){
+      return (view->rendered||view->material_debug!=ViewportMaterialDebugMode::None||view->mesh_grid_visible)&&!view->solid&&view->scene_visible;
+    });
+    if(rich_visible&&!state_->rich_scene->prepare(projection)){
+      state_->error=state_->rich_scene->status();
+      const bool engine_submitted=submit_engine_only();
+      return engine_submitted||accepted_surfaces_available();
+    }
+#endif
+    bool dirty = state_->pending != nullptr || engine_dirty || preview_dirty || engine_previews_dirty || thumbnails_dirty;
     for (const auto &view : active) {
       const auto surface = view->surface.lock();
       update_projection(*view);
@@ -770,20 +1094,62 @@ private:
       view->frame.scene_generation = projection->generation;
       view->frame.pass = !view->scene_visible ? crimson::shared::ScenePass::Empty
           : view->solid ? crimson::shared::ScenePass::Solid : crimson::shared::ScenePass::Shaded;
+#if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+      if((view->rendered||view->material_debug!=ViewportMaterialDebugMode::None||view->mesh_grid_visible)&&!view->solid&&view->scene_visible&&state_->rich_scene){
+        crimson::ModelingPresentation controls;
+        if(view->frame.modeling_presentation)controls.context=view->frame.modeling_presentation->context;
+        controls.materialDebug=static_cast<crimson::ModelingMaterialDebug>(view->material_debug);
+        controls.surfaceGrid=state_->mesh_grid;controls.surfaceGrid.enabled=controls.surfaceGrid.enabled&&view->mesh_grid_visible;
+        auto rendered_settings=view->rendered_settings;
+        {const auto& color=view->frame.clear_color;rendered_settings.environment.clear_color={srgb_to_linear(color.red),srgb_to_linear(color.green),srgb_to_linear(color.blue)};}
+        auto prepared=state_->rich_scene->view(rendered_settings,view->camera,view->pose,view->frame.anti_aliasing,surface->target.value,controls,view->rendered);
+        if(!prepared||prepared->source_generation!=projection->generation){
+          state_->error=state_->rich_scene->status();
+          const bool engine_submitted=submit_engine_only();
+          return engine_submitted||accepted_surfaces_available();
+        }
+        if(!view->rich_frame||view->rich_frame->source_generation!=prepared->source_generation||
+            view->rich_frame->scene().meshPopulationRevision!=prepared->scene().meshPopulationRevision)view->dirty=true;
+        view->rich_frame=std::move(prepared);
+      }else view->rich_frame.reset();
+#endif
       dirty = dirty || view->dirty || !surface->rendered;
     }
     if (!dirty) return true;
-    if (active.empty()) return false;
+    if (active.empty() && !engine_dirty&&!preview_dirty&&!engine_previews_dirty&&!thumbnails_dirty) return false;
     for (const auto &view : active) {
       const auto surface=view->surface.lock();
-      if (!state_->accept(state_->renderer.prepare_view(surface->target,view->frame)))
-        return accepted_surfaces_available();
+      auto status=crimson::shared::Status{};
+#if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+      if(view->rich_frame){const auto scene=rich_scene(*view);status=state_->renderer.prepare_rendered_view(surface->target,view->frame,scene);}
+      else
+#endif
+      status=state_->renderer.prepare_view(surface->target,view->frame);
+      if (!state_->accept(status)) {
+        const bool engine_submitted = submit_engine_only();
+        return engine_submitted || accepted_surfaces_available();
+      }
     }
+    if (engine_dirty) state_->renderer.renderFrame(state_->engine_frame);
+    const bool preview_recorded=record_preview();
+    const bool engine_previews_recorded=record_engine_previews();
+    const bool thumbnail_recorded=record_thumbnail();
+    if(active.empty()&&!engine_dirty&&!preview_recorded&&!engine_previews_recorded&&!thumbnail_recorded)return false;
     for (const auto &view : active) {
       const auto surface = view->surface.lock();
-      if (!state_->accept(state_->renderer.render_view(surface->target, view->frame))) return false;
+      auto status=crimson::shared::Status{};
+#if defined(QUADER_HAS_CRIMSON_RICH_SCENE)
+      if(view->rich_frame){const auto scene=rich_scene(*view);status=state_->renderer.render_rendered_view(surface->target,view->frame,scene);}
+      else
+#endif
+      status=state_->renderer.render_view(surface->target,view->frame);
+      if(!state_->accept(status))return false;
     }
-    if (!state_->accept(state_->renderer.submit())) return false;
+    if (!state_->accept(state_->renderer.submit(&state_->completed_frame))) return false;
+    if (engine_dirty) state_->engine_submitted_revision = state_->engine_revision;
+    acknowledge_preview(preview_recorded);
+    acknowledge_engine_previews();
+    acknowledge_thumbnail(thumbnail_recorded);
     state_->error.clear();
     ++state_->frame_submissions;
     state_->accepted_editor_scene_generation=projection->generation;

@@ -489,13 +489,19 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
   All viewports share the scene context. Keep component selection in SDK documents, dormant in
   Object Mode, and preserve it through whole-object operations. First entry from selected objects
   in a newly opened scene clears their components once.
-  Retain the last eligible hovered mesh's component wire and Vertex dots across empty space and
-  viewport leave. A new peer transfers this candidate without changing selection; selected-component
+  Retain the last eligible hovered mesh's component wire and Vertex dots across empty space,
+  viewport leave, orbit, pan, zoom and fly navigation, including its captured release frame.
+  Navigation coordinates must neither clear nor replace that candidate. A subsequent ordinary
+  pointer hover over a new peer transfers it without changing selection; selected-component
   meshes remain additive, and an old empty selected fallback must not leave an extra wire.
   Blank clicks and finished box/lasso regions clear immediate highlighting but keep the candidate;
-  gizmo ownership hard-clears both without removing selected components. Preserve source-wire
-  depth classification and existing colors. Protect semantic state, retained submission and actual
-  GPU output separately; see the [candidate projection contract](src/editor/modeling/runtime/README.md#component-candidate-presentation).
+  tool/gizmo ownership and invalid selection context hard-clear both without removing selected
+  components. Treat navigation/camera-only suppression as transient spatial hover loss, including
+  interrupted Paint and traversal feedback; do not confuse it with ownership/context retirement.
+  Preserve that distinction for every selection method and remembered Paint beneath Move, Rotate
+  and Scale. Preserve source-wire depth classification and existing colors. Protect semantic state,
+  retained submission and actual GPU output separately; see the
+  [candidate projection contract](src/editor/modeling/runtime/README.md#component-candidate-presentation).
   Object Mode retains active UUID independently of selection: deselection preserves it, a new
   selected primary replaces it, and identity removal clears it. Only empty Object selection can
   fall back to that eligible active mesh on Edit entry; an active group is not expanded. No eligible
@@ -521,8 +527,9 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
   [interaction tests](tests/viewport_interaction_controller_tests.cpp).
   Captured navigation keeps hover/picking suppressed through its release frame: that sample still
   contains the navigation cursor, and only the next frame has the restored real mouse position.
-  A transient crosshair hit must never become component selection; see the navigation-release
-  regressions in [Qt input tests](tests/qt_input_adapter_tests.cpp).
+  A transient crosshair hit must never replace the retained candidate or become component selection;
+  preserve an existing unselected candidate as well as the empty-candidate case. See the
+  navigation-release regressions in [Qt input tests](tests/qt_input_adapter_tests.cpp).
   Gizmo hover owns immediate feedback separately from gesture consumption: the shared interaction
   controller suppresses scene picks and clears component hover while a handle is hovered
   or consumed. This also clears the retained candidate; selected-component wires remain independent.
@@ -892,6 +899,13 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
   a candidate if removing it would leave a neighboring face with fewer than three corners.
   Do not require the removed faces' entire interior UV fields to survive retriangulation;
   that rejects valid peeled, discontinuous and nonplanar joins. Keep finite and topology checks.
+  Explicit Dissolve Vertices has no straightness threshold. Original degree-two corners collapse
+  without joining faces; selected junctions nominate incident seams for joined face regions.
+  Keep surviving positions and corner UV donors, including merged-boundary normal-edge donors.
+  Reject unrepresentable boundaries and fewer than three surviving corners atomically; return
+  only live neighboring vertices. Do not reuse automatic collinearity cleanup for this command.
+  Protect the exact saved-room chain in [SDK dissolve tests](tests/sdk/dissolve_saved_scene_tests.cpp)
+  and junction/shared-seam mechanics in the dissolve-vertices document-operation tests.
   Stored-corner preservation does not certify displayed UVs under nonidentity occurrence mapping
   when a merge changes the face carrier. Generic topology publication currently refits that
   carrier; do not claim occurrence-space invariance from local UV tests.

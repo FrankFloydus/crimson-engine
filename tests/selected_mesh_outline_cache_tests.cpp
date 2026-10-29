@@ -5,8 +5,8 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/selected_mesh_outline_cache.hpp"
-#include "render/overlay/instance_selection_overlay_cache.hpp"
-#include "render/overlay/scene_wireframe_overlay_cache.hpp"
+#include "render/overlay/instance_selection_overlay_plan.hpp"
+#include "render/overlay/scene_wireframe_overlay_plan.hpp"
 #include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
 #include "assets/asset_registry.hpp"

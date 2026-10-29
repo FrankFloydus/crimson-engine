@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/overlay_edit_wire_retention.hpp"
 #include "render/overlay/overlay_proxy_factory.hpp"
+#include "render/overlay/overlay_retained_edit_wire_update.hpp"
 
 #include <gtest/gtest.h>
 
@@ -270,6 +271,49 @@ TEST(OverlayEditWireRetentionTests, FactoryRejectsMalformedIndicesAndBindingsBef
   EXPECT_FALSE(OverlayProxyFactory::prepare_retained_edit_wire_update(
       nullptr, retention.edge_slots(), duplicate_dirty, retention.active_indices(),
       retention.active_bindings(), true));
+}
+
+TEST(OverlayEditWireRetentionTests, PreparedUploadRetainsIndependentCpuBytes) {
+  OverlayEditWireRetention retention;
+  const std::vector lines{source_edge(1, 0, 1), source_edge(1, 1, 2)};
+  ASSERT_TRUE(retention.prepare(lines));
+  auto prepared = OverlayProxyFactory::prepare_retained_edit_wire_update(
+      nullptr, retention.edge_slots(), retention.dirty_slots(), retention.active_indices(),
+      retention.active_bindings(), true);
+  ASSERT_TRUE(prepared);
+  ASSERT_EQ(prepared->ranges.size(), 1u);
+  auto &range = prepared->ranges.front();
+  EXPECT_EQ(range.starts.size(), lines.size() * 4u);
+  EXPECT_EQ(range.starts.front().x, lines.front().start.x);
+  EXPECT_EQ(range.ends.front().x, lines.front().end.x);
+  const auto expected = range.starts.front();
+  range.starts.front().x += 10.0f;
+  const auto upload = range.start_upload.release();
+  ASSERT_NE(upload.callback, nullptr);
+  EXPECT_EQ(upload.size, lines.size() * 4u * sizeof(OverlayFloat4));
+  const auto *positions = static_cast<const OverlayFloat4 *>(upload.buffer);
+  EXPECT_EQ(positions[0].x, expected.x);
+  EXPECT_EQ(positions[0].y, expected.y);
+  EXPECT_EQ(positions[0].z, expected.z);
+  EXPECT_EQ(positions[0].w, expected.w);
+  prepared.reset();
+  EXPECT_EQ(positions[0].x, expected.x);
+  upload.callback(upload.buffer, upload.size, upload.user);
+}
+
+TEST(OverlayEditWireRetentionTests, PreparedVectorUploadTransfersItsAllocationOnce) {
+  std::vector<std::uint32_t> indices{0u, 1u, 2u, 0u, 2u, 3u};
+  const auto *allocation = indices.data();
+  auto upload = RetainedEditWireUpload::vector(std::move(indices));
+  auto moved = std::move(upload);
+  EXPECT_EQ(upload.release().callback, nullptr);
+  const auto storage = moved.release();
+  EXPECT_EQ(storage.buffer, allocation);
+  EXPECT_EQ(storage.size, 6u * sizeof(std::uint32_t));
+  ASSERT_NE(storage.callback, nullptr);
+  EXPECT_EQ(moved.release().callback, nullptr);
+  EXPECT_EQ(static_cast<const std::uint32_t *>(storage.buffer)[5], 3u);
+  storage.callback(storage.buffer, storage.size, storage.user);
 }
 
 TEST(OverlayEditWireRetentionTests, SupportOnlyUpdatesRetainSlotsAndRefreshPreviewBindings) {

@@ -1,0 +1,18 @@
+if(NOT IS_DIRECTORY "${CC_SHADER_SOURCE}" OR NOT IS_ABSOLUTE "${CC_SHADER_DESTINATION}")
+    message(FATAL_ERROR "Shader staging requires an existing source and absolute destination.")
+endif()
+cmake_path(NORMAL_PATH CC_SHADER_DESTINATION OUTPUT_VARIABLE destination)
+if(NOT destination MATCHES "/shader-tools/shaders$")
+    message(FATAL_ERROR "Shader staging destination must be the renderer-owned shader payload.")
+endif()
+file(MAKE_DIRECTORY "${destination}")
+# copy_directory leaves removed programs behind. Retire stale engine sources
+# so a rebuilt deployment contains only the current shader family.
+file(GLOB staged_sources LIST_DIRECTORIES false "${destination}/*.sc" "${destination}/*.sh" "${destination}/*.hlsl")
+foreach(staged IN LISTS staged_sources)
+    get_filename_component(name "${staged}" NAME)
+    if(NOT EXISTS "${CC_SHADER_SOURCE}/${name}")
+        file(REMOVE "${staged}")
+    endif()
+endforeach()
+file(COPY "${CC_SHADER_SOURCE}/" DESTINATION "${destination}")

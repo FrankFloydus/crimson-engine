@@ -5,6 +5,8 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/overlay_proxy_factory.hpp"
+#include "render/overlay/overlay_retained_edit_wire_update.hpp"
+#include "render/overlay/overlay_icon_image.hpp"
 #include "render/overlay/overlay_face_fill_composition.hpp"
 
 #include "diagnostics/profile.hpp"
@@ -45,6 +47,12 @@ namespace {
 
 using AttributeType = filament::backend::ElementType;
 
+filament::backend::BufferDescriptor consume_retained_edit_wire_upload(
+    RetainedEditWireUpload &upload) {
+  const auto storage = upload.release();
+  return {storage.buffer, storage.size, storage.callback, storage.user};
+}
+
 filament::TextureSampler shared_position_sampler() {
   return {filament::TextureSampler::MinFilter::NEAREST,
           filament::TextureSampler::MagFilter::NEAREST,
@@ -73,173 +81,6 @@ filament::backend::PixelBufferDescriptor shared_position_pixels(
   return pixels;
 }
 
-/// Static ribbon controls stay separate from preview-updated endpoints.
-struct RetainedEditWireVertex {
-  OverlayFloat4 position;
-  OverlayFloat4 control;
-  std::uint32_t color = 0u;
-};
-
-// The shared viewport scale is sanitized to at most 15x. Keep one native texel
-// available per displayed pixel at that upper bound, then let Filament's mip chain
-// handle every smaller presentation without depending on a fixed-DPI asset.
-constexpr std::uint32_t kPointLightIconTextureExtent = 1024u;
-static_assert(static_cast<float>(kPointLightIconTextureExtent) >=
-              kOverlayPointLightGizmoSizePixels *
-                  kViewportPixelScaleMaximum);
-
-struct IconColor {
-  float red = 0.0f;
-  float green = 0.0f;
-  float blue = 0.0f;
-  float alpha = 0.0f;
-};
-
-float unit_clamp(float value) { return std::clamp(value, 0.0f, 1.0f); }
-
-float antialiased_coverage(float signed_distance) {
-  constexpr float kPixelWidth =
-      2.0f / static_cast<float>(kPointLightIconTextureExtent);
-  return unit_clamp(0.5f - signed_distance / kPixelWidth);
-}
-
-float rounded_box_signed_distance(float x, float y, float center_x,
-                                  float center_y, float half_width,
-                                  float half_height, float radius) {
-  const float qx = std::abs(x - center_x) - half_width + radius;
-  const float qy = std::abs(y - center_y) - half_height + radius;
-  const float outside_x = std::max(qx, 0.0f);
-  const float outside_y = std::max(qy, 0.0f);
-  return std::hypot(outside_x, outside_y) +
-         std::min(std::max(qx, qy), 0.0f) - radius;
-}
-
-float bulb_half_width(float y) {
-  constexpr float kBulbCenterY = -0.31f;
-  constexpr float kBulbRadius = 0.54f;
-  const float circle_y = y - kBulbCenterY;
-  const float circle_width =
-      std::sqrt(std::max(kBulbRadius * kBulbRadius - circle_y * circle_y,
-                         0.0f));
-
-  float taper_width = 0.0f;
-  if (y >= 0.03f && y <= 0.42f) {
-    const float taper = (y - 0.03f) / (0.42f - 0.03f);
-    taper_width = 0.40f + (0.21f - 0.40f) * taper;
-  }
-  return std::max(circle_width, taper_width);
-}
-
-float bulb_signed_distance(float x, float y) {
-  constexpr float kTop = -0.85f;
-  constexpr float kBottom = 0.42f;
-  const float horizontal = std::abs(x) - bulb_half_width(y);
-  const float vertical = std::max(kTop - y, y - kBottom);
-  return std::max(horizontal, vertical);
-}
-
-void composite_icon_color(IconColor &destination, IconColor source,
-                          float coverage) {
-  const float source_alpha = unit_clamp(source.alpha * coverage);
-  const float result_alpha =
-      source_alpha + destination.alpha * (1.0f - source_alpha);
-  if (result_alpha <= 0.0f) {
-    return;
-  }
-  const float retained = destination.alpha * (1.0f - source_alpha);
-  destination.red =
-      (source.red * source_alpha + destination.red * retained) / result_alpha;
-  destination.green = (source.green * source_alpha +
-                       destination.green * retained) /
-                      result_alpha;
-  destination.blue = (source.blue * source_alpha +
-                      destination.blue * retained) /
-                     result_alpha;
-  destination.alpha = result_alpha;
-}
-
-std::byte icon_channel_byte(float value) {
-  return static_cast<std::byte>(
-      static_cast<std::uint8_t>(std::lround(unit_clamp(value) * 255.0f)));
-}
-
-std::vector<std::byte> make_point_light_icon_rgba() {
-  constexpr std::size_t kChannelCount = 4u;
-  const std::size_t pixel_count =
-      static_cast<std::size_t>(kPointLightIconTextureExtent) *
-      kPointLightIconTextureExtent;
-  std::vector<std::byte> pixels(pixel_count * kChannelCount);
-
-  for (std::uint32_t row = 0u; row < kPointLightIconTextureExtent; ++row) {
-    const float y =
-        (static_cast<float>(row) + 0.5f) * 2.0f /
-            static_cast<float>(kPointLightIconTextureExtent) -
-        1.0f;
-    for (std::uint32_t column = 0u; column < kPointLightIconTextureExtent;
-         ++column) {
-      const float x =
-          (static_cast<float>(column) + 0.5f) * 2.0f /
-              static_cast<float>(kPointLightIconTextureExtent) -
-          1.0f;
-      IconColor color;
-
-      const float body_distance = bulb_signed_distance(x, y);
-      composite_icon_color(color, {0.10f, 0.07f, 0.025f, 1.0f},
-                           antialiased_coverage(body_distance - 0.025f));
-
-      const float body_coverage = antialiased_coverage(body_distance);
-      const float edge =
-          unit_clamp(std::abs(x) / std::max(bulb_half_width(y), 0.001f));
-      const float lower_warmth = unit_clamp((y + 0.15f) / 0.57f);
-      const IconColor bulb_color{
-          1.0f,
-          0.86f - edge * 0.20f - lower_warmth * 0.08f,
-          0.12f - edge * 0.08f,
-          1.0f,
-      };
-      composite_icon_color(color, bulb_color, body_coverage);
-
-      const float highlight_x = (x + 0.20f) / 0.18f;
-      const float highlight_y = (y + 0.48f) / 0.25f;
-      const float highlight = unit_clamp(
-          1.0f - std::hypot(highlight_x, highlight_y));
-      composite_icon_color(color, {1.0f, 1.0f, 0.88f, 0.72f},
-                           highlight * body_coverage);
-
-      const float base_distance =
-          rounded_box_signed_distance(x, y, 0.0f, 0.60f, 0.245f, 0.25f,
-                                      0.075f);
-      composite_icon_color(color, {0.055f, 0.05f, 0.045f, 1.0f},
-                           antialiased_coverage(base_distance - 0.018f));
-      composite_icon_color(color, {0.15f, 0.145f, 0.14f, 1.0f},
-                           antialiased_coverage(base_distance));
-
-      constexpr float kBandCenters[] = {0.43f, 0.56f, 0.69f};
-      for (float band_center : kBandCenters) {
-        const float band_distance = rounded_box_signed_distance(
-            x, y, 0.0f, band_center, 0.215f, 0.052f, 0.032f);
-        composite_icon_color(color, {0.035f, 0.03f, 0.028f, 1.0f},
-                             antialiased_coverage(band_distance - 0.012f));
-        const float band_luminance =
-            0.72f + 0.20f * unit_clamp(1.0f - std::abs(x) / 0.215f);
-        composite_icon_color(
-            color,
-            {band_luminance, band_luminance, band_luminance * 0.96f, 1.0f},
-            antialiased_coverage(band_distance));
-      }
-
-      const std::size_t offset =
-          (static_cast<std::size_t>(row) * kPointLightIconTextureExtent +
-           column) *
-          kChannelCount;
-      pixels[offset] = icon_channel_byte(color.red);
-      pixels[offset + 1u] = icon_channel_byte(color.green);
-      pixels[offset + 2u] = icon_channel_byte(color.blue);
-      pixels[offset + 3u] = icon_channel_byte(color.alpha);
-    }
-  }
-  return pixels;
-}
 
 std::uint32_t to_overlay_entity_id(utils::Entity entity) {
   return static_cast<std::uint32_t>(utils::Entity::smuggle(entity));
@@ -714,233 +555,6 @@ void update_canonical_quad_proxy_vertices(filament::Engine &engine,
 
 } // namespace
 
-/// Keeps candidate host storage independent of every live overlay stream.
-struct OverlayProxyFactory::RetainedEditWireUpdate final {
-  /// Coalesces adjacent changed slots into one upload per attribute stream.
-  struct Range final {
-    std::uint32_t first_vertex = 0u;
-    std::vector<OverlayFloat4> starts;
-    std::vector<OverlayFloat4> ends;
-    std::vector<OverlayFloat4> support0;
-    std::vector<OverlayFloat4> support1;
-    filament::backend::BufferDescriptor static_upload;
-    filament::backend::BufferDescriptor start_upload;
-    filament::backend::BufferDescriptor end_upload;
-    filament::backend::BufferDescriptor support0_upload;
-    filament::backend::BufferDescriptor support1_upload;
-  };
-  filament::VertexBuffer *expected_vertices = nullptr;
-  filament::IndexBuffer *expected_indices = nullptr;
-  std::uint32_t expected_entity = 0u;
-  std::uint64_t expected_revision = 0u;
-  std::uint32_t slot_capacity = 0u;
-  std::uint32_t index_count = 0u;
-  std::vector<Range> ranges;
-  std::vector<OverlayPositionStreamBinding> bindings;
-  filament::backend::BufferDescriptor index_upload;
-  bool indices_changed = false;
-  bool consolidated = false;
-  bool consumed = false;
-};
-
-std::shared_ptr<OverlayProxyFactory::RetainedEditWireUpdate>
-OverlayProxyFactory::prepare_retained_edit_wire_update(
-    const OverlayRenderableProxy *existing,
-    std::span<const ViewportOverlayLine> slots,
-    std::span<const std::uint32_t> dirty_slots,
-    std::span<const std::uint32_t> active_indices,
-    std::span<const OverlayPositionStreamBinding> active_bindings,
-    bool indices_changed) {
-  QDR_PROFILE_FUNCTION();
-  constexpr std::size_t kMaximumSlots =
-      std::numeric_limits<std::uint32_t>::max() /
-      (4u * sizeof(RetainedEditWireVertex));
-  if (slots.empty() || slots.size() > kMaximumSlots ||
-      active_indices.empty() || active_indices.size() % 6u != 0u ||
-      active_indices.size() > slots.size() * 6u) {
-    return {};
-  }
-  const auto vertex_count = static_cast<std::uint32_t>(slots.size() * 4u);
-  if (existing != nullptr &&
-      (existing->kind != OverlayRenderableProxyKind::EditWire ||
-       existing->edit_wire_slot_capacity != slots.size() ||
-       existing->vertex_count != vertex_count ||
-       existing->vertex_buffer == nullptr || existing->index_buffer == nullptr ||
-       existing->material_instance == nullptr || existing->entity_id == 0u ||
-       existing->primary_position_stream4.size() != vertex_count ||
-       existing->secondary_position_stream4.size() != vertex_count ||
-       existing->support0_position_stream4.size() != vertex_count ||
-       existing->support1_position_stream4.size() != vertex_count ||
-       (!indices_changed && existing->index_count != active_indices.size()))) {
-    return {};
-  }
-  constexpr std::array<std::uint32_t, 6u> kQuadIndices{0u, 1u, 2u, 0u, 2u, 3u};
-  for (std::size_t index = 0u; index < active_indices.size(); index += 6u) {
-    const auto first = active_indices[index];
-    if (first % 4u != 0u || first >= vertex_count) {
-      return {};
-    }
-    for (std::size_t corner = 0u; corner < kQuadIndices.size(); ++corner) {
-      if (active_indices[index + corner] != first + kQuadIndices[corner]) {
-        return {};
-      }
-    }
-  }
-  for (std::size_t index = 0u; index < dirty_slots.size(); ++index) {
-    if (dirty_slots[index] >= slots.size() ||
-        (index != 0u && dirty_slots[index - 1u] >= dirty_slots[index])) {
-      return {};
-    }
-  }
-  const auto finite_position = [](QVec3 point) {
-    return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
-  };
-  const auto finite_line = [&finite_position](const ViewportOverlayLine &line) {
-    if (!finite_position(line.start) || !finite_position(line.end)) return false;
-    for (const auto &support : line.surface_support) {
-      if (support.vertex_id >= 0 && !finite_position(support.position)) return false;
-    }
-    return true;
-  };
-  if (existing == nullptr) {
-    for (const auto &line : slots) {
-      if (!finite_line(line)) return {};
-    }
-  } else {
-    for (const auto slot : dirty_slots) {
-      if (!finite_line(slots[slot])) return {};
-    }
-  }
-  for (const auto &binding : active_bindings) {
-    if (binding.object_id < 0 || binding.vertex_id < 0 ||
-        binding.first_vertex % 4u != 0u || binding.first_vertex >= vertex_count ||
-        binding.vertex_count != 4u) {
-      return {};
-    }
-    const auto &line = slots[binding.first_vertex / 4u];
-    QVec3 position;
-    int vertex_id = -1;
-    switch (binding.stream) {
-      case OverlayPositionStream::Primary:
-        position = line.start;
-        vertex_id = line.element.edge_a;
-        break;
-      case OverlayPositionStream::Secondary:
-        position = line.end;
-        vertex_id = line.element.edge_b;
-        break;
-      case OverlayPositionStream::Support0:
-      case OverlayPositionStream::Support1: {
-        const auto index = binding.stream == OverlayPositionStream::Support0 ? 0u : 1u;
-        const auto &support = line.surface_support[index];
-        position = support.vertex_id >= 0 ? support.position : line.start;
-        vertex_id = support.vertex_id >= 0 ? support.vertex_id : line.element.edge_a;
-        break;
-      }
-      default:
-        return {};
-    }
-    if (binding.object_id != line.element.object_id ||
-        binding.vertex_id != vertex_id ||
-        binding.base_position.x != position.x || binding.base_position.y != position.y ||
-        binding.base_position.z != position.z || binding.base_position.w != 1.0f) {
-      return {};
-    }
-  }
-
-  auto prepared = std::make_shared<RetainedEditWireUpdate>();
-  prepared->slot_capacity = static_cast<std::uint32_t>(slots.size());
-  prepared->index_count = static_cast<std::uint32_t>(active_indices.size());
-  prepared->indices_changed = existing == nullptr || indices_changed;
-  prepared->bindings.assign(active_bindings.begin(), active_bindings.end());
-  if (existing != nullptr) {
-    prepared->expected_vertices = existing->vertex_buffer;
-    prepared->expected_indices = existing->index_buffer;
-    prepared->expected_entity = existing->entity_id;
-    prepared->expected_revision = existing->edit_wire_update_revision;
-  }
-  if (prepared->indices_changed) {
-    prepared->index_upload = FilamentBufferDescriptorFactory::span(active_indices);
-  }
-  const auto append_range = [&](std::uint32_t first_slot, std::uint32_t end_slot,
-                                bool preserve_unchanged = false) {
-    auto &range = prepared->ranges.emplace_back();
-    range.first_vertex = first_slot * 4u;
-    const std::size_t count = static_cast<std::size_t>(end_slot - first_slot) * 4u;
-    std::vector<RetainedEditWireVertex> vertices;
-    vertices.reserve(count);
-    range.starts.reserve(count);
-    range.ends.reserve(count);
-    range.support0.reserve(count);
-    range.support1.reserve(count);
-    constexpr std::array<OverlayFloat4, 4u> kControls{{
-        {-1.0f, -1.0f, 0.0f, 0.0f}, {-1.0f, 1.0f, 1.0f, 0.0f},
-        {1.0f, 1.0f, 1.0f, 0.0f}, {1.0f, -1.0f, 0.0f, 0.0f}}};
-    auto dirty = std::lower_bound(dirty_slots.begin(), dirty_slots.end(), first_slot);
-    for (std::uint32_t slot = first_slot; slot < end_slot; ++slot) {
-      const auto &line = slots[slot];
-      const auto color = rgba8_srgb_to_linear(line.color);
-      const bool changed = !preserve_unchanged ||
-                           (dirty != dirty_slots.end() && *dirty == slot);
-      if (dirty != dirty_slots.end() && *dirty == slot) ++dirty;
-      for (std::size_t corner = 0u; corner < kControls.size(); ++corner) {
-        auto control = kControls[corner];
-        control.w = line.style_role == ViewportOverlayStyleRole::ActiveSelectionWire ? 1.0f : 0.0f;
-        vertices.push_back({{0.0f, 0.0f, 0.0f, 1.0f}, control, color});
-        const std::size_t vertex = static_cast<std::size_t>(slot) * 4u + corner;
-        // A consolidated gap may currently carry preview positions. Keep its
-        // exact accepted endpoints rather than resetting it to the frame base.
-        range.starts.push_back(changed
-            ? OverlayFloat4{line.start.x, line.start.y, line.start.z, 1.0f}
-            : existing->primary_position_stream4[vertex]);
-        range.ends.push_back(changed
-            ? OverlayFloat4{line.end.x, line.end.y, line.end.z, 1.0f}
-            : existing->secondary_position_stream4[vertex]);
-        const auto support_position = [&line](std::size_t index) {
-          const auto &support = line.surface_support[index];
-          const auto position = support.vertex_id >= 0 ? support.position : line.start;
-          return OverlayFloat4{position.x, position.y, position.z, 1.0f};
-        };
-        range.support0.push_back(changed ? support_position(0u)
-            : existing->support0_position_stream4[vertex]);
-        range.support1.push_back(changed ? support_position(1u)
-            : existing->support1_position_stream4[vertex]);
-      }
-    }
-    range.static_upload = FilamentBufferDescriptorFactory::vector(std::move(vertices));
-    range.start_upload = FilamentBufferDescriptorFactory::vector(range.starts);
-    range.end_upload = FilamentBufferDescriptorFactory::vector(range.ends);
-    range.support0_upload = FilamentBufferDescriptorFactory::vector(range.support0);
-    range.support1_upload = FilamentBufferDescriptorFactory::vector(range.support1);
-  };
-  if (existing == nullptr) {
-    append_range(0u, prepared->slot_capacity);
-  } else {
-    constexpr std::size_t kMaximumPartialRanges = 64u;
-    std::size_t range_count = 0u;
-    for (std::size_t index = 0u; index < dirty_slots.size(); ++index) {
-      range_count += index == 0u || dirty_slots[index - 1u] + 1u != dirty_slots[index];
-    }
-    if (range_count > kMaximumPartialRanges) {
-      // Each range emits five backend commands. A committed deformation can
-      // dirty tens of thousands of isolated edges; stage one bounded submission
-      // instead of overflowing Filament's fixed command arena before beginFrame.
-      prepared->consolidated = true;
-      append_range(dirty_slots.front(), dirty_slots.back() + 1u, true);
-    } else {
-      for (std::size_t index = 0u; index < dirty_slots.size();) {
-        const auto first = dirty_slots[index++];
-        auto end = first + 1u;
-        while (index < dirty_slots.size() && dirty_slots[index] == end) {
-          ++index;
-          ++end;
-        }
-        append_range(first, end);
-      }
-    }
-  }
-  return prepared;
-}
 
 OverlayRenderableProxy OverlayProxyFactory::create_retained_edit_wire_proxy(
     const OverlayEditWireBatch &presentation, std::uint8_t layer_mask,
@@ -996,12 +610,12 @@ OverlayRenderableProxy OverlayProxyFactory::create_retained_edit_wire_proxy(
       .bufferType(filament::IndexBuffer::IndexType::UINT).build(*engine_);
   if (proxy.index_buffer == nullptr) return {};
   auto &range = prepared->ranges.front();
-  proxy.vertex_buffer->setBufferAt(*engine_, 0u, std::move(range.static_upload));
-  proxy.vertex_buffer->setBufferAt(*engine_, 1u, std::move(range.start_upload));
-  proxy.vertex_buffer->setBufferAt(*engine_, 2u, std::move(range.end_upload));
-  proxy.vertex_buffer->setBufferAt(*engine_, 3u, std::move(range.support0_upload));
-  proxy.vertex_buffer->setBufferAt(*engine_, 4u, std::move(range.support1_upload));
-  proxy.index_buffer->setBuffer(*engine_, std::move(prepared->index_upload));
+  proxy.vertex_buffer->setBufferAt(*engine_, 0u, consume_retained_edit_wire_upload(range.static_upload));
+  proxy.vertex_buffer->setBufferAt(*engine_, 1u, consume_retained_edit_wire_upload(range.start_upload));
+  proxy.vertex_buffer->setBufferAt(*engine_, 2u, consume_retained_edit_wire_upload(range.end_upload));
+  proxy.vertex_buffer->setBufferAt(*engine_, 3u, consume_retained_edit_wire_upload(range.support0_upload));
+  proxy.vertex_buffer->setBufferAt(*engine_, 4u, consume_retained_edit_wire_upload(range.support1_upload));
+  proxy.index_buffer->setBuffer(*engine_, consume_retained_edit_wire_upload(prepared->index_upload));
   prepared->consumed = true;
   filament::RenderableManager::Builder renderable_builder(compose ? 3u : 1u);
   renderable_builder
@@ -1074,20 +688,20 @@ bool OverlayProxyFactory::update_retained_edit_wire_proxy(
               proxy.support0_position_stream4.begin() + range.first_vertex);
     std::copy(range.support1.begin(), range.support1.end(),
               proxy.support1_position_stream4.begin() + range.first_vertex);
-    proxy.vertex_buffer->setBufferAt(*engine_, 0u, std::move(range.static_upload),
+    proxy.vertex_buffer->setBufferAt(*engine_, 0u, consume_retained_edit_wire_upload(range.static_upload),
         range.first_vertex * sizeof(RetainedEditWireVertex));
-    proxy.vertex_buffer->setBufferAt(*engine_, 1u, std::move(range.start_upload),
+    proxy.vertex_buffer->setBufferAt(*engine_, 1u, consume_retained_edit_wire_upload(range.start_upload),
         range.first_vertex * sizeof(OverlayFloat4));
-    proxy.vertex_buffer->setBufferAt(*engine_, 2u, std::move(range.end_upload),
+    proxy.vertex_buffer->setBufferAt(*engine_, 2u, consume_retained_edit_wire_upload(range.end_upload),
         range.first_vertex * sizeof(OverlayFloat4));
-    proxy.vertex_buffer->setBufferAt(*engine_, 3u, std::move(range.support0_upload),
+    proxy.vertex_buffer->setBufferAt(*engine_, 3u, consume_retained_edit_wire_upload(range.support0_upload),
         range.first_vertex * sizeof(OverlayFloat4));
-    proxy.vertex_buffer->setBufferAt(*engine_, 4u, std::move(range.support1_upload),
+    proxy.vertex_buffer->setBufferAt(*engine_, 4u, consume_retained_edit_wire_upload(range.support1_upload),
         range.first_vertex * sizeof(OverlayFloat4));
     upload_stats_.retained_edit_wire_uploaded_slot_count += range.starts.size() / 4u;
   }
   if (prepared->indices_changed) {
-    proxy.index_buffer->setBuffer(*engine_, std::move(prepared->index_upload));
+    proxy.index_buffer->setBuffer(*engine_, consume_retained_edit_wire_upload(prepared->index_upload));
     ++upload_stats_.index_upload_count;
   }
   if (proxy.index_count != prepared->index_count) {
@@ -2321,11 +1935,9 @@ void OverlayProxyFactory::load_icon_textures(
   if (engine_ == nullptr) {
     return;
   }
-  const std::vector<std::byte> point_light_pixels =
-      make_point_light_icon_rgba();
+  const auto& image=overlay_icon_image(ViewportOverlayIconKind::PointLight);
   point_light_icon_texture_ = load_rgba_texture(
-      *engine_, point_light_pixels, kPointLightIconTextureExtent,
-      kPointLightIconTextureExtent,
+      *engine_, *image.rgba8, image.width, image.height,
       PngTextureLoadOptions{
           .color_space = PngTextureColorSpace::Srgb,
           .flip_y = false,

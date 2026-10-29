@@ -10,6 +10,10 @@
 
 namespace quader {
 
+// A native host may select its application directory before creating services.
+// Quader's original default remains unchanged when no override is supplied.
+void initialize_user_config_directory(std::filesystem::path directory);
+
 [[nodiscard]] std::filesystem::path
 quader_user_config_directory(const std::filesystem::path &executable_dir);
 

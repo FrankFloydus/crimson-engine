@@ -1,0 +1,132 @@
+{
+  "graph": {
+    "links": [
+      {
+        "fromNode": 16,
+        "fromPin": 1,
+        "id": 18,
+        "toNode": 1,
+        "toPin": 10
+      },
+      {
+        "fromNode": 16,
+        "fromPin": 5,
+        "id": 19,
+        "toNode": 17,
+        "toPin": 8
+      },
+      {
+        "fromNode": 15,
+        "fromPin": 5,
+        "id": 20,
+        "toNode": 17,
+        "toPin": 9
+      },
+      {
+        "fromNode": 17,
+        "fromPin": 0,
+        "id": 21,
+        "toNode": 1,
+        "toPin": 15
+      }
+    ],
+    "nextLinkId": 22,
+    "nextNodeId": 18,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5440000295639038,
+          "baseColor": [
+            1.0,
+            0.3035341799259186,
+            0.0
+          ],
+          "blend": 2,
+          "doubleSided": false,
+          "emission": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "metallic": 0.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "roughness": 1.0,
+          "shading": 1,
+          "specular": 0.5
+        },
+        "position": [
+          179.0,
+          145.0
+        ]
+      },
+      {
+        "id": 15,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -477.66668701171875,
+          379.3333740234375
+        ],
+        "texture": {
+          "image": "assets/textures/smoke_07.png",
+          "normalStrength": 1.0,
+          "role": 0,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "id": 16,
+        "kind": 7,
+        "name": "Particle Color",
+        "position": [
+          -463.0,
+          140.60000610351563
+        ]
+      },
+      {
+        "id": 17,
+        "kind": 5,
+        "left": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "name": "Multiply",
+        "position": [
+          -93.75,
+          321.75
+        ],
+        "right": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    ],
+    "version": 3
+  },
+  "id": "assets/materials/4c7d9544b858-1.crimson-material",
+  "name": "New Material 2",
+  "originModel": "",
+  "type": "crimson-material",
+  "version": 6
+}

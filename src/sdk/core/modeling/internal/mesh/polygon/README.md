@@ -119,6 +119,18 @@ This statement covers that query only; it does not establish formal clean-room o
 publication and history. Preserve original triangle corners and unrelated junctions; do not
 replace the operation's cleanup with generic UV-redundancy filtering.
 
+Explicit vertex dissolve removes selected degree-two corners regardless of angle. Original
+junction vertices nominate their incident interior seams; the owner assembles connected face
+regions before removing selected boundary corners. Original degree-two vertices do not join
+their incident faces. Surviving positions, corner UVs and face attributes remain with their
+existing donors, and new edge normal modes follow the merged boundary before corner collapse.
+The operation rejects holes, incomplete triangulation and fewer than three surviving corners
+atomically rather than deleting faces. Unrelated authored geometry and loose vertices remain
+untouched. The region implementation was independently authored through Quader's boundary and
+attribute owners. Coverage lives in `QdrDocumentOperationDissolveVerticesTests`, the saved-room
+fixture in [SDK dissolve tests](../../../../../../../tests/sdk/dissolve_saved_scene_tests.cpp),
+and the native `ModelingComponentMergeTests` command/publication/history regressions.
+
 Vertex merge repairs face boundaries in `quader_poly_document_hull_plane_helpers.cpp` using
 an explicit worklist of original corner indices. Nonadjacent merged corners retain separate
 oriented boundary arcs; emitted faces retain descendant order and the first local corner's UV

@@ -14,3 +14,10 @@ build/
 *.suo
 *.log
 quader_ui.ini
+/captures/
+/assets/cache/
+/.crimson/cache/
+/.crimson/.staging-*/
+/.crimson/.resource-transactions/
+/engine-core/assets/cache/
+/engine-core/.crimson/cache/

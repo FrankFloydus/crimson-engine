@@ -1,0 +1,19 @@
+{
+  "dependencies": [
+    {
+      "index": 0,
+      "kind": "buffer",
+      "path": "buffers/0.bin",
+      "source": "GLB binary chunk"
+    }
+  ],
+  "document": "model.gltf",
+  "format": "GLB",
+  "importIdentity": {
+    "sha256": "adc93cf89a75a38768180e61ea12cadbc4032650976d33a03024dbbd0b84e1f0",
+    "version": 1
+  },
+  "name": "Mannequin_F",
+  "original": "source.glb",
+  "version": 1
+}

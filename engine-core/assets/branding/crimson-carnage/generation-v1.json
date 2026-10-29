@@ -1,0 +1,18 @@
+{
+  "tool": "built-in image_gen",
+  "date": "2026-10-25",
+  "game": "Crimson Carnage",
+  "outputs": [
+    {
+      "file": "crimson-carnage-wordmark-v1.png",
+      "purpose": "Game title logo for videos, thumbnails and branding",
+      "prompt": "Use case: logo-brand.\nAsset type: finished square game logo for a YouTube channel avatar and video branding.\nPrimary request: create an original, striking logo for \"Crimson Carnage\", an independent fast first-person action game being developed with Crimson Engine. Convey the dark, aggressive energy of an old-school FPS with a gothic-industrial edge.\nScene/backdrop: solid near-black background, very restrained texture, strong separation around the logo.\nSubject and typography: a compact, confident stacked wordmark, \"CRIMSON\" above \"CARNAGE\", custom heavy angular lettering with sharp cuts and carefully balanced spacing. A small integrated abstract CC emblem may crown the wordmark, visually belonging to the same custom lettering rather than a separate decorative illustration. Make the game title the hero.\nStyle/medium: polished professional game-brand graphic with crisp vector-like edges, bold silhouette, a small amount of distressed metal/ink texture confined inside the letterforms; strong visual hierarchy, excellent readability.\nComposition/framing: square canvas, centered, compact layout, generous outer padding. Keep the full wordmark and any emblem within a central circular safe area so a YouTube avatar crop will not cut the design. Make the mark occupy the canvas boldly and remain recognizable at small sizes. Single finished logo, no concept sheet or mockup.\nColor palette: deep crimson red and pale steel/ivory against charcoal-black; avoid an overly glossy 3D finish.\nText (verbatim): \"CRIMSON CARNAGE\". Exactly these two words, clearly spelled, uppercase, each word once. No taglines, no engine name, no extra text.\nConstraints: original design, clean controlled geometry and negative space; no existing game logos, no YouTube play-button branding, no scenery, no characters, no weapons, no watermarks. Deliver a complete usable square logo image."
+    },
+    {
+      "file": "crimson-carnage-youtube-avatar-v1.png",
+      "purpose": "Matching CC monogram for YouTube profile avatar",
+      "reference": "crimson-carnage-wordmark-v1.png",
+      "prompt": "Use case: precise-object-edit / logo-brand.\nAsset type: matching square YouTube channel avatar for Crimson Carnage.\nEdit target: the supplied generated Crimson Carnage logo.\nCreate the avatar companion of this exact brand identity. Keep the existing original angular interlocking CC emblem, its ivory/steel face, crimson inner edging, restrained worn material finish, and broken crimson circular frame. Remove the large CRIMSON CARNAGE wordmark completely. The only lettering in this avatar must be the two initials CC in the emblem.\nRecompose the emblem as one centered compact bold mark against the same solid near-black background. Enlarge the CC emblem to be the dominant silhouette, simplify tiny incidental distress and small decorative fragments for small-size readability. Keep any outer spear tips short and integrated. All visible art must fit fully inside a circle centered on the canvas with diameter 78% of the square image width, leaving clean black breathing room so a circular profile-picture crop cannot clip anything. Crisp edges, high contrast, balanced negative space. Preserve the source logo's visual identity and exact palette. No additional text, no taglines, no YouTube play button, no mockup, no scene, no watermark. Square finished avatar."
+    }
+  ]
+}

@@ -4,7 +4,11 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
+#if defined(QUADER_BUILD_OVERLAY_PLANNERS_ONLY)
+#include "render/overlay/scene_wireframe_overlay_plan.hpp"
+#else
 #include "render/overlay/scene_wireframe_overlay_cache.hpp"
+#endif
 
 #include "core/color_space.hpp"
 #include "assets/mesh_geometry_projection.hpp"
@@ -293,6 +297,7 @@ SceneWireframeBatchPreparation prepare_wire_batches(
   return prepared;
 }
 
+#if !defined(QUADER_BUILD_OVERLAY_PLANNERS_ONLY)
 InstancedWireGeometryInput wire_geometry_input(
     const RenderOverlayMeshSnapshot &mesh,
     const ViewportPersistentOverlayStyleSnapshot &style) {
@@ -379,9 +384,11 @@ std::uint8_t scene_wire_batch_layer_mask(
                                          wire_layer_mask(mesh, snapshot));
 }
 
+#endif
 } // namespace
 
 /// Couples a full-scene wire batch plan with its source mesh records.
+#if !defined(QUADER_BUILD_OVERLAY_PLANNERS_ONLY)
 struct SceneWireframeOverlayCache::PreparedPlan final {
   SceneWireframeOverlayBatchPlan planned;
   std::vector<const RenderOverlayMeshSnapshot *> records;
@@ -389,6 +396,7 @@ struct SceneWireframeOverlayCache::PreparedPlan final {
 
 SceneWireframeOverlayCache::SceneWireframeOverlayCache() = default;
 
+#endif
 SceneWireframeOverlayBatchPlan plan_scene_wireframe_overlay_batches(
     const RenderOverlaySceneWireframeSnapshot &snapshot,
     std::size_t max_instances_per_chunk,
@@ -459,6 +467,7 @@ bool scene_wireframe_overlay_mesh_inputs_match(
   return true;
 }
 
+#if !defined(QUADER_BUILD_OVERLAY_PLANNERS_ONLY)
 SceneWireframeOverlayCache::~SceneWireframeOverlayCache() { shutdown(); }
 
 void SceneWireframeOverlayCache::initialize(
@@ -986,4 +995,5 @@ void SceneWireframeOverlayCache::set_all_layer_masks(
   layer_masks_forced_hidden_ = layer_mask == 0u;
 }
 
+#endif
 } // namespace quader

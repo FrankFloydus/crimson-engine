@@ -9,6 +9,8 @@
 #endif
 
 #include "ui/qt_vulkan_composition_widget.hpp"
+#include "ui/qt_d3d11_external_scope.hpp"
+#include "render/crimson/crimson_copy_identity.hpp"
 
 #include "core/logger.hpp"
 
@@ -24,6 +26,8 @@
 #include <QtWidgets/private/qrhiwidget_p.h>
 #include <QtGui/private/qrhi_p.h>
 #include <QtGui/private/qrhivulkan_p.h>
+#include <QtGui/private/qrhid3d12_p.h>
+#include <QtGui/private/qrhid3d11_p.h>
 
 #include "render/render_host.hpp"
 
@@ -58,6 +62,18 @@ QRhiVulkan *vulkan_implementation(QRhi *rhi) {
       QRhiResourceUpdateBatchPrivate::get(batch)->rhi);
   batch->release();
   return implementation;
+}
+
+QRhiD3D12 *d3d12_implementation(QRhi *rhi) {
+  if (rhi == nullptr || rhi->backend() != QRhi::D3D12) return nullptr;
+  auto *batch = rhi->nextResourceUpdateBatch();
+  auto *implementation = static_cast<QRhiD3D12 *>(QRhiResourceUpdateBatchPrivate::get(batch)->rhi);
+  batch->release();
+  return implementation;
+}
+QRhiD3D11 *d3d11_implementation(QRhi *rhi){
+  if(!rhi||rhi->backend()!=QRhi::D3D11)return nullptr;auto* batch=rhi->nextResourceUpdateBatch();
+  auto* implementation=static_cast<QRhiD3D11*>(QRhiResourceUpdateBatchPrivate::get(batch)->rhi);batch->release();return implementation;
 }
 
 std::shared_ptr<const RenderVulkanEnabledCapabilities>
@@ -117,12 +133,13 @@ VkPresentModeKHR swap_chain_present_mode(const QVkSwapChain &swap_chain) {
 
 } // namespace
 
-QtVulkanCompositionWidget::QtVulkanCompositionWidget(QWidget *parent)
+QtVulkanCompositionWidget::QtVulkanCompositionWidget(QWidget *parent, RenderCompositionApi api)
     : QRhiWidget(*new QtVulkanCompositionWidgetPrivate, parent) {
   auto *widget_private = static_cast<QtVulkanCompositionWidgetPrivate *>(
       QWidgetPrivate::get(this));
   widget_private->before_composition = [this] { begin_composition(); };
-  setApi(Api::Vulkan);
+  destination_generation_=next_crimson_copy_identity();
+  setApi(api==RenderCompositionApi::Direct3D11?Api::Direct3D11:api==RenderCompositionApi::Direct3D12?Api::Direct3D12:Api::Vulkan);
   setSampleCount(1);
   setColorBufferFormat(TextureFormat::RGBA8);
   setAutoRenderTarget(false);
@@ -185,6 +202,8 @@ VkPresentModeKHR QtVulkanCompositionWidget::resolved_present_mode() const {
 }
 
 void QtVulkanCompositionWidget::resizeEvent(QResizeEvent *event) {
+  destination_generation_=next_crimson_copy_identity();
+  if(shared_context_&&shared_context_->api==RenderCompositionApi::Direct3D11&&vsync_request_configured_)vsync_change_pending_=true;
   // Qt 6.10.3's resize handler only sets noSize and paints synchronously.
   // Queue the paint after layout settles; the normal QRhiWidget paint still
   // resizes textures and initializes resources before rendering.
@@ -223,6 +242,32 @@ void QtVulkanCompositionWidget::paintEvent(QPaintEvent *event) {
 
 void QtVulkanCompositionWidget::initialize(QRhiCommandBuffer *) {
   QRhi *current_rhi = rhi();
+  if(current_rhi&&current_rhi->backend()==QRhi::D3D11){
+    const auto* native=static_cast<const QRhiD3D11NativeHandles*>(current_rhi->nativeHandles());
+    if(!native||!native->dev||!native->context){LOG_ERROR("Qt viewport composition has no valid Direct3D 11 device and immediate context");return;}
+    const bool changed=initialized_rhi_!=current_rhi||!shared_context_||shared_context_->d3d11_device!=native->dev||shared_context_->d3d11_context!=native->context;
+    if(shared_context_&&changed)releaseResources();initialized_rhi_=current_rhi;shared_context_=RenderVulkanSharedContext{};shared_context_->api=RenderCompositionApi::Direct3D11;shared_context_->d3d11_device=native->dev;shared_context_->d3d11_context=native->context;
+    reset_empty_render_target();if(changed&&vsync_request_configured_)vsync_change_pending_=true;return;
+  }
+  if (current_rhi != nullptr && current_rhi->backend() == QRhi::D3D12) {
+    const auto *native = static_cast<const QRhiD3D12NativeHandles *>(current_rhi->nativeHandles());
+    if (native == nullptr || native->dev == nullptr || native->commandQueue == nullptr) {
+      LOG_ERROR("Qt viewport composition has no valid Direct3D 12 device and queue");
+      return;
+    }
+    const bool changed = initialized_rhi_ != current_rhi || !shared_context_
+        || shared_context_->d3d12_device != native->dev
+        || shared_context_->d3d12_queue != native->commandQueue;
+    if (shared_context_ && changed) releaseResources();
+    initialized_rhi_ = current_rhi;
+    shared_context_ = RenderVulkanSharedContext{};
+    shared_context_->api = RenderCompositionApi::Direct3D12;
+    shared_context_->d3d12_device = native->dev;
+    shared_context_->d3d12_queue = native->commandQueue;
+    reset_empty_render_target();
+    if (changed && vsync_request_configured_) vsync_change_pending_ = true;
+    return;
+  }
   if (current_rhi == nullptr || current_rhi->backend() != QRhi::Vulkan) {
     LOG_ERROR("Qt viewport composition requires the Vulkan RHI backend");
     return;
@@ -264,21 +309,52 @@ void QtVulkanCompositionWidget::render(QRhiCommandBuffer *command_buffer) {
   if (!shared_context_ || texture == nullptr) {
     return;
   }
+  std::optional<QtD3D11ExternalScope> direct11;
+  if(shared_context_->api==RenderCompositionApi::Direct3D11){
+    direct11.emplace(*command_buffer,render_system_,shared_context_->d3d11_context);
+    if(direct11->entered()&&render_system_&&render_system_->initialized())(void)render_system_->submit_prepared_offscreen_work();
+  }
   if (render_callback_) {
     const QRhiTexture::NativeTexture native = texture->nativeTexture();
     const QSize size = texture->pixelSize();
-    const RenderVulkanCompositionTarget target{
+    if(observed_color_texture_!=texture||observed_native_object_!=native.object||observed_pixel_size_!=size) {
+      destination_generation_=next_crimson_copy_identity();observed_color_texture_=texture;
+      observed_native_object_=native.object;observed_pixel_size_=size;
+    }
+    RenderVulkanCompositionTarget target{
         .image = VkImage(native.object),
         .width = static_cast<std::uint32_t>(size.width()),
         .height = static_cast<std::uint32_t>(size.height()),
         .old_layout = static_cast<VkImageLayout>(native.layout)};
+    target.destination_generation=destination_generation_;
+    if(shared_context_->api==RenderCompositionApi::Direct3D11){target.api=RenderCompositionApi::Direct3D11;target.image=VK_NULL_HANDLE;target.d3d11_texture=reinterpret_cast<void*>(static_cast<std::uintptr_t>(native.object));target.d3d11_context=shared_context_->d3d11_context;}
+    if (shared_context_->api == RenderCompositionApi::Direct3D12) {
+      target.api = RenderCompositionApi::Direct3D12;
+      target.image = VK_NULL_HANDLE;
+      target.d3d12_resource = reinterpret_cast<void *>(static_cast<std::uintptr_t>(native.object));
+      target.d3d12_queue = shared_context_->d3d12_queue;
+      target.d3d12_state = static_cast<std::uint32_t>(native.layout);
+    }
     const bool submitted = render_callback_(target);
     finish_external_submission();
     if (submitted) {
-      texture->setNativeLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+      accepted_destination_generation_=target.destination_generation;
+      texture->setNativeLayout(target.api==RenderCompositionApi::Direct3D11?0:target.api == RenderCompositionApi::Direct3D12
+          ? quint64(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
+          : quint64(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+      return;
+    }
+    update();
+    if(accepted_destination_generation_==target.destination_generation) {
+      // A busy bounded copy pool or a pending material is not a new image.
+      // Keep this allocation's accepted pixels; retry on the next Qt frame.
+      // Native health was checked above before any retained image is reused.
+      texture->setNativeLayout(target.api==RenderCompositionApi::Direct3D11?0:target.api==RenderCompositionApi::Direct3D12
+          ?quint64(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE):quint64(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
       return;
     }
   }
+  direct11.reset();
   // The persistent bootstrap anchor is transparent. A pane that cannot yet
   // submit gets a valid palette-colored target instead of uninitialized pixels.
   if (ensure_empty_render_target()) {
@@ -291,6 +367,7 @@ void QtVulkanCompositionWidget::render(QRhiCommandBuffer *command_buffer) {
 }
 
 void QtVulkanCompositionWidget::releaseResources() {
+  destination_generation_=next_crimson_copy_identity();accepted_destination_generation_=0;observed_color_texture_=nullptr;observed_native_object_=0;observed_pixel_size_={};
   if (shared_context_) {
     if (release_callback_) {
       release_callback_();
@@ -309,10 +386,10 @@ void QtVulkanCompositionWidget::finish_external_submission() {
   if (render_system_->finish_external_queue_submission()) {
     return;
   }
-  LOG_ERROR("Unable to hand the Vulkan queue from the renderer to Qt composition");
+  LOG_ERROR("Unable to hand the native queue from the renderer to Qt composition");
   // beginCompose has no cancellation result. Continuing would permit concurrent
   // host access to the shared Vulkan queue after an unrecoverable handoff error.
-  qFatal("Qt Vulkan composition stopped: renderer shared-queue CPU handoff failed");
+  qFatal("Qt composition stopped: renderer shared-queue CPU handoff failed");
 }
 
 void QtVulkanCompositionWidget::begin_composition() {
@@ -338,6 +415,43 @@ void QtVulkanCompositionWidget::apply_pending_vsync() {
     return;
   }
   update_requested_surface_format();
+  if(auto* implementation=d3d11_implementation(initialized_rhi_)){
+    if(auto* swapchain=implementation->contextState.currentSwapChain){
+      if(swapchain->window!=window()->windowHandle())return;
+      // Present's interval can change without rebuilding the live backing store.
+      // Keep the creation flags and frame-latency object owned by Qt intact.
+      swapchain->swapInterval=vsync_requested_?1:0;
+      resolved_present_mode_=vsync_requested_?VK_PRESENT_MODE_FIFO_KHR:VK_PRESENT_MODE_IMMEDIATE_KHR;vsync_change_pending_=false;
+      if(render_system_)render_system_->set_composited_present_mode(resolved_present_mode_);
+    }else if(!window()->isVisible()){
+      resolved_present_mode_=vsync_requested_?VK_PRESENT_MODE_FIFO_KHR:VK_PRESENT_MODE_IMMEDIATE_KHR;
+    }
+    return;
+  }
+  if (auto *implementation = d3d12_implementation(initialized_rhi_)) {
+    if (initialized_rhi_->isRecordingFrame()) return;
+    QWindow *root_window = window()->windowHandle();
+    for (auto *swap_chain : implementation->swapchains) {
+      if (swap_chain->window != root_window) continue;
+      auto flags = swap_chain->flags();
+      flags.setFlag(QRhiSwapChain::NoVSync, !vsync_requested_);
+      if (flags != swap_chain->flags()) {
+        finish_external_submission();
+        const auto previous = swap_chain->flags();
+        swap_chain->setFlags(flags);
+        if (!swap_chain->createOrResize()) {
+          swap_chain->setFlags(previous);
+          LOG_ERROR("Unable to update Qt Direct3D 12 composition VSync");
+          return;
+        }
+      }
+      resolved_present_mode_ = vsync_requested_ ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_IMMEDIATE_KHR;
+      vsync_change_pending_ = false;
+      if (render_system_) render_system_->set_composited_present_mode(resolved_present_mode_);
+      return;
+    }
+    return;
+  }
   QRhiVulkan *implementation = vulkan_implementation(initialized_rhi_);
   if (implementation == nullptr || implementation->inFrame) {
     return;

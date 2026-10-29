@@ -729,8 +729,8 @@ bool qt_event_target_belongs_to_tool_settings(
          qt_object_belongs_to_face_texture_panel(target, global_position);
 }
 
-QtViewportPanel::QtViewportPanel(QWidget *parent, bool composed)
-    : QWidget(parent), composed_(composed), delete_popup_presenter_(*this) {
+QtViewportPanel::QtViewportPanel(QWidget *parent, bool composed, RenderCompositionApi api)
+    : QWidget(parent), composed_(composed), composition_api_(api), delete_popup_presenter_(*this) {
   // Native panes retain their clipping hierarchy without promoting workspace
   // and central-stack widgets into additional windows resized with every dock.
   setAttribute(Qt::WA_DontCreateNativeAncestors);
@@ -2571,7 +2571,7 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
   pane_state.surface->installEventFilter(this);
   if (composed_) {
     pane_state.surface->QObject::setParent(pane_state.frame);
-    auto *host = new QtVulkanCompositionWidget(pane_state.frame);
+    auto *host = new QtVulkanCompositionWidget(pane_state.frame, composition_api_);
     pane_state.surface_container = host;
     const QPointer<QtViewportSurface> surface = pane_state.surface;
     host->set_prepare_callback([this]() { return prepare_composed_frame(); });

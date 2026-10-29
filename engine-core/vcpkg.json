@@ -1,0 +1,28 @@
+{
+  "name": "crimson-engine",
+  "version-string": "0.1.0",
+  "builtin-baseline": "d0c191d142b7bc048141ddfb618aa9ae5dba0233",
+  "dependencies": [
+    "sdl3",
+    { "name": "bgfx", "features": ["tools"] },
+    "vulkan-headers",
+    { "name": "imgui", "features": ["sdl3-binding", "docking-experimental"] },
+    "nlohmann-json",
+    { "name": "stduuid", "features": ["system-gen"] },
+    "lodepng",
+    "assimp",
+    "mikktspace",
+    "meshoptimizer",
+    "glm",
+    "geometry-central",
+    "entt",
+    "joltphysics",
+    "recastnavigation",
+    "imguizmo",
+    "implot"
+  ],
+  "overrides": [
+    { "name": "bgfx", "version": "1.129.8940-496", "port-version": 17 },
+    { "name": "tracy", "version": "0.14.1" }
+  ]
+}

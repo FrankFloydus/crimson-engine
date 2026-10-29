@@ -1,0 +1,197 @@
+{
+  "defaultSeed": "1",
+  "emitters": [
+    {
+      "acceleration": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "appearanceTracks": {
+        "color": {
+          "gradient": {
+            "interpolation": "linear",
+            "stops": [
+              {
+                "age": 0.0,
+                "color": [
+                  3.450000047683716,
+                  1.2289999723434448,
+                  0.0,
+                  0.0
+                ],
+                "id": "1241f23ad7e"
+              },
+              {
+                "age": 0.22938144207000732,
+                "color": [
+                  5.300000190734863,
+                  0.8790000081062317,
+                  0.0,
+                  1.0
+                ],
+                "id": "1"
+              },
+              {
+                "age": 0.7628865838050842,
+                "color": [
+                  0.9719732403755188,
+                  0.11156110465526581,
+                  0.0,
+                  0.2409999966621399
+                ],
+                "id": "2"
+              },
+              {
+                "age": 1.0,
+                "color": [
+                  0.0,
+                  0.2055537849664688,
+                  0.9719732403755188,
+                  0.0
+                ],
+                "id": "11941879de9"
+              }
+            ]
+          },
+          "mode": "gradient"
+        },
+        "intensity": {
+          "curve": {
+            "interpolation": "linear",
+            "keys": []
+          },
+          "mode": "constant",
+          "range": null
+        },
+        "rotation": {
+          "curve": {
+            "interpolation": "linear",
+            "keys": []
+          },
+          "mode": "random-range",
+          "range": {
+            "maximum": 360.0,
+            "minimum": -360.0
+          }
+        },
+        "size": {
+          "curve": {
+            "interpolation": "linear",
+            "keys": [
+              {
+                "age": 0.0,
+                "id": "1",
+                "value": 0.046108391135931015
+              },
+              {
+                "age": 0.5,
+                "id": "2",
+                "value": 0.23952145874500275
+              },
+              {
+                "age": 1.0,
+                "id": "dc94841d88",
+                "value": 0.03992024436593056
+              }
+            ]
+          },
+          "mode": "curve",
+          "range": {
+            "maximum": 0.1599999964237213,
+            "minimum": 0.0
+          }
+        }
+      },
+      "behaviors": {
+        "acceleration": {
+          "enabled": true,
+          "present": false
+        },
+        "drag": {
+          "enabled": true,
+          "present": false
+        },
+        "gravity": {
+          "enabled": true,
+          "present": false
+        }
+      },
+      "billboardMode": "enabled",
+      "boxSize": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "capacity": 256,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "colorSpace": "linear-hdr",
+      "direction": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "directionFlatness": 0.0,
+      "directionMode": "random-cone",
+      "directionSpread": 13.199999809265137,
+      "drag": 1.0,
+      "enabled": true,
+      "explosiveness": 0.0,
+      "gravity": [
+        0.0,
+        -9.8100004196167,
+        0.0
+      ],
+      "id": "1",
+      "initialVelocity": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "intensity": 1.5499999523162842,
+      "lifetime": 0.8899999856948853,
+      "lifetimeRange": {
+        "enabled": false,
+        "maximum": 1.25,
+        "minimum": 1.25
+      },
+      "material": "f15bc6f0-79a8-43d4-aac5-694a69978946",
+      "name": "Emitter 1",
+      "opacity": 1.0,
+      "orientation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "radius": 0.25,
+      "rate": 41.0,
+      "renderer": "sprite",
+      "rotation": 0.0,
+      "shape": "point",
+      "size": 0.07999999821186066,
+      "space": "world",
+      "speed": 0.0,
+      "speedRange": {
+        "enabled": true,
+        "maximum": 0.6899999976158142,
+        "minimum": 0.3499999940395355
+      },
+      "timing": {
+        "delay": 0.0,
+        "duration": 1.0,
+        "finiteDuration": false,
+        "loop": false
+      },
+      "velocityMode": "direction-speed"
+    }
+  ],
+  "id": "44942436-f974-4025-8e63-4f1e14a79d11",
+  "name": "New Particle Effect 3",
+  "preprocessSeconds": 2.8499999046325684,
+  "type": "crimson-particle",
+  "version": 9
+}

@@ -19,6 +19,19 @@
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "platform/platform_file_dialog.hpp"
 #include "assets/material_document.hpp"
+#if defined(CRIMSON_ENGINE_APPLICATION)
+#include "integration/LevelSession.h"
+#include "integration/LevelPanels.h"
+#include "integration/LevelProjectState.h"
+#include "integration/profiling/LevelProfiling.h"
+#include "profiling/EngineProfile.h"
+#include "profiling/FrameProfile.h"
+#include "resources/ResourceManager.h"
+#include "crimson-renderer/Renderer.h"
+#include "editor/EditorPreferences.h"
+#include "core/user_config_paths.hpp"
+#include <QMessageBox>
+#endif
 
 #include <QApplication>
 #include <QEvent>
@@ -38,6 +51,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <stdexcept>
 #include <system_error>
 #include <unordered_map>
 #include <utility>
@@ -298,6 +312,21 @@ bool App::initialize(QApplication &application,
   placement_screen_.clear();
 
   options_ = options;
+#if defined(CRIMSON_ENGINE_APPLICATION)
+  engine_root_selection_path_=quader_user_config_directory(executable_dir_)/"engine-project.json";
+  requested_engine_root_=options.engine_project_root;
+  engine_root_pinned_=!requested_engine_root_.empty();
+  if(requested_engine_root_.empty())if(const auto saved=crimson::integration::readLevelProjectSelection(engine_root_selection_path_)){requested_engine_root_=*saved;engine_root_pinned_=true;}
+  if(requested_engine_root_.empty())if(const auto found=crimson::integration::findLevelProjectRoot(std::filesystem::current_path()))requested_engine_root_=*found;
+  if(requested_engine_root_.empty())if(const auto found=crimson::integration::findLevelProjectRoot(executable_dir_))requested_engine_root_=*found;
+#if defined(CRIMSON_ENGINE_DEFAULT_PROJECT_ROOT)
+  if(requested_engine_root_.empty())if(const auto found=crimson::integration::findLevelProjectRoot(CRIMSON_ENGINE_DEFAULT_PROJECT_ROOT))requested_engine_root_=*found;
+#endif
+  rejected_engine_root_.clear();
+  if(!engine_profile_){crimson::profiling::EngineProfileOptions profile;profile.projectRoot=requested_engine_root_;profile.toolsDirectory=executable_dir_/"profiling";profile.outputDirectory=options.profile_output;profile.mode=options.profile_mode;profile.durationSeconds=options.profile_duration;engine_profile_=std::make_unique<crimson::profiling::EngineProfile>(profile);}
+  if(!options.frame_profile.empty())frame_profile_=std::make_unique<crimson::profiling::FrameProfile>(options.frame_profile);
+  profile_frame_=0;profile_backend_ready_=false;
+#endif
   if (!render_system_) {
     render_system_ = create_app_render_host();
   }
@@ -307,6 +336,11 @@ bool App::initialize(QApplication &application,
     return false;
   }
   shell_replacement_pending_ = false;
+#if defined(CRIMSON_ENGINE_APPLICATION)
+  const crimson::EditorPreferences startup_preferences;
+  const auto native_api=options.composition_api.value_or(startup_preferences.values().graphicsBackend==crimson::GraphicsBackend::Direct3D11?RenderCompositionApi::Direct3D11:RenderCompositionApi::Direct3D12);
+  if(!render_system_->set_composition_api(native_api)){LOG_ERROR("The renderer host does not support the selected native Qt backend");shutdown();return false;}
+#endif
   shell_replacement_started_ = false;
   if (!initialize_shell()) {
     shutdown();
@@ -558,6 +592,9 @@ void App::shutdown() {
   frame_timer_.reset();
   autosave_timer_.reset();
   retire_shell();
+#if defined(CRIMSON_ENGINE_APPLICATION)
+  frame_profile_.reset();engine_profile_.reset();
+#endif
   editor_.reset();
   shell_replacement_pending_ = false;
   shell_replacement_started_ = false;
@@ -565,6 +602,15 @@ void App::shutdown() {
 }
 
 void App::retire_shell() {
+#if defined(CRIMSON_ENGINE_APPLICATION)
+  ui_.set_external_close_guard({});
+  ui_.set_external_command_input_owner({});
+  profiling_controls_.reset();
+  if(engine_profile_)engine_profile_->backendRetired();profile_backend_ready_=false;
+  engine_panels_.reset();
+  if(engine_level_)engine_level_->detachRenderer();
+  engine_level_.reset();engine_project_root_.clear();engine_document_key_.clear();
+#endif
   ui_.set_viewport_presentation_requested_callback({});
   viewport_presentation_request_ = {};
   ui_.set_session_settings_changed_callback({});
@@ -920,6 +966,9 @@ void App::prepare_composed_frame() {
   // again or recursively refreshing the retained UI.
   preparing_composition_ = true;
   const SharedRenderCommandBatch command_batch(*render_system_);
+#if defined(CRIMSON_ENGINE_APPLICATION)
+  if(engine_panels_)(void)engine_panels_->prepareFrame();
+#endif
   (void)QuaderRenderApiRuntimeAccess::sync_scene(editor_->render(), *render_bridge_);
   ui_.prepare_viewports(*render_bridge_, render_overlay_snapshot_cache_);
   preparing_composition_ = false;
@@ -927,12 +976,16 @@ void App::prepare_composed_frame() {
 
 bool App::render_frame(const FrameTiming &frame_timing) {
   QDR_PROFILE_FUNCTION();
+  render_system_->begin_application_frame();
   if (rendering_frame_ || shell_replacement_pending_ || !editor_) {
     return false;
   }
   const auto frame_begin = std::chrono::steady_clock::now();
   rendering_frame_ = true;
   const SharedRenderCommandBatch command_batch(*render_system_);
+#if defined(CRIMSON_ENGINE_APPLICATION)
+  synchronize_engine_session();
+#endif
 
   {
     QDR_PROFILE_SCOPE("UI retained refresh");
@@ -944,6 +997,14 @@ bool App::render_frame(const FrameTiming &frame_timing) {
     ui_.process_viewport_input();
   }
   const auto viewport_input_end = std::chrono::steady_clock::now();
+#if defined(CRIMSON_ENGINE_APPLICATION)
+  if(engine_level_&&engine_panels_) {
+    const bool active=QGuiApplication::applicationState()==Qt::ApplicationActive;
+    engine_panels_->update(frame_timing.delta_seconds,active);
+    engine_level_->update(frame_timing.delta_seconds,active,render_system_->completed_frame());
+    (void)engine_panels_->prepareFrame();
+  }
+#endif
   if (shell_replacement_pending_) {
     rendering_frame_ = false;
     return false;
@@ -1060,6 +1121,18 @@ bool App::render_frame(const FrameTiming &frame_timing) {
     }
   }
   rendering_frame_ = false;
+#if defined(CRIMSON_ENGINE_APPLICATION)
+  if(engine_profile_){
+    const bool initialized=render_system_->initialized();
+    if(initialized&&!profile_backend_ready_){if(const auto* graphics=render_system_->crimson_renderer()){engine_profile_->backendInitialized(graphics->graphicsBackend());profile_backend_ready_=true;}}
+    crimson::profiling::CaptureFrame capture;capture.appFrame=frame_timing.frame_index;capture.bgfxFrame=initialized?render_system_->completed_frame():0;capture.playing=engine_level_&&engine_level_->playing();
+    const crimson::SceneSettings* settings{};std::optional<crimson::ResourceStats> resources;
+    if(engine_level_){resources=engine_level_->resources().stats();capture.materialsReady=engine_level_->materialPreparationReady()&&resources->queued==0&&resources->running==0;const auto& prepared=engine_level_->lastPreparedFrame();if(prepared)for(const auto& view:prepared->views){if(view.identity.purpose==crimson::RenderViewPurpose::Scene){capture.sceneWidth=view.width;capture.sceneHeight=view.height;settings=&view.settings;}else if(view.identity.purpose==crimson::RenderViewPurpose::Game){capture.gameWidth=view.width;capture.gameHeight=view.height;}}}
+    engine_profile_->frame(capture,settings,resources?&*resources:nullptr,engine_level_?&engine_level_->document():nullptr);
+    if(profiling_controls_)profiling_controls_->update(capture.playing);
+    if(frame_profile_&&capture.bgfxFrame&&capture.bgfxFrame!=profile_frame_){profile_frame_=static_cast<std::uint32_t>(capture.bgfxFrame);const auto measured=render_system_->frame_performance_stats();const auto milliseconds=measured.frames_per_second_available&&measured.frames_per_second>0?1000./measured.frames_per_second:frame_timing.raw_delta_seconds*1000.;const auto work=measured.cpu_frame_ms_available?measured.cpu_frame_ms:std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-frame_begin).count();frame_profile_->record({milliseconds,work},engine_panels_&&engine_panels_->navigating(),capture.sceneWidth,capture.sceneHeight);}
+  }
+#endif
   QDR_PROFILE_FRAME_MARK();
   // Composed panes submit during Qt painting. Keep scheduling their requested
   // work here; their accepted-frame accounting happens after root composition.
@@ -1102,7 +1175,11 @@ void App::schedule_next_frame(bool submitted) {
     frame_timer_->start(0);
     return;
   }
-  const bool continuous = ui_.needs_continuous_rendering();
+  const bool continuous = ui_.needs_continuous_rendering()
+#if defined(CRIMSON_ENGINE_APPLICATION)
+      || (engine_panels_&&engine_panels_->continuous())
+#endif
+      ;
   const bool synchronized = render_system_->presentation_is_synchronized();
   const int display_interval = continuous && synchronized
                                    ? presentation_frame_interval_ms(ui_.main_window())
@@ -1114,5 +1191,53 @@ void App::schedule_next_frame(bool submitted) {
     frame_timer_->setInterval(interval);
   }
 }
+
+#if defined(CRIMSON_ENGINE_APPLICATION)
+bool App::open_engine_project(const std::filesystem::path& selected,bool explicit_selection) {
+  try {
+    const auto root=std::filesystem::absolute(selected).lexically_normal();
+    if(!std::filesystem::is_directory(root))throw std::runtime_error("Choose an existing Engine project folder.");
+    if(root==engine_project_root_){if(explicit_selection){crimson::integration::writeLevelProjectSelection(engine_root_selection_path_,root);requested_engine_root_=root;engine_root_pinned_=true;}return true;}
+    if(engine_level_&&engine_panels_&&!engine_panels_->confirmClose())return false;
+    auto candidate=std::make_unique<crimson::integration::LevelSession>(root,executable_dir_);
+    candidate->attachRenderer(*render_system_->crimson_renderer());
+    if(explicit_selection)crimson::integration::writeLevelProjectSelection(engine_root_selection_path_,root);
+    if(engine_panels_)engine_panels_->bind(nullptr);
+    render_system_->publish_engine_frame({});
+    if(engine_level_)engine_level_->detachRenderer();
+    engine_level_=std::move(candidate);engine_project_root_=root;engine_document_key_.clear();
+    if(engine_profile_)engine_profile_->projectChanged(root);
+    if(explicit_selection){requested_engine_root_=root;engine_root_pinned_=true;}
+    if(engine_panels_)engine_panels_->bind(engine_level_.get());
+    return true;
+  }catch(const std::exception& error){LOG_ERROR("Engine project open failed: {}",error.what());if(ui_.main_window())QMessageBox::warning(ui_.main_window(),"Open Engine Project",QString::fromUtf8(error.what()));return false;}
+}
+void App::synchronize_engine_session() {
+  if(!render_system_->crimson_renderer()||!ui_.main_window())return;
+  if(!profiling_controls_&&engine_profile_)profiling_controls_=std::make_unique<crimson::integration::LevelProfiling>(*ui_.main_window(),engine_profile_->captures());
+  if(!engine_panels_&&ui_.main_window()) {
+    engine_panels_=std::make_unique<crimson::integration::LevelPanels>(*ui_.main_window(),*render_system_,[this]{request_viewport_presentation();});
+    engine_panels_->bind(engine_level_.get());
+    engine_panels_->setProjectOpenHandler([this](const std::filesystem::path& root){if(open_engine_project(root,true)){rejected_engine_root_.clear();request_viewport_presentation();}});
+    ui_.set_external_close_guard([this]{return !engine_panels_||engine_panels_->confirmClose();});
+    ui_.set_external_command_input_owner([this]{return engine_panels_&&engine_panels_->ownsInput();});
+  }
+  const auto* active=project_session_.active_scene();
+  const bool paired=project_session_.has_project()&&active&&active->session;
+  const auto root=!engine_root_pinned_&&paired?project_session_.root():requested_engine_root_;
+  if(!root.empty()&&root!=engine_project_root_&&root!=rejected_engine_root_){if(!open_engine_project(root,false))rejected_engine_root_=root;}
+  if(!engine_level_)return;
+  engine_level_->attachRenderer(*render_system_->crimson_renderer());
+  if(!paired){engine_panels_->setModelingSource({},{},{});return;}
+  const auto* manifest=project_session_.manifest();
+  const std::string project=manifest?std::string(manifest->id().str()):std::string{};
+  const std::string scene(active->scene_id.str());
+  const auto key=project+":"+scene;
+  if(!engine_root_pinned_&&engine_project_root_==project_session_.root()){
+    if(key!=engine_document_key_&&engine_level_->bindDocument(key,engine_document_key_.empty()))engine_document_key_=key;
+  }
+  engine_panels_->setModelingSource(project_session_.manifest_path(),project,scene);
+}
+#endif
 
 } // namespace quader

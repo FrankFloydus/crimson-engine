@@ -1,0 +1,325 @@
+{
+  "graph": {
+    "links": [
+      {
+        "fromNode": 2,
+        "fromPin": 7,
+        "id": 1,
+        "toNode": 3,
+        "toPin": 7
+      },
+      {
+        "fromNode": 3,
+        "fromPin": 27,
+        "id": 5,
+        "toNode": 6,
+        "toPin": 8
+      },
+      {
+        "fromNode": 6,
+        "fromPin": 0,
+        "id": 6,
+        "toNode": 7,
+        "toPin": 8
+      },
+      {
+        "fromNode": 3,
+        "fromPin": 27,
+        "id": 7,
+        "toNode": 1,
+        "toPin": 10
+      },
+      {
+        "fromNode": 7,
+        "fromPin": 0,
+        "id": 8,
+        "toNode": 1,
+        "toPin": 11
+      },
+      {
+        "fromNode": 6,
+        "fromPin": 0,
+        "id": 9,
+        "toNode": 8,
+        "toPin": 8
+      },
+      {
+        "fromNode": 8,
+        "fromPin": 0,
+        "id": 10,
+        "toNode": 1,
+        "toPin": 26
+      }
+    ],
+    "nextLinkId": 11,
+    "nextNodeId": 9,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5,
+          "attenuationColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "attenuationDistance": 1.0,
+          "baseColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "blend": 0,
+          "decalColorEnabled": true,
+          "decalColorStrength": 1.0,
+          "decalMetallicEnabled": false,
+          "decalMetallicStrength": 1.0,
+          "decalNormalEnabled": false,
+          "decalNormalStrength": 1.0,
+          "decalRoughnessEnabled": false,
+          "decalRoughnessStrength": 1.0,
+          "doubleSided": false,
+          "emission": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "height": 0.5,
+          "ior": 1.5,
+          "metallic": 0.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "receiveFog": true,
+          "refraction": false,
+          "roughness": 1.0,
+          "shading": 0,
+          "specular": 0.5,
+          "tessellation": {
+            "amount": 0.10000000149011612,
+            "enabled": false,
+            "heightLod": 1.6100000143051147,
+            "maxFactor": 8,
+            "midpoint": 0.0
+          },
+          "thickness": 0.0,
+          "transmission": 1.0
+        },
+        "position": [
+          771.0,
+          198.0
+        ]
+      },
+      {
+        "id": 2,
+        "kind": 1,
+        "name": "UV",
+        "position": [
+          -733.0,
+          131.0
+        ],
+        "uv": {
+          "mode": 0,
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "scaleLinked": true
+        }
+      },
+      {
+        "id": 3,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -445.0,
+          -10.0
+        ],
+        "texture": {
+          "image": "dc0f3b4d-1f98-5ea4-b6f7-9bafc3f0e4d6",
+          "normalStrength": 1.0,
+          "role": 0,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "alpha": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "color": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "id": 6,
+        "image": {
+          "blendMode": 0,
+          "brightness": 0.0,
+          "contrast": 0.0,
+          "featureSize": 12.0,
+          "gamma": 1.0,
+          "grayMode": 0,
+          "inputBlack": 0.0,
+          "inputWhite": 1.0,
+          "noiseContrast": 0.5,
+          "noisePattern": 0,
+          "normalFlipY": false,
+          "normalStrength": 1.0,
+          "opacity": 1.0,
+          "outputBlack": 0.0,
+          "outputWhite": 1.0,
+          "radius": 0.0009765625,
+          "roughness": 0.5,
+          "seed": 0,
+          "sharpen": 1.0
+        },
+        "kind": 23,
+        "left": {
+          "type": 5,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "name": "Grayscale",
+        "position": [
+          -137.33334350585938,
+          380.6667175292969
+        ],
+        "right": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      {
+        "atomic": {
+          "amount": 0.0,
+          "angle": 0.0,
+          "bothDirections": false,
+          "contrast": 0.18000000715255737,
+          "coverage": 0.9169999957084656,
+          "depth": 0.10000000149011612,
+          "direction": 4,
+          "enabled": true,
+          "radius": 0.009999999776482582,
+          "strength": 1.0
+        },
+        "color": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "id": 7,
+        "kind": 37,
+        "left": {
+          "type": 0,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "name": "Histogram Scan",
+        "position": [
+          206.66668701171875,
+          358.3333740234375
+        ],
+        "right": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      {
+        "atomic": {
+          "amount": 0.0,
+          "angle": 0.0,
+          "bothDirections": false,
+          "contrast": 0.0,
+          "coverage": 0.4410000145435333,
+          "depth": 0.10000000149011612,
+          "direction": 4,
+          "enabled": true,
+          "radius": 0.009999999776482582,
+          "strength": 1.0
+        },
+        "color": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "id": 8,
+        "kind": 37,
+        "left": {
+          "type": 0,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "name": "Histogram Scan",
+        "position": [
+          211.66668701171875,
+          662.3333740234375
+        ],
+        "right": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    ],
+    "version": 20
+  },
+  "id": "f37c79e5-2491-5de8-be53-f93c9ad627ca",
+  "name": "str_stoneflr3",
+  "originModel": "",
+  "type": "crimson-material",
+  "version": 6
+}

@@ -4,10 +4,16 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
+#if defined(QUADER_BUILD_OVERLAY_PLANNERS_ONLY)
+#include "render/overlay/instance_selection_overlay_plan.hpp"
+#else
 #include "render/overlay/instance_selection_overlay_cache.hpp"
+#endif
 
 #include "diagnostics/profile.hpp"
+#if !defined(QUADER_BUILD_OVERLAY_PLANNERS_ONLY)
 #include "render/mesh_renderable_factory.hpp"
+#endif
 #include "render/render_layers.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/viewport_overlay_policy.hpp"
@@ -214,6 +220,7 @@ InstanceSelectionOccurrencePreparation prepare_selection_occurrences(
   return prepared;
 }
 
+#if !defined(QUADER_BUILD_OVERLAY_PLANNERS_ONLY)
 RenderMeshAssetSnapshot fill_mesh_snapshot(
     const RenderOverlayInstanceSelectionFillRecord &record) {
   RenderMeshAssetSnapshot mesh{
@@ -233,6 +240,7 @@ RenderMeshAssetSnapshot fill_mesh_snapshot(
   return mesh;
 }
 
+#endif
 /// Couples planned selection batches with their source overlay records.
 struct InstanceSelectionBatchPreparation final {
   InstanceSelectionOverlayBatchPlans plans;
@@ -273,6 +281,7 @@ InstanceSelectionBatchPreparation prepare_selection_batches(
   return prepared;
 }
 
+#if !defined(QUADER_BUILD_OVERLAY_PLANNERS_ONLY)
 InstancedWireGeometryInput wire_geometry_input(
     const RenderOverlayInstanceSelectionWireRecord &record) {
   const std::uint64_t signature =
@@ -321,15 +330,18 @@ ViewportPersistentOverlayRasterGroupSet selected_wire_raster_groups(
   return result;
 }
 
+#endif
 } // namespace
 
 /// Couples selected-instance batch plans with their source overlay records.
+#if !defined(QUADER_BUILD_OVERLAY_PLANNERS_ONLY)
 struct InstanceSelectionOverlayCache::PreparedPlans final {
   InstanceSelectionOverlayBatchPlans plans;
   std::vector<const RenderOverlayInstanceSelectionFillRecord *> fills;
   std::vector<const RenderOverlayInstanceSelectionWireRecord *> wires;
 };
 
+#endif
 InstanceSelectionOverlayBatchPlans plan_instance_selection_overlay_batches(
     const RenderOverlaySelectedObjectSnapshot &snapshot,
     std::size_t max_instances_per_chunk) {
@@ -348,6 +360,7 @@ std::vector<InstanceSelectionWireEdge> instance_selection_wire_edges(
   return edges;
 }
 
+#if !defined(QUADER_BUILD_OVERLAY_PLANNERS_ONLY)
 InstanceSelectionOverlayCache::InstanceSelectionOverlayCache() = default;
 
 InstanceSelectionOverlayCache::~InstanceSelectionOverlayCache() { shutdown(); }
@@ -882,4 +895,5 @@ bool InstanceSelectionOverlayCache::update_fill_colors(
   return true;
 }
 
+#endif
 } // namespace quader

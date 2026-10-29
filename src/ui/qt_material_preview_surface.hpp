@@ -11,6 +11,7 @@
 #include "viewport/material_preview_state.hpp"
 
 #include <QPointF>
+#include <QPointer>
 #include <QWindow>
 
 #include <cstdint>
@@ -23,6 +24,7 @@ class QExposeEvent;
 class QMouseEvent;
 class QResizeEvent;
 class QWheelEvent;
+class QWidget;
 
 namespace quader {
 
@@ -40,6 +42,10 @@ public:
   operator=(const QtMaterialPreviewSurface &) = delete;
 
   [[nodiscard]] bool initialize(RenderHost &render_system);
+  // Reuses Quader's QRhi composition while this QWindow remains the semantic
+  // input owner, exactly like a composed modeling viewport. No native child is
+  // created and no window container or swap chain belongs to the preview.
+  QWidget *create_composed_widget(QWidget *parent,RenderHost &render_system);
   void shutdown();
 
   [[nodiscard]] bool render_frame();
@@ -48,6 +54,8 @@ public:
   void synchronize_render_size();
 
   void set_material(StandardMaterialPreviewSnapshot snapshot);
+  void set_record_callback(RenderMaterialPreviewRecorder);
+  void mark_dirty();
   [[nodiscard]] const MaterialPreviewState &preview_state() const noexcept {
     return preview_state_;
   }
@@ -62,6 +70,7 @@ public:
   }
 
 protected:
+  bool eventFilter(QObject*,QEvent*) override;
   bool event(QEvent *event) override;
   void exposeEvent(QExposeEvent *event) override;
   void resizeEvent(QResizeEvent *event) override;
@@ -81,6 +90,7 @@ private:
   };
 
   void apply_interaction(const MaterialPreviewInteractionFrame &input);
+  void register_input_hints(QObject&);
   void publish_state_change();
   void mark_shared_commands_pending();
   void mark_render_pending();
@@ -89,12 +99,14 @@ private:
   [[nodiscard]] bool input_hints_available() const noexcept;
 
   RenderHost *render_system_ = nullptr;
+  QPointer<QWidget> composed_host_;
   std::unique_ptr<RenderSurface> swap_chain_;
   std::unique_ptr<RenderMaterialPreviewView> renderer_;
   std::optional<StandardMaterialPreviewSnapshot> material_snapshot_;
   MaterialPreviewState preview_state_;
   MaterialPreviewInputRouter input_router_;
   std::function<void()> surface_changed_callback_;
+  RenderMaterialPreviewRecorder record_callback_;
   QPointF last_drag_position_;
   bool initialized_ = false;
   bool native_surface_available_ = false;

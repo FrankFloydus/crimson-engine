@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-#define QUADER_BRIDGE_ABI_VERSION 6u
+#define QUADER_BRIDGE_ABI_VERSION 7u
 #define QUADER_BRIDGE_NO_MATERIAL UINT32_MAX
 #define QUADER_BRIDGE_NO_SCENE UINT32_MAX
 #define QUADER_BRIDGE_TEXTURE_COUNT 4u
@@ -63,7 +63,26 @@ typedef struct QuaderBridgeSceneView {
   float camera_aperture;
   float camera_shutter_seconds;
   float camera_iso;
+  uint32_t node_count;
 } QuaderBridgeSceneView;
+
+/* Concrete authored hierarchy in parent-before-child, sibling-authored order.
+ * Namespace (entity, occurrence_entity) with the project and scene UUIDs.
+ * Direct entities use occurrence_entity 0. Expanded instance members use their
+ * canonical member entity and the concrete occurrence entity. Parent (0, 0)
+ * means the importing scene root; definition storage is never exported. */
+typedef struct QuaderBridgeNodeView {
+  const char *name;
+  uint64_t entity;
+  uint64_t occurrence_entity;
+  uint64_t parent_entity;
+  uint64_t parent_occurrence_entity;
+  /* Column-major affine world transform, right-handed Y-up, 1:1 units. */
+  float transform[16];
+  /* Local authored visibility and display-layer visibility, excluding parents. */
+  uint32_t visible;
+  uint32_t order;
+} QuaderBridgeNodeView;
 
 /* FNV-1a64 of exactly the serialized bytes decoded into the owning handle.
  * These remain stable when the source file is subsequently replaced. */
@@ -269,6 +288,8 @@ typedef struct QuaderBridgeApi {
    * light validation occurs only when this view is requested. */
   int (*light_view)(const QuaderBridgeScene *scene, uint32_t index,
                     QuaderBridgeLightView *out, QuaderBridgeError *error);
+  int (*node_view)(const QuaderBridgeScene *scene, uint32_t index,
+                   QuaderBridgeNodeView *out, QuaderBridgeError *error);
 } QuaderBridgeApi;
 
 /* Resolve this one symbol with GetProcAddress. Returns null for other ABIs. */
@@ -318,6 +339,26 @@ typedef struct QuaderBridgeUvInterpolationApi {
  * perspective-correct interpolation and material-transform ordering. */
 QUADER_BRIDGE_EXPORT const QuaderBridgeUvInterpolationApi *
 quader_bridge_get_uv_interpolation_api(uint32_t requested_abi_version);
+
+/* Optional source-face provenance, independent of core and UV extension ABIs. */
+#define QUADER_BRIDGE_TOPOLOGY_ABI_VERSION 1u
+typedef struct QuaderBridgeSourceFace {
+  uint32_t vertices[4];
+  uint32_t triangles[2]; /* Triangle numbers in mesh_view's final index order. */
+  uint32_t corner_count;
+} QuaderBridgeSourceFace;
+typedef struct QuaderBridgeTopologyView {
+  const QuaderBridgeSourceFace *faces;
+  uint32_t face_count;
+} QuaderBridgeTopologyView;
+typedef struct QuaderBridgeTopologyApi {
+  uint32_t abi_version;
+  uint32_t struct_size;
+  int (*mesh_topology_view)(const QuaderBridgeScene *,uint32_t,
+                            QuaderBridgeTopologyView *,QuaderBridgeError *);
+} QuaderBridgeTopologyApi;
+QUADER_BRIDGE_EXPORT const QuaderBridgeTopologyApi *
+quader_bridge_get_topology_api(uint32_t requested_abi_version);
 
 #ifdef __cplusplus
 }

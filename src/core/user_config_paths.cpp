@@ -8,11 +8,23 @@
 #include "core/release_features.hpp"
 
 #include <cstdlib>
+#include <stdexcept>
+#include <utility>
 
 namespace quader {
+namespace {
+std::filesystem::path application_directory;
+}
+
+void initialize_user_config_directory(std::filesystem::path directory){
+  if(directory.empty()||!directory.is_absolute())throw std::invalid_argument("Application configuration needs an absolute directory.");
+  if(!application_directory.empty()&&application_directory!=directory)throw std::logic_error("Application configuration was already initialized.");
+  application_directory=std::move(directory);
+}
 
 std::filesystem::path
 quader_user_config_directory(const std::filesystem::path &executable_dir) {
+  if(!application_directory.empty())return application_directory;
   const bool public_release = current_product_release() != kInternalFullRelease;
 #ifdef _WIN32
   if (const char *local_app_data = std::getenv("LOCALAPPDATA")) {

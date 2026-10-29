@@ -142,6 +142,55 @@ AuthoredTopology saved_arch_mid_depth_strip() {
   return topology;
 }
 
+/// Exact face 6995 from SEL-20261023-269653E0; its three selected boundary
+/// vertices have degree two and small authored bends within the face plane.
+AuthoredTopology saved_room_boundary_face() {
+  AuthoredTopology topology;
+  topology.next_vertex_id = 7168U;
+  topology.next_face_id = 7092U;
+  topology.vertices = {
+      {make_id<VertexTag>(7054U), {-7.5F, -0.5F, 3.8948497772216797F}},
+      {make_id<VertexTag>(7059U), {-4.5F, -0.5F, 3.8948497772216797F}},
+      {make_id<VertexTag>(7061U), {-0.5F, -0.5F, 3.8948497772216797F}},
+      {make_id<VertexTag>(7063U), {0.5F, -0.5F, 3.8948497772216797F}},
+      {make_id<VertexTag>(7065U), {4.5F, -0.5F, 3.8948497772216797F}},
+      {make_id<VertexTag>(7067U), {5.5F, -0.5F, 3.8948497772216797F}},
+      {make_id<VertexTag>(7069U), {9.5F, -0.5F, 3.8948497772216797F}},
+      {make_id<VertexTag>(7071U), {10.5F, -0.5F, 3.8948497772216797F}},
+      {make_id<VertexTag>(7073U), {14.5F, -0.5F, 3.8948497772216797F}},
+      {make_id<VertexTag>(7057U), {17.5F, -0.5F, 3.8948497772216797F}},
+      {make_id<VertexTag>(7052U), {17.5F, -0.5F, 0.8214669227600098F}},
+      {make_id<VertexTag>(7137U), {14.5F, -0.5F, 0.8280375003814697F}},
+      {make_id<VertexTag>(7143U), {-0.5F, -0.5F, 0.8280375003814697F}},
+      {make_id<VertexTag>(7005U), {-4.5F, -0.5F, 0.8236570954322815F}},
+      {make_id<VertexTag>(7004U), {-7.5F, -0.5F, 0.8236570954322815F}},
+  };
+  topology.faces = {{
+      .id = make_id<FaceTag>(6995U),
+      .vertices = {make_id<VertexTag>(7054U), make_id<VertexTag>(7059U),
+          make_id<VertexTag>(7061U), make_id<VertexTag>(7063U),
+          make_id<VertexTag>(7065U), make_id<VertexTag>(7067U),
+          make_id<VertexTag>(7069U), make_id<VertexTag>(7071U),
+          make_id<VertexTag>(7073U), make_id<VertexTag>(7057U),
+          make_id<VertexTag>(7052U), make_id<VertexTag>(7137U),
+          make_id<VertexTag>(7143U), make_id<VertexTag>(7005U),
+          make_id<VertexTag>(7004U)},
+      .uvs = {{-3.75F, -0.05257800593972206F},
+          {-2.25F, -0.05257800593972206F}, {-0.25F, -0.05257800593972206F},
+          {0.25F, -0.05257800593972206F}, {2.25F, -0.05257800593972206F},
+          {2.75F, -0.05257800593972206F}, {4.75F, -0.05257800593972206F},
+          {5.25F, -0.05257800593972206F}, {7.25F, -0.05258018895983696F},
+          {8.75F, -0.05258018895983696F}, {8.75F, -1.588175892829895F},
+          {7.25F, -1.5859845876693726F}, {-0.25F, -1.5859845876693726F},
+          {-2.25F, -1.5859845876693726F}, {-3.75F, -1.5859845876693726F}},
+      .material_slot = 0U,
+      .shading = AuthoredSurfaceShading::Authored,
+      .texture_transform = {.scale = {1.0F, 1.0F}, .shift_uv = {0.0F, 0.0F},
+          .rotation_degrees = 0.0F},
+  }};
+  return topology;
+}
+
 const AuthoredTopologyFace* find_face(const AuthoredTopology& topology,
                                     std::uint32_t id) {
   const auto found = std::ranges::find(topology.faces, make_id<FaceTag>(id),
@@ -419,6 +468,113 @@ TEST(SavedArchDissolveSdkTests,
     EXPECT_EQ(restored.value().selection().active_face, result_selection.active_face);
     EXPECT_EQ(restored.value().selection().has_active, result_selection.has_active);
   }
+}
+
+TEST(SavedRoomDissolveSdkTests,
+     DissolvesSelectedBentBoundaryChainPreservingCornersAndOneUndoStep) {
+  const auto topology = saved_room_boundary_face();
+  auto imported = PolygonDocument::from_authored_topology(topology);
+  ASSERT_TRUE(imported.ok()) << imported.error_message();
+  PolygonDocument original = std::move(imported).value();
+  const std::array selected_vertices{
+      make_id<VertexTag>(7137U), make_id<VertexTag>(7143U),
+      make_id<VertexTag>(7005U)};
+  ASSERT_TRUE(original.set_selection_mode(SelectionMode::Vertex).ok());
+  const PolygonSelectionSnapshot captured_selection{
+      .kind = SelectionKind::Vertex,
+      .vertices = {selected_vertices[0], selected_vertices[1], selected_vertices[2]},
+      .has_active = true,
+      .active_vertex = make_id<VertexTag>(7005U)};
+  ASSERT_TRUE(original.apply_selection(captured_selection).ok());
+  const auto original_selection = original.selection();
+  ASSERT_EQ(original_selection.active_vertex, make_id<VertexTag>(7005U));
+  const auto before = serialize_qdr_authored_topology(original);
+  ASSERT_TRUE(before.ok()) << before.error_message();
+
+  ModelingSession session;
+  const auto added = session.add_document(original, "diablo_room boundary");
+  ASSERT_TRUE(added.ok()) << added.error_message();
+  session.clear_history();
+  PolygonDocument dissolved = original;
+  const auto operation = dissolved.dissolve_selected_vertices();
+  ASSERT_TRUE(operation.ok()) << operation.error_message();
+  ASSERT_TRUE(operation.value().success) << operation.value().message;
+  ASSERT_TRUE(operation.value().changed);
+  ASSERT_TRUE(dissolved.validate().ok());
+  const auto result = dissolved.authored_topology();
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  ASSERT_EQ(result.value().vertices.size(), 12U);
+  ASSERT_EQ(result.value().faces.size(), 1U);
+  EXPECT_EQ(result.value().next_vertex_id, topology.next_vertex_id);
+  EXPECT_EQ(result.value().next_face_id, topology.next_face_id);
+  EXPECT_EQ(result.value().hard_normal_edges, topology.hard_normal_edges);
+  EXPECT_EQ(result.value().soft_normal_edges, topology.soft_normal_edges);
+  for (const auto &vertex : topology.vertices) {
+    const auto found = std::ranges::find(result.value().vertices, vertex.id,
+                                        &AuthoredTopologyVertex::id);
+    if (std::ranges::find(selected_vertices, vertex.id) != selected_vertices.end()) {
+      EXPECT_EQ(found, result.value().vertices.end());
+    } else {
+      ASSERT_NE(found, result.value().vertices.end());
+      EXPECT_EQ(found->position.x, vertex.position.x);
+      EXPECT_EQ(found->position.y, vertex.position.y);
+      EXPECT_EQ(found->position.z, vertex.position.z);
+    }
+  }
+  AuthoredTopologyFace expected_face = topology.faces.front();
+  expected_face.vertices.resize(11U);
+  expected_face.vertices.push_back(make_id<VertexTag>(7004U));
+  expected_face.uvs.resize(11U);
+  expected_face.uvs.push_back(topology.faces.front().uvs.back());
+  expect_exact_face(result.value().faces.front(), expected_face);
+  const auto compiled = dissolved.compile_mesh();
+  ASSERT_TRUE(compiled.ok()) << compiled.error_message();
+  EXPECT_FALSE(compiled.value().indices.empty());
+
+  const auto result_selection = dissolved.selection();
+  EXPECT_EQ(result_selection.kind, SelectionKind::Vertex);
+  EXPECT_TRUE(result_selection.edges.empty());
+  EXPECT_TRUE(result_selection.faces.empty());
+  auto neighbors = result_selection.vertices;
+  std::ranges::sort(neighbors);
+  EXPECT_EQ(neighbors, (std::vector<VertexId>{make_id<VertexTag>(7004U),
+                                            make_id<VertexTag>(7052U)}));
+  EXPECT_TRUE(result_selection.has_active);
+  EXPECT_NE(std::ranges::find(neighbors, result_selection.active_vertex),
+            neighbors.end());
+  for (const auto vertex : neighbors) {
+    EXPECT_NE(std::ranges::find(result.value().vertices, vertex,
+                               &AuthoredTopologyVertex::id),
+              result.value().vertices.end());
+  }
+  const auto after = serialize_qdr_authored_topology(dissolved);
+  ASSERT_TRUE(after.ok()) << after.error_message();
+  ASSERT_TRUE(session.commit_document(added.value(), dissolved,
+                                      operation.value()).ok());
+  ASSERT_TRUE(session.can_undo());
+  ASSERT_TRUE(session.undo().ok());
+  EXPECT_FALSE(session.can_undo());
+  auto restored = session.document_copy(added.value());
+  ASSERT_TRUE(restored.ok()) << restored.error_message();
+  const auto undone = serialize_qdr_authored_topology(restored.value());
+  ASSERT_TRUE(undone.ok()) << undone.error_message();
+  EXPECT_EQ(undone.value(), before.value());
+  EXPECT_EQ(restored.value().selection().kind, original_selection.kind);
+  EXPECT_EQ(restored.value().selection().vertices, original_selection.vertices);
+  EXPECT_EQ(restored.value().selection().active_vertex, original_selection.active_vertex);
+  EXPECT_EQ(restored.value().selection().has_active, original_selection.has_active);
+
+  ASSERT_TRUE(session.redo().ok());
+  EXPECT_FALSE(session.can_redo());
+  restored = session.document_copy(added.value());
+  ASSERT_TRUE(restored.ok()) << restored.error_message();
+  const auto redone = serialize_qdr_authored_topology(restored.value());
+  ASSERT_TRUE(redone.ok()) << redone.error_message();
+  EXPECT_EQ(redone.value(), after.value());
+  EXPECT_EQ(restored.value().selection().kind, result_selection.kind);
+  EXPECT_EQ(restored.value().selection().vertices, result_selection.vertices);
+  EXPECT_EQ(restored.value().selection().active_vertex, result_selection.active_vertex);
+  EXPECT_EQ(restored.value().selection().has_active, result_selection.has_active);
 }
 
 } // namespace

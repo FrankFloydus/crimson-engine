@@ -12,10 +12,12 @@
 #include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
+#include "editor/placement/scene_surface_query.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/tools/extrude_tool_service.hpp"
+#include "editor/viewport/viewport_interaction_controller.hpp"
 #include "math/glm_bridge.hpp"
 #include "render/overlay/instance_selection_overlay_cache.hpp"
 #include "render/overlay/overlay_renderable_cache.hpp"
@@ -36,6 +38,7 @@
 #include "support/command_behavior_fixture.hpp"
 #include "support/modeling_test_events.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
+#include "viewport/viewport_camera_adapter.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
 #include <quader/modeling/neutral/polygon/document_validation.hpp>
@@ -3083,7 +3086,8 @@ struct CuttingToolOutlineHarness {
         : session.modeling().update_insert_edge_loop_hover(event_at(x, y));
   }
 
-  ViewportOverlaySubmissionResult submit() {
+  ViewportOverlaySubmissionResult submit(
+      const ViewportCameraController *camera = nullptr) {
     auto &modeling = session.modeling();
     const auto volatile_snapshot = modeling.volatile_overlay_snapshot();
     const auto mode = modeling.selection_mode();
@@ -3095,6 +3099,9 @@ struct CuttingToolOutlineHarness {
     return coordinator.submit({
         .viewport_index = 0u,
         .layer_mask = 1u,
+        .camera = camera != nullptr
+            ? ViewportCameraAdapter::overlay_camera(*camera, camera->viewport_size())
+            : ViewportOverlayCamera{},
         .selection_source = {
             .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
             .content_revision = modeling.content_revision(),
@@ -3246,6 +3253,171 @@ TEST(SelectedMeshOutlinePresentationTests,
     (void)harness.submit();
     EXPECT_EQ(harness.wires(first.modeling_object_id).size(), 7u);
     EXPECT_EQ(harness.wires(second.modeling_object_id).size(), 7u);
+  }
+}
+
+TEST(SelectedMeshOutlinePresentationTests,
+     PaintCandidateSurvivesOrbitFlyAndTheirReleaseThroughRetainedSubmission) {
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
+                         QuaderSelectionMode::Face}) {
+    for (const auto tool : {ViewportToolId::PaintSelect, ViewportToolId::Move}) {
+      for (const bool fly : {false, true}) {
+        SCOPED_TRACE(static_cast<int>(mode));
+        SCOPED_TRACE(static_cast<int>(tool));
+        SCOPED_TRACE(fly);
+        CuttingToolOutlineHarness harness;
+        const auto candidate = harness.add_strip(-3.0f);
+        const auto selected = harness.add_strip(3.0f);
+        const auto reticle_peer = harness.add_strip(0.0f);
+        auto &editor = harness.editor;
+        auto &modeling = harness.session.modeling();
+        (void)harness.settings.set_color(ViewportColorSettingId::SelectionWire,
+                                         {1, 1, 0, 0.5f});
+        ASSERT_TRUE(editor.selection().select_object(selected).ok());
+        ASSERT_TRUE(enter_selection_context(editor, mode).ok());
+        if (mode == QuaderSelectionMode::Vertex) {
+          ASSERT_TRUE(editor.selection().select_vertex(selected, 1).ok());
+        } else if (mode == QuaderSelectionMode::Edge) {
+          ASSERT_TRUE(editor.selection().select_edge(selected, 1, 2).ok());
+        } else {
+          ASSERT_TRUE(editor.selection().select_face(selected, 1).ok());
+        }
+        ASSERT_TRUE(editor.tools().activate(tool).ok());
+        ViewportInputRouter router;
+        router.set_active_tool(tool);
+        router.set_selection_mode(mode == QuaderSelectionMode::Vertex
+            ? ViewportSelectionMode::Vertex : mode == QuaderSelectionMode::Edge
+                ? ViewportSelectionMode::Edge : ViewportSelectionMode::Face);
+        ViewportCameraController camera;
+        camera.set_viewport_size(800, 600);
+        ASSERT_TRUE(camera.restore_perspective_pose(
+            {.eye = {1, 0.5f, 10}, .target = {1, 0.5f, 0}, .up = {0, 1, 0}}));
+        ViewportInteractionController controller;
+        ViewportInputFrame input;
+        input.viewport_hovered = true;
+        input.viewport_focused = true;
+        input.viewport_size = {800, 600};
+        input.delta_seconds = 1.0f / 600.0f;
+        const auto projected_body = camera.project_world_point({-2.5f, 0.5f, 0});
+        ASSERT_TRUE(projected_body.visible);
+        input.mouse_local = projected_body.position;
+        const auto initial_surfaces = harness.session.scene_surface_query().snapshot();
+        ASSERT_TRUE(initial_surfaces.valid());
+        const auto initial_ray = camera.ray_from_viewport_point(input.mouse_local);
+        const auto initial_hit = initial_surfaces.nearest_hit({
+            .world_origin = initial_ray.origin,
+            .world_direction = initial_ray.direction,
+            .include_backfaces = false});
+        ASSERT_TRUE(initial_hit.has_value()) << "The fixture's initial body ray must hit a front surface";
+        ASSERT_EQ(initial_hit->participant.geometry_entity, candidate.entity);
+        const auto dispatch = [&](bool pressed = false, bool down = false,
+                                  bool released = false) {
+          input.navigation_active = router.navigating();
+          input.fly_navigation_active = router.fly_navigating();
+          input.mouse_screen = input.mouse_local;
+          input.navigation_bindings = {};
+          if (fly) {
+            input.navigation_bindings.fly_pressed = pressed;
+            input.navigation_bindings.fly_down = down;
+            input.navigation_bindings.fly_released = released;
+          } else {
+            input.navigation_bindings.orbit_pressed = pressed;
+            input.navigation_bindings.orbit_down = down;
+            input.navigation_bindings.orbit_released = released;
+          }
+          const auto result = router.handle_frame(input, camera);
+          const auto surfaces = harness.session.scene_surface_query().snapshot();
+          const ViewportInteractionFrame frame{
+              .input_router = router, .camera = camera, .settings = harness.settings,
+              .input = input, .input_result = result,
+              .pointer_capture_recentered = fly && (pressed || down || released),
+              .active_tool_allows_selection_fallback = true,
+              .preferred_selection_tool = ViewportToolId::PaintSelect,
+              .scene_surfaces = &surfaces,
+              .selection_state = {.summary = editor.selection().summary(),
+                  .scene_revision = harness.session.scene().revision(),
+                  .asset_revision = harness.session.assets().revision()}};
+          controller.handle_after_active_tool(editor, frame, {}, {});
+          return result;
+        };
+        (void)dispatch();
+        (void)harness.submit(&camera);
+        ASSERT_EQ(modeling.selection_hover_summary().candidate_object_id,
+                  candidate.modeling_object_id)
+            << "Initial controller body hover must acquire the fixture before navigation starts";
+        const auto candidate_wires = harness.wires(candidate.modeling_object_id);
+        const auto selected_wires = harness.wires(selected.modeling_object_id);
+        const auto candidate_depths = harness.depths(candidate.modeling_object_id);
+        ASSERT_EQ(candidate_wires.size(), 7u);
+        ASSERT_EQ(selected_wires.size(), 7u);
+        ASSERT_EQ(candidate_depths.size(), 4u);
+        const auto selection = editor.selection().summary();
+        const auto history = harness.session.history().undo_count();
+        const auto expect_retained = [&]() {
+          (void)harness.submit(&camera);
+          EXPECT_EQ(modeling.selection_hover_summary().candidate_object_id,
+                    candidate.modeling_object_id);
+          EXPECT_EQ(harness.wires(candidate.modeling_object_id), candidate_wires);
+          EXPECT_EQ(harness.wires(selected.modeling_object_id), selected_wires);
+          EXPECT_EQ(harness.depths(candidate.modeling_object_id), candidate_depths);
+          EXPECT_TRUE(harness.wires(reticle_peer.modeling_object_id).empty());
+          std::size_t points = 0u;
+          for (const auto *frame : {&harness.target.persistent, &harness.target.dynamic}) {
+            points += std::ranges::count_if(frame->points, [&](const auto &point) {
+              return point.layer == ViewportOverlayLayer::UnselectedVertex &&
+                     point.element.object_id == candidate.modeling_object_id;
+            });
+          }
+          EXPECT_EQ(points, mode == QuaderSelectionMode::Vertex ? 6u : 0u);
+          const auto current = editor.selection().summary();
+          EXPECT_EQ(current.selection_revision, selection.selection_revision);
+          EXPECT_EQ(current.content_revision, selection.content_revision);
+          EXPECT_EQ(current.selected_vertex_count, selection.selected_vertex_count);
+          EXPECT_EQ(current.selected_edge_count, selection.selected_edge_count);
+          EXPECT_EQ(current.selected_face_count, selection.selected_face_count);
+          EXPECT_EQ(harness.session.history().undo_count(), history);
+        };
+        // The centered navigation cursor points at a different eligible mesh.
+        input.mouse_local = {400, 300};
+        ASSERT_TRUE(dispatch(true, true).navigation_active);
+        expect_retained();
+        for (int sample = 0; sample < 3; ++sample) {
+          input.mouse_delta = fly ? QVec2{} : QVec2{1.5f, -0.5f};
+          input.fly_local_direction = fly ? QVec3{0.25f, 0, 0.1f} : QVec3{};
+          ASSERT_TRUE(dispatch(false, true).camera_changed);
+          expect_retained();
+        }
+        input.mouse_delta = {};
+        input.fly_local_direction = {};
+        ASSERT_FALSE(dispatch(false, false, true).navigation_active);
+        ASSERT_TRUE(input.navigation_active);
+        expect_retained();
+        input.mouse_local = {20, 20}; // First restored real pointer misses every mesh.
+        (void)dispatch();
+        expect_retained();
+        const auto builds = harness.provider.builds;
+        const auto compositions = harness.coordinator.work_counters().dynamic_source_compose_count;
+        const auto volatile_builds = modeling.volatile_overlay_cache_stats().build_count;
+        for (int idle = 0; idle < 4; ++idle) {
+          (void)dispatch();
+          expect_retained();
+        }
+        EXPECT_EQ(harness.provider.builds, builds);
+        EXPECT_EQ(harness.coordinator.work_counters().dynamic_source_compose_count, compositions);
+        EXPECT_EQ(modeling.volatile_overlay_cache_stats().build_count, volatile_builds);
+        input.mouse_local = camera.project_world_point({0.5f, 0.5f, 0}).position;
+        (void)dispatch();
+        (void)harness.submit(&camera);
+        EXPECT_EQ(modeling.selection_hover_summary().candidate_object_id,
+                  reticle_peer.modeling_object_id);
+        EXPECT_TRUE(harness.wires(candidate.modeling_object_id).empty());
+        EXPECT_EQ(harness.wires(selected.modeling_object_id), selected_wires);
+        EXPECT_EQ(harness.wires(reticle_peer.modeling_object_id).size(), 7u);
+        EXPECT_EQ(harness.depths(reticle_peer.modeling_object_id).size(), 4u);
+        EXPECT_EQ(editor.selection().summary().selection_revision, selection.selection_revision);
+        EXPECT_EQ(harness.session.history().undo_count(), history);
+      }
+    }
   }
 }
 

@@ -43,7 +43,12 @@
         "nlohmann-json",
         "sentry-native",
         "spdlog",
-        "stduuid",
+        {"name":"stduuid","features":["system-gen"]},
+        "assimp",
+        "mikktspace",
+        "geometry-central",
+        "joltphysics",
+        "recastnavigation",
         {
           "name": "tiff",
           "default-features": false
@@ -59,5 +64,9 @@
         "gtest"
       ]
     }
-  }
+  },
+  "overrides": [
+    {"name":"bgfx","version":"1.129.8940-496","port-version":20},
+    {"name":"tracy","version":"0.14.1"}
+  ]
 }

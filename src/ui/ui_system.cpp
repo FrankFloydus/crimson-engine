@@ -674,7 +674,8 @@ bool UISystem::initialize(RenderHost &render_system,
       [this]() { return allow_main_window_close(); });
   main_window_ = std::move(main_window);
   main_window_->setObjectName(QStringLiteral("quaderMainWindow"));
-  main_window_->setWindowTitle(QStringLiteral("Quader"));
+  main_window_->setWindowTitle(QApplication::instance()->property("crimsonEngineApplication").toBool()
+      ?QStringLiteral("Crimson Engine"):QStringLiteral("Quader"));
   main_window_->setWindowIcon(QApplication::windowIcon());
   main_window_->setMinimumSize(kPlatformWindowMinimumWidth,
                                kPlatformWindowMinimumHeight);
@@ -724,7 +725,7 @@ bool UISystem::initialize(RenderHost &render_system,
   if (composed_viewports) {
     // Keep the real window's device alive through Home/Workspace switches.
     // This child is not a stack page and never takes focus or pointer input.
-    composition_anchor_ = new QtVulkanCompositionWidget(central_stack_);
+    composition_anchor_ = new QtVulkanCompositionWidget(central_stack_, render_system_->composition_api());
     composition_anchor_->setObjectName(QStringLiteral("viewportCompositionAnchor"));
     composition_anchor_->setFocusPolicy(Qt::NoFocus);
     composition_anchor_->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -801,7 +802,8 @@ bool UISystem::initialize(RenderHost &render_system,
       viewport_actions.push_back(action);
     }
   }
-  viewport_panel_ = new QtViewportPanel(viewport_container, composed_viewports);
+  viewport_panel_ = new QtViewportPanel(viewport_container, composed_viewports,
+      render_system_->composition_api());
   viewport_panel_->set_presentation_requested_callback([this]() {
     if (viewport_presentation_requested_) {
       viewport_presentation_requested_();
@@ -1071,8 +1073,10 @@ bool UISystem::initialize(RenderHost &render_system,
     standard_material_error_message_box_ =
         new QtRetainedMessageBox(standard_material_editor_window_);
     material_preview_surface_ = new QtMaterialPreviewSurface();
-    QWidget *preview_container = QWidget::createWindowContainer(
-        material_preview_surface_, standard_material_editor_window_);
+    QWidget *preview_container = composed_viewports
+        ? material_preview_surface_->create_composed_widget(standard_material_editor_window_,render_system)
+        : QWidget::createWindowContainer(material_preview_surface_, standard_material_editor_window_);
+    if(composed_viewports)material_preview_surface_->QObject::setParent(preview_container);
     preview_container->setObjectName(
         QStringLiteral("standardMaterialEditor.previewSurfaceContainer"));
     preview_container->setFocusPolicy(Qt::StrongFocus);
@@ -2173,6 +2177,7 @@ void UISystem::install_runtime_hooks(
         });
     command_event_filter_->set_command_input_owner_provider([this]() {
       return shell_replacement_pending_ || loading_presentation_active_ ||
+             (external_command_input_owner_&&external_command_input_owner_()) ||
              command_palette_open_pending_ ||
              qt_foreign_window_owns_command_input(main_window_.get()) ||
              qt_window_owns_command_input(command_palette_) ||
@@ -3340,11 +3345,13 @@ UISystem::confirm_dirty_scene(const QuaderSceneDocumentInfo &scene,
 
 bool UISystem::prepare_standard_material_project_transition(
     std::string_view action_id) {
+  if(external_close_guard_&&!external_close_guard_())return false;
   (void)action_id;
   return resolve_standard_material_document(true);
 }
 
 bool UISystem::allow_main_window_close() {
+  if(external_close_guard_&&!external_close_guard_())return false;
   if (editor_ == nullptr || !editor_->project().has_project()) {
     return true;
   }
@@ -3960,6 +3967,7 @@ std::size_t UISystem::render_surfaces(bool render_scene_viewports) {
       material_preview_surface_->render_frame()) {
     ++submitted;
   }
+  if(render_system_->submit_prepared_offscreen_work())++submitted;
   if (!composed_scene) {
     render_system_->complete_presentation_frame(submitted);
   }

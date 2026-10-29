@@ -88,7 +88,8 @@ qt_event_target_belongs_to_tool_settings(const QObject *target);
  */
 class QtViewportPanel final : public QWidget {
 public:
-  explicit QtViewportPanel(QWidget *parent = nullptr, bool composed = false);
+  explicit QtViewportPanel(QWidget *parent = nullptr, bool composed = false,
+      RenderCompositionApi api = RenderCompositionApi::Vulkan);
   ~QtViewportPanel() override;
 
   QtViewportPanel(const QtViewportPanel &) = delete;
@@ -344,6 +345,7 @@ private:
   std::uint64_t loading_frame_generation_ = 1u;
   bool composed_preparing_ = false;
   bool composed_ = false;
+  RenderCompositionApi composition_api_ = RenderCompositionApi::Vulkan;
   RenderFramePerformanceStats render_performance_ = {};
   ViewportSettings fallback_settings_ = ViewportSettings::defaults();
   ViewportLayoutId displayed_layout_ = ViewportLayoutId::Single;

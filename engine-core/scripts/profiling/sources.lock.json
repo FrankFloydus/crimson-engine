@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "python": "3.10",
+  "mcp": "2.3.0",
+  "pybind11": "2.13.6",
+  "sources": [
+    {
+      "name": "tracy",
+      "version": "0.14.1",
+      "url": "https://codeload.github.com/wolfpld/tracy/tar.gz/refs/tags/v0.14.1",
+      "archive": "wolfpld-tracy-v0.14.1.tar.gz",
+      "sha512": "53912d7563e595812b37bc55fd40508cfd8e5c42d48d957a73b6b7d18bf1287b3f795c10c9a986bf7b906d5b5bebe13b02216e563e794d0a82b2783e8ce5510b"
+    },
+    {
+      "name": "capstone",
+      "version": "6.0.0-Alpha10",
+      "url": "https://codeload.github.com/capstone-engine/capstone/tar.gz/refs/tags/6.0.0-Alpha10",
+      "archive": "capstone-6.0.0-Alpha10.tar.gz",
+      "sha512": "dc3e42069802799beee92ffbdcf2e42d85e6267e507bee403058b41b25420f99223db593d75f12013932b3a4627192fe00599bd8c5fca802da37520133baea24"
+    },
+    {
+      "name": "zstd",
+      "version": "1.5.7",
+      "url": "https://codeload.github.com/facebook/zstd/tar.gz/refs/tags/v1.5.7",
+      "archive": "zstd-1.5.7.tar.gz",
+      "sha512": "26e441267305f6e58080460f96ab98645219a90d290a533410b1b0b1d2f870721c95f8384e342ee647c5e968385a5b7e30c2d04340c37f59b3e6d86762c3260c"
+    },
+    {
+      "name": "ppqsort",
+      "version": "1.0.6",
+      "url": "https://codeload.github.com/GabTux/PPQSort/tar.gz/refs/tags/v1.0.6",
+      "archive": "ppqsort-1.0.6.tar.gz",
+      "sha512": "df1fe69dab0e3218c27227b510b0727dcd28a7f5bbdb90cdc906dc2c7d4176cc4b908300ee4353dfaa1809dddeff255a47a99b56128a21ff0b9b5633dd88a66f"
+    }
+  ]
+}

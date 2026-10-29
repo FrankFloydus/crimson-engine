@@ -15,7 +15,7 @@
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
-#include "render/render_system.hpp"
+#include "render/crimson/crimson_render_host.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
@@ -1337,7 +1337,8 @@ TEST(QtViewportComposedPresentationTests,
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
   quader::SceneSession session;
-  quader::RenderSystem renderer;
+  const auto render_host = quader::create_crimson_render_host();
+  auto &renderer = *render_host;
   quader::QtViewportPanel panel(nullptr, true);
   panel.resize(900, 700);
   panel.attach_workspace(session.viewport_workspace());

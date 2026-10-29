@@ -15,6 +15,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -87,6 +88,7 @@ public:
 using MaterialPreviewTextureSlot = RenderStandardMaterialTextureSlot;
 using MaterialPreviewTextureSnapshot = RenderMaterialTextureEvaluationSnapshot;
 using StandardMaterialPreviewSnapshot = RenderMaterialEvaluationSnapshot;
+using RenderMaterialPreviewRecorder = std::function<bool(const MaterialPreviewState&,std::uint32_t,std::uint32_t)>;
 
 /** Optional isolated material presentation supplied by the selected renderer. */
 class RenderMaterialPreviewView {
@@ -99,6 +101,8 @@ public:
   [[nodiscard]] virtual bool initialized() const noexcept = 0;
   [[nodiscard]] virtual std::uint32_t width() const noexcept = 0;
   [[nodiscard]] virtual std::uint32_t height() const noexcept = 0;
+  [[nodiscard]] virtual bool pending() const noexcept { return false; }
+  virtual void invalidate() {}
 };
 
 inline constexpr std::uint32_t kMaterialThumbnailMaximumSize = 1024u;

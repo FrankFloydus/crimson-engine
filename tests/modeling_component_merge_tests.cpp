@@ -1232,6 +1232,150 @@ TEST_F(ModelingComponentMergeTests, DissolveInlineVertexPreservesComponentlessMe
   expect_semantics(after);
 }
 
+TEST_F(ModelingComponentMergeTests,
+       DissolveNoncollinearBoundaryChainPublishesAttributesAndOneHistoryStep) {
+  quader_poly::Document document;
+  const std::vector<quader_poly::ElementId> vertices{
+      quader_poly::add_vertex(document, {-4.0F, 0.0F, -3.0F}),
+      quader_poly::add_vertex(document, {-4.0F, 0.0F, 3.0F}),
+      quader_poly::add_vertex(document, {3.0F, 0.0F, 3.0F}),
+      quader_poly::add_vertex(document, {4.0F, 0.0F, 0.0F}),
+      quader_poly::add_vertex(document, {2.0F, 0.0F, -3.0F}),
+      quader_poly::add_vertex(document, {-1.0F, 0.0F, -4.0F}),
+  };
+  const auto face_id = quader_poly::add_face(document, vertices, 5U);
+  ASSERT_NE(face_id, quader_poly::kInvalidElementId);
+  auto *face = quader_poly::find_face(document, face_id);
+  ASSERT_NE(face, nullptr);
+  face->uvs = {{-4.0F, 2.0F}, {-3.0F, 9.0F}, {7.0F, 8.0F},
+               {9.0F, -1.0F}, {6.0F, -5.0F}, {1.0F, -7.0F}};
+  face->normal_shading = quader_poly::SurfaceShading::Smooth;
+  face->texture_transform = {{-2.0F, 0.5F}, {0.125F, -0.25F}, 35.0F};
+  document.hard_normal_edges = {quader_poly::make_edge(vertices[0], vertices[1])};
+  document.soft_normal_edges = {quader_poly::make_edge(vertices[2], vertices[3])};
+  const auto authored = document;
+  const auto created = editor_.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+      {.name = "Noncollinear floor boundary"});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(editor_.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor_.selection().select_vertices(
+      created.value(), {static_cast<QuaderElementId>(vertices[4]),
+                        static_cast<QuaderElementId>(vertices[5])}).ok());
+  ASSERT_EQ(editor_.selection().summary().selected_vertex_count, 2U);
+  const auto available = editor_.commands().descriptor(quader_command::kModelingDissolveVertices);
+  ASSERT_TRUE(available.has_value());
+  ASSERT_TRUE(available->enabled);
+  const auto peer_before = topology(source_);
+  const auto peer_mesh_before = editor_.query().compiled_object_mesh(source_);
+  ASSERT_TRUE(peer_mesh_before.has_value());
+  const auto before = test::capture_command_observable_state(editor_);
+  auto &session = *project_.active_scene()->session;
+  const auto history_count = session.history().undo_count();
+
+  const auto dissolved = editor_.commands().execute(quader_command::kModelingDissolveVertices);
+
+  ASSERT_TRUE(dissolved.ok()) << dissolved.error_message();
+  ASSERT_TRUE(dissolved.changed());
+  EXPECT_EQ(session.history().undo_count(), history_count + 1U);
+  EXPECT_EQ(session.history().redo_count(), 0U);
+  EXPECT_FALSE(editor_.tools().active_settings().preview_active);
+  const auto expect_published_floor = [&]() {
+    const auto published = topology(created.value());
+    ASSERT_EQ(published.vertices.size(), 4U);
+    ASSERT_EQ(published.faces.size(), 1U);
+    const auto *published_face = quader_poly::find_face(published, face_id);
+    ASSERT_NE(published_face, nullptr);
+    EXPECT_EQ(published_face->vertices,
+              (std::vector<quader_poly::ElementId>{vertices[0], vertices[1],
+                                                  vertices[2], vertices[3]}));
+    EXPECT_EQ(published_face->material_slot, authored.faces.front().material_slot);
+    EXPECT_EQ(published_face->normal_shading, authored.faces.front().normal_shading);
+    EXPECT_EQ(published_face->texture_transform, authored.faces.front().texture_transform);
+    EXPECT_EQ(published.hard_normal_edges, authored.hard_normal_edges);
+    EXPECT_EQ(published.soft_normal_edges, authored.soft_normal_edges);
+    ASSERT_EQ(published_face->uvs.size(), 4U);
+    for (std::size_t corner = 0; corner < 4U; ++corner) {
+      SCOPED_TRACE(corner);
+      const auto *surviving = quader_poly::find_vertex(published, vertices[corner]);
+      ASSERT_NE(surviving, nullptr);
+      EXPECT_TRUE(same_position(surviving->position, authored.vertices[corner].position));
+      EXPECT_FLOAT_EQ(published_face->uvs[corner].x, authored.faces.front().uvs[corner].x);
+      EXPECT_FLOAT_EQ(published_face->uvs[corner].y, authored.faces.front().uvs[corner].y);
+    }
+    EXPECT_EQ(quader_poly::find_vertex(published, vertices[4]), nullptr);
+    EXPECT_EQ(quader_poly::find_vertex(published, vertices[5]), nullptr);
+    const auto compiled = editor_.query().compiled_object_mesh(created.value());
+    ASSERT_TRUE(compiled.has_value());
+    EXPECT_TRUE(compiled->has_authored_polygon_document);
+    ASSERT_EQ(compiled->indices.size(), 6U);
+    for (const auto index : compiled->indices) {
+      ASSERT_LT(index, compiled->vertices.size());
+    }
+    const auto selection = session.modeling().export_selection();
+    const auto selected = std::ranges::find(selection.objects,
+        created.value().modeling_object_id,
+        &ModelingSelectionExportObject::modeling_object_id);
+    ASSERT_NE(selected, selection.objects.end());
+    EXPECT_TRUE(quader_poly::validate_polygon_selection_liveness(
+        published, selected->selection).ok());
+    auto selected_vertices = selected->selection.vertices;
+    std::ranges::sort(selected_vertices);
+    EXPECT_EQ(selected_vertices,
+              (std::vector<quader_poly::ElementId>{vertices[0], vertices[3]}));
+    const auto summary = editor_.selection().summary();
+    EXPECT_EQ(summary.mode, QuaderSelectionMode::Vertex);
+    EXPECT_EQ(summary.active_object_id, created.value().modeling_object_id);
+    EXPECT_EQ(summary.selected_vertex_count, 2U);
+    EXPECT_NE(quader_poly::find_vertex(published, summary.active_vertex_id), nullptr);
+  };
+  expect_published_floor();
+  ASSERT_FALSE(HasFatalFailure());
+  const auto peer_after = topology(source_);
+  ASSERT_EQ(peer_after.vertices.size(), peer_before.vertices.size());
+  ASSERT_EQ(peer_after.faces.size(), peer_before.faces.size());
+  for (std::size_t index = 0; index < peer_before.vertices.size(); ++index) {
+    EXPECT_EQ(peer_after.vertices[index].id, peer_before.vertices[index].id);
+    EXPECT_TRUE(same_position(peer_after.vertices[index].position,
+                              peer_before.vertices[index].position));
+  }
+  for (std::size_t index = 0; index < peer_before.faces.size(); ++index) {
+    const auto &actual_face = peer_after.faces[index];
+    const auto &expected_face = peer_before.faces[index];
+    EXPECT_EQ(actual_face.id, expected_face.id);
+    EXPECT_EQ(actual_face.vertices, expected_face.vertices);
+    EXPECT_EQ(actual_face.material_slot, expected_face.material_slot);
+    EXPECT_EQ(actual_face.normal_shading, expected_face.normal_shading);
+    EXPECT_EQ(actual_face.texture_transform, expected_face.texture_transform);
+    ASSERT_EQ(actual_face.uvs.size(), expected_face.uvs.size());
+    for (std::size_t corner = 0; corner < expected_face.uvs.size(); ++corner) {
+      EXPECT_FLOAT_EQ(actual_face.uvs[corner].x, expected_face.uvs[corner].x);
+      EXPECT_FLOAT_EQ(actual_face.uvs[corner].y, expected_face.uvs[corner].y);
+    }
+  }
+  const auto peer_mesh_after = editor_.query().compiled_object_mesh(source_);
+  ASSERT_TRUE(peer_mesh_after.has_value());
+  EXPECT_EQ(peer_mesh_after->revision, peer_mesh_before->revision);
+  EXPECT_EQ(peer_mesh_after->indices, peer_mesh_before->indices);
+  const auto after = test::capture_command_observable_state(editor_);
+  EXPECT_EQ(after.domain(test::CommandObservableDomain::Scene),
+            before.domain(test::CommandObservableDomain::Scene));
+  ASSERT_TRUE(editor_.history().undo().ok());
+  EXPECT_EQ(session.history().undo_count(), history_count);
+  EXPECT_EQ(session.history().redo_count(), 1U);
+  expect_semantics(before);
+  EXPECT_EQ(test::capture_command_observable_state(editor_)
+                .domain(test::CommandObservableDomain::Scene),
+            before.domain(test::CommandObservableDomain::Scene));
+  ASSERT_TRUE(editor_.history().redo().ok());
+  EXPECT_EQ(session.history().undo_count(), history_count + 1U);
+  EXPECT_EQ(session.history().redo_count(), 0U);
+  expect_semantics(after);
+  expect_published_floor();
+}
+
 TEST_F(ModelingComponentMergeTests, ExtractedMergeRetainsEachObjectsResolvedFaceMaterials) {
   split_positive_x_face(true);
   ASSERT_FALSE(HasFatalFailure());

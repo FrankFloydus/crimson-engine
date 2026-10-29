@@ -1,0 +1,13 @@
+{
+  "valid_scene_id": "11111111-1111-4111-8111-111111111111",
+  "valid_scene_path": "Scenes/mixed_materials.qdr",
+  "valid_mesh_count": 3,
+  "surfaces_per_mesh": 2,
+  "visible_mesh_entity": 100,
+  "hidden_mesh_entity": 101,
+  "mirrored_mesh_entity": 202,
+  "missing_scene_id": "22222222-2222-4222-8222-222222222222",
+  "missing_scene_path": "Scenes/missing_texture.qdr",
+  "texture_path": "Textures/albedo.PNG",
+  "project_material_id": "33333333-3333-4333-8333-333333333333"
+}

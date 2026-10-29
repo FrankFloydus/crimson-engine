@@ -18,6 +18,8 @@
 
 namespace quader {
 
+enum class RenderCompositionApi : std::uint8_t { Vulkan, Direct3D12, Direct3D11 };
+
 /**
  * Immutable capabilities known to be enabled by the compositor device owner.
  * Device extension names are a verified subset, not an enumeration of supported
@@ -41,6 +43,11 @@ struct RenderVulkanSharedContext {
   std::uint32_t graphics_queue_index = 0;
   // Null when the compositor cannot attest which capabilities were enabled.
   std::shared_ptr<const RenderVulkanEnabledCapabilities> enabled_capabilities;
+  RenderCompositionApi api = RenderCompositionApi::Vulkan;
+  void *d3d12_device = nullptr;
+  void *d3d12_queue = nullptr;
+  void *d3d11_device = nullptr;
+  void *d3d11_context = nullptr;
 };
 
 /** Retained offscreen allocation extent, independent of the visible pane size. */
@@ -55,6 +62,15 @@ struct RenderVulkanCompositionTarget {
   std::uint32_t width = 0;
   std::uint32_t height = 0;
   VkImageLayout old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+  RenderCompositionApi api = RenderCompositionApi::Vulkan;
+  void *d3d12_resource = nullptr;
+  void *d3d12_queue = nullptr;
+  std::uint32_t d3d12_state = 0;
+  void *d3d11_texture = nullptr;
+  void *d3d11_context = nullptr;
+  // Native addresses may be reused after resize/recreation. This opaque Qt
+  // image generation is part of the identity of retained destination pixels.
+  std::uint64_t destination_generation = 0;
 };
 
 /** Tracks command producers across nested compositor callbacks without GPU waits. */

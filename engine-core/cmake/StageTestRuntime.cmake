@@ -1,0 +1,12 @@
+cmake_minimum_required(VERSION 3.25)
+if(NOT DEFINED ENGINE_TEST_DESTINATION OR NOT IS_ABSOLUTE "${ENGINE_TEST_DESTINATION}")
+    message(FATAL_ERROR "Engine test runtime staging requires an absolute destination.")
+endif()
+# Header-only and pure CPU checks can have an empty runtime DLL set.
+foreach(dependency IN LISTS ENGINE_TEST_RUNTIME_DLLS)
+    if(dependency STREQUAL "")
+        continue()
+    endif()
+    get_filename_component(name "${dependency}" NAME)
+    file(COPY_FILE "${dependency}" "${ENGINE_TEST_DESTINATION}/${name}" ONLY_IF_DIFFERENT)
+endforeach()

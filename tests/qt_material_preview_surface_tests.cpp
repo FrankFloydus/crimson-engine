@@ -7,18 +7,40 @@
 #include "ui/qt_material_preview_surface.hpp"
 
 #include "math/glm_bridge.hpp"
+#include "render/crimson/crimson_render_host.hpp"
+#include "render/crimson/crimson_material_preview.hpp"
 
 #include <gtest/gtest.h>
 
 #include <QApplication>
 #include <QCoreApplication>
 #include <QMouseEvent>
+#include <QFocusEvent>
 #include <QWheelEvent>
+#include <QWidget>
 
 #include <utility>
 
 namespace quader {
 namespace {
+
+TEST(CrimsonMaterialPreviewBindingTests, NativeCopyOwnerChangesOnlyWhenItsDocumentBindingChanges) {
+  CrimsonMaterialPreview preview(std::filesystem::path{}),other(std::filesystem::path{});
+  const auto initial=preview.source_owner();EXPECT_NE(initial,0u);EXPECT_NE(initial,other.source_owner());
+  preview.resize(640,480);preview.mark_dirty();EXPECT_EQ(preview.source_owner(),initial);
+  StandardMaterialPreviewSnapshot material;material.project_material_id=ProjectAssetId::parse("11111111-1111-4111-8111-111111111111").value();
+  ASSERT_TRUE(preview.set_material(material));const auto bound=preview.source_owner();EXPECT_NE(bound,initial);
+  ++material.content_revision;ASSERT_TRUE(preview.set_material(material));EXPECT_EQ(preview.source_owner(),bound);
+  material.project_material_id=ProjectAssetId::parse("22222222-2222-4222-8222-222222222222").value();ASSERT_TRUE(preview.set_material(material));const auto rebound=preview.source_owner();EXPECT_NE(rebound,bound);
+  preview.set_recorder([](const auto&,auto,auto){return false;});EXPECT_NE(preview.source_owner(),rebound);
+  preview.resize(320,240);const auto callbackBinding=preview.source_owner();preview.mark_dirty();EXPECT_EQ(preview.source_owner(),callbackBinding);
+}
+
+TEST(CrimsonMaterialPreviewBindingTests, NativeBackendSelectionPrecedesEveryQtDevice) {
+  auto host=create_crimson_render_host();ASSERT_NE(host,nullptr);EXPECT_FALSE(host->initialized());
+  ASSERT_TRUE(host->set_composition_api(RenderCompositionApi::Direct3D11));EXPECT_EQ(host->composition_api(),RenderCompositionApi::Direct3D11);EXPECT_FALSE(host->begin_native_external_content(nullptr));EXPECT_TRUE(host->finish_external_queue_submission());
+  ASSERT_TRUE(host->set_composition_api(RenderCompositionApi::Direct3D12));EXPECT_EQ(host->composition_api(),RenderCompositionApi::Direct3D12);EXPECT_FALSE(host->initialized());
+}
 
 TEST(QtMaterialPreviewSurfaceTests,
      ExposesNeutralStateWithoutOwningProjectOrWorkspaceState) {
@@ -201,6 +223,29 @@ TEST(QtMaterialPreviewSurfaceTests,
   EXPECT_FLOAT_EQ(surface.preview_state().pan_offset().y, 0.0f);
   EXPECT_FLOAT_EQ(surface.preview_state().environment_rotation_radians(),
                   0.0f);
+
+  // The production composed carrier owns Qt pixels. Navigation still reaches
+  // the same semantic owner without creating a native QWindow or renderer.
+  const auto renderer = create_crimson_render_host();
+  auto &dormant_host = *renderer;
+  QtMaterialPreviewSurface composed_surface;
+  std::unique_ptr<QWidget> carrier(composed_surface.create_composed_widget(nullptr,dormant_host));
+  carrier->resize(160,120);
+  ASSERT_EQ(composed_surface.handle(),nullptr);
+  QMouseEvent carrier_press(QEvent::MouseButtonPress,QPointF(10,10),QPointF(10,10),
+      Qt::MiddleButton,Qt::MiddleButton,Qt::NoModifier);
+  QCoreApplication::sendEvent(carrier.get(),&carrier_press);
+  QMouseEvent carrier_move(QEvent::MouseMove,QPointF(30,20),QPointF(30,20),
+      Qt::NoButton,Qt::MiddleButton,Qt::NoModifier);
+  QCoreApplication::sendEvent(carrier.get(),&carrier_move);
+  EXPECT_NE(composed_surface.preview_state().yaw_radians(),0.f);
+  const auto accepted_yaw=composed_surface.preview_state().yaw_radians();
+  QFocusEvent lost(QEvent::FocusOut);QCoreApplication::sendEvent(carrier.get(),&lost);
+  QMouseEvent after_focus_loss(QEvent::MouseMove,QPointF(70,50),QPointF(70,50),
+      Qt::NoButton,Qt::MiddleButton,Qt::NoModifier);
+  QCoreApplication::sendEvent(carrier.get(),&after_focus_loss);
+  EXPECT_FLOAT_EQ(composed_surface.preview_state().yaw_radians(),accepted_yaw);
+  EXPECT_EQ(composed_surface.handle(),nullptr);
 }
 
 } // namespace

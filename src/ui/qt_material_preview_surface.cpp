@@ -9,6 +9,7 @@
 #include "core/logger.hpp"
 #include "ui/qt_contextual_input_hints.hpp"
 #include "ui/qt_input_adapter.hpp"
+#include "ui/qt_vulkan_composition_widget.hpp"
 
 #include <QEvent>
 #include <QExposeEvent>
@@ -16,6 +17,7 @@
 #include <QPlatformSurfaceEvent>
 #include <QResizeEvent>
 #include <QWheelEvent>
+#include <QWidget>
 
 #include <algorithm>
 #include <cmath>
@@ -28,8 +30,12 @@ QtMaterialPreviewSurface::QtMaterialPreviewSurface(QWindow *parent)
     : QWindow(parent) {
   setObjectName(QStringLiteral("standardMaterialEditor.previewSurface"));
   setSurfaceType(QSurface::RasterSurface);
+  register_input_hints(*this);
+}
+
+void QtMaterialPreviewSurface::register_input_hints(QObject& source) {
   qt_register_contextual_input_hints(
-      *this, *this,
+      source, *this,
       [this](Qt::KeyboardModifiers) {
         const bool navigable = input_hints_available();
         return QtContextualInputHintSourceState{
@@ -81,7 +87,40 @@ QtMaterialPreviewSurface::QtMaterialPreviewSurface(QWindow *parent)
       });
 }
 
-QtMaterialPreviewSurface::~QtMaterialPreviewSurface() { shutdown(); }
+QtMaterialPreviewSurface::~QtMaterialPreviewSurface() {
+  // The semantic QWindow can be a sibling of its composed carrier in document
+  // tools. Remove callbacks before QObject child deletion can reorder them.
+  if(auto* host=static_cast<QtVulkanCompositionWidget*>(composed_host_.data())) {
+    host->set_prepare_callback({});host->set_render_callback({});host->set_release_callback({});
+    host->set_render_system(nullptr);host->removeEventFilter(this);
+  }
+  shutdown();
+}
+
+QWidget *QtMaterialPreviewSurface::create_composed_widget(QWidget *parent,RenderHost &render_system) {
+  if(composed_host_)return composed_host_;
+  auto* host=new QtVulkanCompositionWidget(parent,render_system.composition_api());
+  composed_host_=host;render_system_=&render_system;
+  host->setObjectName(QStringLiteral("standardMaterialEditor.previewSurfaceContainer"));
+  host->setFocusPolicy(Qt::StrongFocus);host->setMouseTracking(true);
+  host->installEventFilter(this);host->set_render_system(&render_system);register_input_hints(*host);
+  host->set_prepare_callback([this] {
+    if(!render_system_||!render_system_->initialized())return false;
+    if(!initialized_&&!initialize(*render_system_))return false;
+    synchronize_render_size();return renderer_&&render_system_->prepare_material_preview(*renderer_,composed_host_->window()->isActiveWindow());
+  });
+  host->set_render_callback([this](const RenderVulkanCompositionTarget& target) {
+    if(!renderer_||!render_system_)return false;
+    const bool submitted=render_system_->render_composited_material_preview(*renderer_,target);
+    if(submitted||!renderer_->pending())render_pending_=renderer_->pending();
+    return submitted;
+  });
+  host->set_release_callback([this] {
+    if(renderer_){if(render_system_)render_system_->release_material_preview(*renderer_);renderer_->shutdown();renderer_.reset();}initialized_=false;render_pending_=true;
+  });
+  QObject::connect(host,&QObject::destroyed,this,[this]{composed_host_=nullptr;});
+  return host;
+}
 
 bool QtMaterialPreviewSurface::initialize(RenderHost &render_system) {
   if (initialized_) {
@@ -94,11 +133,14 @@ bool QtMaterialPreviewSurface::initialize(RenderHost &render_system) {
     return false;
   }
   renderer_->set_preview_state(preview_state_);
+  if(record_callback_)render_system_->set_material_preview_recorder(*renderer_,record_callback_);
   if (material_snapshot_) {
     (void)renderer_->set_material(*material_snapshot_);
   }
   initialized_ = true;
   mark_render_pending();
+
+  if(composed_host_) {synchronize_render_size();return true;}
 
   (void)winId();
   native_surface_available_ = handle() != nullptr;
@@ -123,6 +165,7 @@ void QtMaterialPreviewSurface::shutdown() {
   swap_chain_.reset();
   swap_chain_native_id_ = 0u;
   mark_shared_commands_pending();
+  if(render_system_)render_system_->release_material_preview(*renderer_);
   renderer_->shutdown();
   renderer_.reset();
   render_system_ = nullptr;
@@ -133,6 +176,12 @@ void QtMaterialPreviewSurface::shutdown() {
 }
 
 bool QtMaterialPreviewSurface::render_frame() {
+  if(composed_host_) {
+    if(!ready_to_render()||!render_pending_)return false;
+    synchronize_render_size();
+    if(!render_system_->prepare_material_preview(*renderer_,composed_host_->window()->isActiveWindow()))return false;
+    composed_host_->update();return true;
+  }
   if (!render_pending_ && !(swap_chain_ && swap_chain_->needs_initial_frame())) {
     return false;
   }
@@ -151,6 +200,8 @@ bool QtMaterialPreviewSurface::render_frame() {
 }
 
 bool QtMaterialPreviewSurface::ready_to_render() const {
+  if(composed_host_)return initialized_&&render_system_&&render_system_->initialized()&&renderer_&&renderer_->initialized()&&
+      composed_host_->isVisible()&&composed_host_->width()>0&&composed_host_->height()>0;
   return initialized_ && render_system_ != nullptr &&
          render_system_->initialized() && renderer_ && renderer_->initialized() &&
          static_cast<bool>(swap_chain_) && native_surface_available_ &&
@@ -163,6 +214,7 @@ bool QtMaterialPreviewSurface::needs_rendering() const {
 }
 
 bool QtMaterialPreviewSurface::input_hints_available() const noexcept {
+  if(composed_host_)return composed_host_->isVisible()&&composed_host_->width()>0&&composed_host_->height()>0;
   return native_surface_available_ && isVisible() && width() > 0 && height() > 0;
 }
 
@@ -170,11 +222,11 @@ void QtMaterialPreviewSurface::synchronize_render_size() {
   if (!initialized_) {
     return;
   }
-  const qreal scale = devicePixelRatio();
+  const qreal scale = composed_host_?composed_host_->devicePixelRatioF():devicePixelRatio();
   const std::uint32_t pixel_width = static_cast<std::uint32_t>(
-      std::max<qreal>(1.0, std::round(width() * scale)));
+      std::max<qreal>(1.0, std::round((composed_host_?composed_host_->width():width()) * scale)));
   const std::uint32_t pixel_height = static_cast<std::uint32_t>(
-      std::max<qreal>(1.0, std::round(height() * scale)));
+      std::max<qreal>(1.0, std::round((composed_host_?composed_host_->height():height()) * scale)));
   if (renderer_->width() != pixel_width || renderer_->height() != pixel_height) {
     mark_shared_commands_pending();
     renderer_->resize(pixel_width, pixel_height);
@@ -192,6 +244,18 @@ void QtMaterialPreviewSurface::set_material(
   if (surface_changed_callback_) {
     surface_changed_callback_();
   }
+}
+
+void QtMaterialPreviewSurface::set_record_callback(RenderMaterialPreviewRecorder callback) {
+  record_callback_=std::move(callback);
+  if(renderer_&&render_system_)render_system_->set_material_preview_recorder(*renderer_,record_callback_);
+  mark_dirty();
+}
+
+void QtMaterialPreviewSurface::mark_dirty() {
+  if(renderer_)renderer_->invalidate();
+  mark_render_pending();
+  if(composed_host_)composed_host_->update();
 }
 
 bool QtMaterialPreviewSurface::set_preview_mesh(
@@ -276,6 +340,25 @@ bool QtMaterialPreviewSurface::event(QEvent *event) {
   return QWindow::event(event);
 }
 
+bool QtMaterialPreviewSurface::eventFilter(QObject* source,QEvent* event) {
+  if(source!=composed_host_||!event)return QWindow::eventFilter(source,event);
+  switch(event->type()) {
+  case QEvent::MouseButtonPress:mousePressEvent(static_cast<QMouseEvent*>(event));return event->isAccepted();
+  case QEvent::MouseButtonRelease:mouseReleaseEvent(static_cast<QMouseEvent*>(event));return event->isAccepted();
+  case QEvent::MouseButtonDblClick:mouseDoubleClickEvent(static_cast<QMouseEvent*>(event));return event->isAccepted();
+  case QEvent::MouseMove:mouseMoveEvent(static_cast<QMouseEvent*>(event));return event->isAccepted();
+  case QEvent::Wheel:wheelEvent(static_cast<QWheelEvent*>(event));return event->isAccepted();
+  case QEvent::Resize:case QEvent::DevicePixelRatioChange:case QEvent::ScreenChangeInternal:
+    synchronize_render_size();mark_render_pending();if(surface_changed_callback_)surface_changed_callback_();break;
+  case QEvent::WindowActivate:case QEvent::FocusIn:
+    mark_render_pending();if(surface_changed_callback_)surface_changed_callback_();break;
+  case QEvent::Hide:case QEvent::FocusOut:case QEvent::WindowDeactivate:case QEvent::WindowBlocked:case QEvent::UngrabMouse:
+    drag_mode_=DragMode::None;break;
+  default:break;
+  }
+  return false;
+}
+
 void QtMaterialPreviewSurface::exposeEvent(QExposeEvent *event) {
   QWindow::exposeEvent(event);
   native_surface_available_ = handle() != nullptr;
@@ -305,7 +388,7 @@ void QtMaterialPreviewSurface::mousePressEvent(QMouseEvent *event) {
                 *event, QuaderInputGesture::Drag);
   if (chord.has_value() &&
       chord->mouse_button == QuaderMouseButton::Middle) {
-    requestActivate();
+    if(composed_host_)composed_host_->setFocus(Qt::MouseFocusReason);else requestActivate();
     if (chord->primary) {
       drag_mode_ = DragMode::RotateEnvironment;
     } else if (chord->shift) {
@@ -351,7 +434,7 @@ void QtMaterialPreviewSurface::mouseMoveEvent(QMouseEvent *event) {
   }
   const QPointF delta = event->position() - last_drag_position_;
   last_drag_position_ = event->position();
-  const float scale = static_cast<float>(devicePixelRatio());
+  const float scale = static_cast<float>(composed_host_?composed_host_->devicePixelRatioF():devicePixelRatio());
   const QVec2 delta_pixels{
       static_cast<float>(delta.x()) * scale,
       static_cast<float>(delta.y()) * scale,

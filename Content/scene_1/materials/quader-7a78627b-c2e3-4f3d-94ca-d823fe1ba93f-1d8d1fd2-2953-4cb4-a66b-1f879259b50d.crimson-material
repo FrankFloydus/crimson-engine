@@ -1,0 +1,193 @@
+{
+  "graph": {
+    "links": [
+      {
+        "fromNode": 2,
+        "fromPin": 7,
+        "id": 1,
+        "toNode": 3,
+        "toPin": 7
+      },
+      {
+        "fromNode": 3,
+        "fromPin": 1,
+        "id": 2,
+        "toNode": 5,
+        "toPin": 8
+      },
+      {
+        "fromNode": 4,
+        "fromPin": 1,
+        "id": 3,
+        "toNode": 5,
+        "toPin": 9
+      },
+      {
+        "fromNode": 5,
+        "fromPin": 0,
+        "id": 4,
+        "toNode": 1,
+        "toPin": 10
+      }
+    ],
+    "nextLinkId": 5,
+    "nextNodeId": 6,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5,
+          "attenuationColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "attenuationDistance": 1.0,
+          "baseColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "blend": 0,
+          "decalColorEnabled": true,
+          "decalColorStrength": 1.0,
+          "decalMetallicEnabled": false,
+          "decalMetallicStrength": 1.0,
+          "decalNormalEnabled": false,
+          "decalNormalStrength": 1.0,
+          "decalRoughnessEnabled": false,
+          "decalRoughnessStrength": 1.0,
+          "doubleSided": false,
+          "emission": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "height": 0.5,
+          "ior": 1.5,
+          "metallic": 0.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "receiveFog": true,
+          "refraction": false,
+          "roughness": 1.0,
+          "shading": 0,
+          "specular": 0.5,
+          "tessellation": {
+            "amount": 0.10000000149011612,
+            "enabled": false,
+            "heightLod": 0.0,
+            "maxFactor": 8,
+            "midpoint": 0.5
+          },
+          "thickness": 0.0,
+          "transmission": 1.0
+        },
+        "position": [
+          650.0,
+          50.0
+        ]
+      },
+      {
+        "id": 2,
+        "kind": 1,
+        "name": "UV",
+        "position": [
+          -650.0,
+          80.0
+        ],
+        "uv": {
+          "mode": 0,
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "scaleLinked": true
+        }
+      },
+      {
+        "id": 3,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -400.0,
+          0.0
+        ],
+        "texture": {
+          "image": "b8253538-dccb-52a3-9421-f57bef78603e",
+          "normalStrength": 1.0,
+          "role": 0,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "id": 4,
+        "kind": 4,
+        "name": "Base Color factor",
+        "position": [
+          -380.0,
+          105.0
+        ]
+      },
+      {
+        "id": 5,
+        "kind": 5,
+        "left": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "name": "Multiply",
+        "position": [
+          0.0,
+          0.0
+        ],
+        "right": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    ],
+    "version": 20
+  },
+  "id": "c88156fd-ec9f-5015-ae66-7fa8ac27e2e8",
+  "name": "Default Material",
+  "originModel": "",
+  "type": "crimson-material",
+  "version": 6
+}

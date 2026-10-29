@@ -159,6 +159,8 @@ public:
   [[nodiscard]] bool main_window_close_in_progress() const {
     return main_window_close_in_progress_;
   }
+  void set_external_close_guard(std::function<bool()> callback){external_close_guard_=std::move(callback);}
+  void set_external_command_input_owner(std::function<bool()> callback){external_command_input_owner_=std::move(callback);}
   [[nodiscard]] bool loading_operation_active() const {
     return loading_operation_depth_ != 0u;
   }
@@ -672,6 +674,8 @@ private:
   std::uint64_t status_notification_generation_ = 0u;
   bool home_visible_ = false;
   bool main_window_close_in_progress_ = false;
+  std::function<bool()> external_close_guard_;
+  std::function<bool()> external_command_input_owner_;
   bool viewport_initialized_ = false;
   bool selection_toolbar_workspace_visible_ = true;
   bool snapping_toolbar_workspace_visible_ = true;

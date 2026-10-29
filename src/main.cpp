@@ -24,8 +24,11 @@
 #include <QSize>
 #include <QStyle>
 #include <QStyleFactory>
+#include <QVariant>
 
 #include <exception>
+#include <charconv>
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -38,6 +41,9 @@
 namespace {
 
 QIcon quader_application_icon() {
+#if defined(CRIMSON_ENGINE_APPLICATION)
+  return QIcon(QStringLiteral(":/crimson/crimson-engine.ico"));
+#else
   QIcon icon;
   icon.addFile(QStringLiteral(":/quader/icons/quader_16.png"), QSize(16, 16));
   icon.addFile(QStringLiteral(":/quader/icons/quader_32.png"), QSize(32, 32));
@@ -46,6 +52,7 @@ QIcon quader_application_icon() {
   icon.addFile(QStringLiteral(":/quader/icons/quader_256.png"),
                QSize(256, 256));
   return icon;
+#endif
 }
 
 std::filesystem::path executable_path(int argc, char **argv) {
@@ -69,6 +76,12 @@ std::filesystem::path executable_path(int argc, char **argv) {
  */
 struct CommandLineOptions {
   quader::RendererBackend render_backend = quader::RendererBackend::Vulkan;
+  std::optional<quader::RenderCompositionApi> composition_api;
+  std::filesystem::path engine_project_root;
+  std::string profile_mode,error;
+  std::uint32_t profile_duration{15};
+  bool profile_duration_explicit{};
+  std::filesystem::path profile_output,frame_profile;
   bool sentry_verify = false;
   std::filesystem::path crimson_instancing_output;
 };
@@ -79,7 +92,26 @@ CommandLineOptions parse_command_line(int argc, char **argv) {
     const std::string_view argument = argv[index] != nullptr
                                           ? std::string_view(argv[index])
                                           : std::string_view();
-    if (argument == "--vulkan" ||
+    if(argument=="--profile"||argument=="--profile-duration"||argument=="--profile-output"||argument=="--frame-profile"){
+      if(index+1>=argc||argv[index+1]==nullptr){options.error="Missing value for "+std::string(argument);break;}
+      const std::string_view value(argv[++index]);
+      if(argument=="--profile"){if(value!="startup"&&value!="editor"&&value!="gameplay")options.error="Profile mode must be startup, editor or gameplay.";else options.profile_mode=std::string(value);}
+      else if(argument=="--profile-duration"){std::uint32_t seconds{};const auto parsed=std::from_chars(value.data(),value.data()+value.size(),seconds);if(parsed.ec!=std::errc{}||parsed.ptr!=value.data()+value.size()||seconds<1||seconds>3600)options.error="Profile duration must be between 1 and 3600 seconds.";else {options.profile_duration=seconds;options.profile_duration_explicit=true;}}
+      else if(value.empty())options.error="Profile output paths cannot be empty.";
+      else if(argument=="--profile-output")options.profile_output=std::filesystem::u8path(value);
+      else options.frame_profile=std::filesystem::u8path(value);
+    } else if(argument=="--renderer"||argument.starts_with("--renderer=")){
+      std::string_view backend;if(argument=="--renderer"){if(index+1>=argc){options.error="Missing value for --renderer.";break;}backend=argv[++index];}else backend=argument.substr(11);
+      if(backend=="dx11")options.composition_api=quader::RenderCompositionApi::Direct3D11;
+      else if(backend=="dx12")options.composition_api=quader::RenderCompositionApi::Direct3D12;
+      else options.error="Renderer must be dx11 or dx12.";
+    } else if (argument == "--project-root" && index + 1 < argc) {
+      options.engine_project_root=std::filesystem::u8path(argv[++index]);
+    } else if(argument=="--project-root"){
+      options.error="Missing value for --project-root.";
+    } else if (argument.starts_with("--project-root=")) {
+      options.engine_project_root=std::filesystem::u8path(std::string(argument.substr(15)));
+    } else if (argument == "--vulkan" ||
                argument == "--render-backend=vulkan") {
       options.render_backend = quader::RendererBackend::Vulkan;
     } else if (argument == "--opengl" ||
@@ -97,6 +129,8 @@ CommandLineOptions parse_command_line(int argc, char **argv) {
           std::string(argument.substr(std::string_view("--crimson-instancing-test-output=").size())));
     }
   }
+  if(options.profile_duration_explicit&&options.profile_mode.empty())options.error="--profile-duration requires --profile startup, editor or gameplay.";
+  if(!options.profile_duration_explicit&&(options.profile_mode=="editor"||options.profile_mode=="gameplay"))options.profile_duration=10;
   return options;
 }
 
@@ -140,23 +174,41 @@ int main(int argc, char** argv) {
   const std::filesystem::path exe = executable_path(argc, argv);
   const CommandLineOptions command_line = parse_command_line(argc, argv);
   const std::filesystem::path executable_dir = exe.parent_path();
+#if defined(CRIMSON_ENGINE_APPLICATION)
+  const char* app_data=std::getenv("LOCALAPPDATA");
+  quader::initialize_user_config_directory(app_data&&*app_data
+      ?std::filesystem::absolute(std::filesystem::path(app_data)/"CrimsonEngine")
+      :std::filesystem::absolute(executable_dir/"settings"));
+#endif
   const std::filesystem::path log_path =
       executable_dir /
+#if defined(CRIMSON_ENGINE_APPLICATION)
+      "renderer.log";
+#else
       (quader::current_product_release() == quader::kInternalFullRelease
            ? "quader.log"
            : "quader-" + quader::product_release_label(
                              quader::current_product_release()) + ".log");
+#endif
   quader::Logger::initialize({.file_path = log_path.string()});
   quader::install_fatal_error_handler(log_path);
   quader::install_qt_fatal_error_handler();
+  if(!command_line.error.empty()){LOG_ERROR("{}",command_line.error);quader::Logger::shutdown();return 2;}
 
   // Quader's numeric editing contract is locale-independent. Installing the
   // C locale before QApplication construction makes every current and future
   // Qt decimal control use '.' without affecting translated UI catalogs.
   QLocale::setDefault(QLocale::c());
   QApplication qt_application(argc, argv);
+#if defined(CRIMSON_ENGINE_APPLICATION)
+  qt_application.setApplicationName(QStringLiteral("Crimson Engine"));
+  qt_application.setOrganizationName(QStringLiteral("CrimsonEngine"));
+  qt_application.setApplicationDisplayName(QStringLiteral("Crimson Engine"));
+  qt_application.setProperty("crimsonEngineApplication",true);
+#else
   qt_application.setApplicationName(QStringLiteral("Quader"));
   qt_application.setOrganizationName(QStringLiteral("Quader"));
+#endif
   QStyle *fusion_style = QStyleFactory::create(QStringLiteral("Fusion"));
   if (fusion_style == nullptr) {
     return 1;
@@ -201,7 +253,13 @@ int main(int argc, char** argv) {
   try {
     auto app = std::make_unique<quader::App>();
     if (!app->initialize(qt_application, exe,
-                         {.render_backend = command_line.render_backend})) {
+                         {.render_backend = command_line.render_backend,
+                          .composition_api = command_line.composition_api,
+                          .engine_project_root = command_line.engine_project_root,
+                          .profile_mode = command_line.profile_mode,
+                          .profile_duration = command_line.profile_duration,
+                          .profile_output = command_line.profile_output,
+                          .frame_profile = command_line.frame_profile})) {
       LOG_CRITICAL("Application initialization failed");
       app->shutdown();
       app.reset();

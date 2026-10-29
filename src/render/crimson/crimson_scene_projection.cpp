@@ -9,6 +9,8 @@
 #include "core/color_space.hpp"
 #include "render/mesh_quad_uv_interpolation.hpp"
 #include "render/scene_render_extraction.hpp"
+#include "assets/curve_asset_payload.hpp"
+#include "scene/light_properties.hpp"
 
 #include <lodepng.h>
 
@@ -230,6 +232,8 @@ struct CrimsonSceneProjectionCache::State final {
            std::weak_ptr<const PackedGeometry>> stream_families;
   std::map<MeshKey, MeshEntry> meshes;
   std::map<MeshKey, std::uint64_t> instances;
+  std::map<MeshKey,EntityId> preview_light_ids;
+  EntityId next_light_id=std::numeric_limits<EntityId>::max();
   std::map<std::string, SurfaceEntry> surfaces;
 
   std::shared_ptr<const PackedGeometry> pack(
@@ -431,9 +435,9 @@ struct CrimsonSceneProjectionCache::State final {
 
   bool append_instance(CrimsonSceneProjection &output, const MeshKey &key,
                        std::uint64_t mesh_id, const RenderMaterialBindingSnapshot &material,
-                       const QMat4 &world, const QMat4 &sampling, bool double_sided,
+                       const QMat4 &world, const QMat4 &sampling, bool double_sided,bool cast_shadows,
                        std::uint64_t transform_revision,
-                       std::uint64_t sampling_revision, std::string &error) {
+                       std::uint64_t sampling_revision, std::string &error,bool context_dimmed=false) {
     auto &identity = instances[key];
     if (!identity) identity = next_identity++;
     crimson::shared::InstanceUpdate instance;
@@ -448,25 +452,30 @@ struct CrimsonSceneProjectionCache::State final {
     instance.sampling_revision = sampling_revision;
     instance.appearance_revision = material.revision;
     instance.double_sided = double_sided;
+    instance.context_dimmed=context_dimmed;
     crimson::shared::SurfaceUpdate primary;
     if (!surface(&material.primary_material, primary, error)) return false;
     instance.surface = primary.id;
-    const auto add_surface = [&](crimson::shared::SurfaceUpdate value) {
+    const auto add_surface = [&](crimson::shared::SurfaceUpdate value,const RenderMaterialAssetSnapshot& source) {
       const auto existing = std::ranges::find(output.surfaces, value.id, &crimson::shared::SurfaceUpdate::id);
       if (existing != output.surfaces.end() && existing->revision != value.revision) {
         error = "Crimson scene contains conflicting snapshots for one material identity";
         return false;
       }
-      if (existing == output.surfaces.end()) output.surfaces.push_back(std::move(value));
+      if (existing == output.surfaces.end()) {
+        output.source_materials.emplace_back(value.id,source.present?source:packaged_default_render_material());
+        output.surfaces.push_back(std::move(value));
+      }
       return true;
     };
-    if (!add_surface(primary)) return false;
+    if (!add_surface(primary,material.primary_material)) return false;
     for (const auto &[slot, source] : material.material_slots) {
       crimson::shared::SurfaceUpdate value;
       if (!surface(&source, value, error)) return false;
       instance.surface_bindings.push_back({slot, value.id});
-      if (!add_surface(std::move(value))) return false;
+      if (!add_surface(std::move(value),source)) return false;
     }
+    output.instance_cast_shadows.emplace_back(instance.id,cast_shadows);
     output.instances.push_back(std::move(instance));
     return true;
   }
@@ -487,10 +496,13 @@ bool CrimsonSceneProjectionCache::prepare(
     error = "Crimson requires a complete pinned scene and preview generation";
     return false;
   }
-  if (preview && (!preview->curves.empty() || !preview->lights.empty())) {
-    error = "Crimson scene migration has not yet implemented curve or light previews";
-    return false;
+  const auto valid_transform=[](const QMat4& matrix){return std::ranges::all_of(matrix.values,[](float value){return std::isfinite(value);});};
+  if(preview)for(const auto& curve:preview->curves){
+    if(!curve.sample_payload||!curve.sample_payload->error_message.empty()||curve.instance_transforms.empty()||!std::ranges::all_of(curve.instance_transforms,valid_transform)||
+       !std::ranges::all_of(curve.sample_payload->samples,[](const auto& sample){return std::isfinite(sample.position.x)&&std::isfinite(sample.position.y)&&std::isfinite(sample.position.z)&&std::isfinite(sample.tangent.x)&&std::isfinite(sample.tangent.y)&&std::isfinite(sample.tangent.z)&&std::isfinite(sample.parameter);})){error="Crimson Curve preview requires complete finite pinned samples and placements";return false;}
   }
+  const auto valid_light=[&](const LightComponent& light,const QMat4& world){return valid_transform(world)&&light_component_metadata_is_valid(light)&&
+      (light.type==LightType::Directional||light.type==LightType::Point||light.type==LightType::Spot)&&finite(light.color)&&std::isfinite(light.intensity)&&std::isfinite(light.range)&&std::isfinite(light.distance_attenuation);};
   struct CacheTransaction final {
     std::unique_ptr<State> &current;
     std::unique_ptr<State> previous;
@@ -510,6 +522,10 @@ bool CrimsonSceneProjectionCache::prepare(
   candidate->generation = generation;
   const RenderToolPreviewSuppressionSnapshot empty_suppression;
   const auto &suppression = candidate->preview ? candidate->preview->suppression : empty_suppression;
+  std::set<EntityId> occupied_ids;for(const auto& light:candidate->source->lights)occupied_ids.insert(light.entity_id);
+  for(const auto& light:candidate->source->lights){if(suppressed(suppression,light.entity_id))continue;if(!valid_light(light.light,light.world_transform)){error="Crimson scene Light contains nonfinite or invalid authored properties";return false;}candidate->lights.push_back(light);}
+  std::set<MeshKey> used_light_keys;
+  if(candidate->preview)for(std::size_t index=0;index<candidate->preview->lights.size();++index){const auto& record=candidate->preview->lights[index];if(record.instance_transforms.empty()){error="Crimson Light preview has no pinned placements";return false;}for(std::size_t placement=0;placement<record.instance_transforms.size();++placement){const auto& world=record.instance_transforms[placement];if(!valid_light(record.light,world)){error="Crimson Light preview contains nonfinite or invalid authored properties";return false;}const MeshKey key{3u,record.source_entity,record.layout_key,index};const MeshKey occurrence{key.kind,key.first,key.second,static_cast<std::uint64_t>(index)<<32|placement};used_light_keys.insert(occurrence);auto& id=state_->preview_light_ids[occurrence];if(!id||occupied_ids.contains(id)){while(!state_->next_light_id||occupied_ids.contains(state_->next_light_id))--state_->next_light_id;id=state_->next_light_id--;}occupied_ids.insert(id);candidate->lights.push_back({id,record.light,world,candidate->preview->revision,candidate->preview->revision,true,true});}}
   for (const auto &record : candidate->source->meshes) {
     if (suppressed(suppression, record.entity_id)) continue;
     if (record.mesh.vertices.empty() && record.mesh.indices.empty()) continue;
@@ -521,7 +537,7 @@ bool CrimsonSceneProjectionCache::prepare(
     if (!state_->append_mesh(*candidate, key, packed, record.mesh.primitives, mesh_id, error) ||
         !state_->append_instance(*candidate, {0u, record.entity_id}, mesh_id,
             record.material, record.world_transform, record.sampling_from_local,
-            record.double_sided(), record.transform_revision,
+            record.double_sided(),record.cast_shadows(), record.transform_revision,
             candidate->source->texture_mapping_revision, error)) return false;
   }
   for (const auto &record : candidate->source->instance_primitives) {
@@ -543,8 +559,8 @@ bool CrimsonSceneProjectionCache::prepare(
       if (!state_->append_instance(*candidate,
           {1u, occurrence.entity_id, occurrence.occurrence, mesh_id}, mesh_id,
           record.material, occurrence.world_transform, occurrence.sampling_from_local,
-          record.key.double_sided, candidate->source->transform_revision,
-          candidate->source->texture_mapping_revision, error)) return false;
+          record.key.double_sided,record.key.cast_shadows, candidate->source->transform_revision,
+          candidate->source->texture_mapping_revision, error,occurrence.dimmed)) return false;
     }
   }
   if (candidate->preview) {
@@ -580,7 +596,7 @@ bool CrimsonSceneProjectionCache::prepare(
         const auto &world = record.instance_transforms.empty() ? record.transform : record.instance_transforms[placement];
         const auto &sampling = record.instance_sampling_from_local.empty() ? record.sampling_from_local : record.instance_sampling_from_local[placement];
         if (!state_->append_instance(*candidate, {2u, mesh_id, placement}, mesh_id,
-            record.material, world, sampling, record.double_sided,
+            record.material, world, sampling, record.double_sided,record.cast_shadows,
             candidate->preview->revision, candidate->preview->revision, error)) return false;
       }
     }
@@ -596,10 +612,50 @@ bool CrimsonSceneProjectionCache::prepare(
   std::erase_if(state_->meshes, [&](const auto &entry) { return !mesh_ids.contains(entry.second.id); });
   std::erase_if(state_->instances, [&](const auto &entry) { return !instance_ids.contains(entry.second); });
   std::erase_if(state_->surfaces, [&](const auto &entry) { return !surface_ids.contains(entry.second.surface.id); });
+  std::erase_if(state_->preview_light_ids,[&](const auto& entry){return !used_light_keys.contains(entry.first);});
   projection = std::move(candidate);
   transaction.committed = true;
   return true;
 }
+
+bool crimson_tool_preview_snapshots_equal(const RenderToolPreviewSceneSnapshot &left,
+                            const RenderToolPreviewSceneSnapshot &right) {
+    if (left.revision != right.revision || left.suppression.signature != right.suppression.signature ||
+        left.suppression.entities != right.suppression.entities ||
+        left.suppression.occurrences != right.suppression.occurrences ||
+        left.meshes.size() != right.meshes.size() ||
+        left.accepted_overlay_coordinates.size() != right.accepted_overlay_coordinates.size() ||
+        left.curves.size()!=right.curves.size() || left.lights.size()!=right.lights.size() || left.group_markers.size()!=right.group_markers.size()) return false;
+    const auto same_matrix = [](const QMat4 &first, const QMat4 &second) { return first.values == second.values; };
+    const auto point=[](QVec3 a,QVec3 b){return a.x==b.x&&a.y==b.y&&a.z==b.z;};
+    const auto same_mesh = [&](const RenderToolPreviewMeshRecord &first, const RenderToolPreviewMeshRecord &second) {
+      if (first.source_entity != second.source_entity || first.source_object_id != second.source_object_id ||
+          first.visibility_entity != second.visibility_entity || first.layout_key != second.layout_key ||
+          first.position_revision != second.position_revision || first.material_revision != second.material_revision ||
+          first.mesh.geometry_payload() != second.mesh.geometry_payload() ||
+          first.geometry_projection != second.geometry_projection ||
+          first.dynamic_position_payload != second.dynamic_position_payload ||
+          first.double_sided != second.double_sided || first.cast_shadows != second.cast_shadows || first.wireframe_on_shaded != second.wireframe_on_shaded || first.wireframe_on_shaded_color.has_value()!=second.wireframe_on_shaded_color.has_value() || (first.wireframe_on_shaded_color&&!point(*first.wireframe_on_shaded_color,*second.wireframe_on_shaded_color)) || !point(first.wireframe_tint,second.wireframe_tint) || first.suppress_source != second.suppress_source ||
+          !same_matrix(first.transform, second.transform) ||
+          !same_matrix(first.sampling_from_local, second.sampling_from_local) ||
+          !std::ranges::equal(first.instance_transforms, second.instance_transforms, same_matrix) ||
+          !std::ranges::equal(first.instance_sampling_from_local, second.instance_sampling_from_local, same_matrix) ||
+          !render_material_payloads_equal(&first.material.primary_material, &second.material.primary_material) ||
+          first.material.material_slots.size() != second.material.material_slots.size()) return false;
+      for (std::size_t index = 0u; index < first.material.material_slots.size(); ++index) {
+        const auto &first_slot = first.material.material_slots[index];
+        const auto &second_slot = second.material.material_slots[index];
+        if (first_slot.first != second_slot.first || !render_material_payloads_equal(&first_slot.second, &second_slot.second)) return false;
+      }
+      return true;
+    };
+    const auto same_curve=[&](const auto& a,const auto& b){return a.source_entity==b.source_entity&&a.visibility_entity==b.visibility_entity&&a.curve==b.curve&&a.curve_revision==b.curve_revision&&a.sample_payload==b.sample_payload&&a.material==b.material&&a.solidify==b.solidify&&a.solidify_resolution==b.solidify_resolution&&a.solidify_radius==b.solidify_radius&&a.suppress_source==b.suppress_source&&a.layout_key==b.layout_key&&std::ranges::equal(a.instance_transforms,b.instance_transforms,same_matrix)&&a.selection_dimension_bounds.has_value()==b.selection_dimension_bounds.has_value()&&(!a.selection_dimension_bounds||(point(a.selection_dimension_bounds->min,b.selection_dimension_bounds->min)&&point(a.selection_dimension_bounds->max,b.selection_dimension_bounds->max)));};
+    const auto same_light=[&](const auto& a,const auto& b){return a.source_entity==b.source_entity&&a.visibility_entity==b.visibility_entity&&a.light==b.light&&a.suppress_source==b.suppress_source&&a.layout_key==b.layout_key&&std::ranges::equal(a.instance_transforms,b.instance_transforms,same_matrix);};
+    const auto same_group=[&](const auto& a,const auto& b){return a.source_entity==b.source_entity&&point(a.local_min,b.local_min)&&point(a.local_max,b.local_max)&&a.layout_key==b.layout_key&&std::ranges::equal(a.instance_transforms,b.instance_transforms,same_matrix);};
+    if(!std::ranges::equal(left.curves,right.curves,same_curve)||!std::ranges::equal(left.lights,right.lights,same_light)||!std::ranges::equal(left.group_markers,right.group_markers,same_group))return false;
+    return std::ranges::equal(left.meshes, right.meshes, same_mesh) &&
+           std::ranges::equal(left.accepted_overlay_coordinates, right.accepted_overlay_coordinates, same_mesh);
+  }
 
 CrimsonSceneProjectionStats CrimsonSceneProjectionCache::stats() const noexcept {
   return state_->counters;

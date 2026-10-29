@@ -39,6 +39,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -650,6 +651,7 @@ TEST_F(BridgeReaderTests, RejectsUnsupportedAbiAndInvalidArguments) {
   EXPECT_EQ(quader_bridge_get_api(3u), nullptr);
   EXPECT_EQ(quader_bridge_get_api(4u), nullptr);
   EXPECT_EQ(quader_bridge_get_api(5u), nullptr);
+  EXPECT_EQ(quader_bridge_get_api(6u), nullptr);
   EXPECT_EQ(quader_bridge_get_api(QUADER_BRIDGE_ABI_VERSION + 1u), nullptr);
   EXPECT_EQ(api_->abi_version, QUADER_BRIDGE_ABI_VERSION);
   EXPECT_EQ(api_->struct_size, sizeof(QuaderBridgeApi));
@@ -674,7 +676,7 @@ TEST_F(BridgeReaderTests, RejectsUnsupportedAbiAndInvalidArguments) {
 }
 
 TEST_F(BridgeReaderTests, OptionalUvInterpolationExtensionKeepsCoreAbiAndOrdinaryMeshesEmpty) {
-  EXPECT_EQ(QUADER_BRIDGE_ABI_VERSION, 6u);
+  EXPECT_EQ(QUADER_BRIDGE_ABI_VERSION, 7u);
   EXPECT_EQ(quader_bridge_get_uv_interpolation_api(0u), nullptr);
   EXPECT_EQ(quader_bridge_get_uv_interpolation_api(
       QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION + 1u), nullptr);
@@ -697,6 +699,125 @@ TEST_F(BridgeReaderTests, OptionalUvInterpolationExtensionKeepsCoreAbiAndOrdinar
   EXPECT_EQ(extension->mesh_uv_interpolation_view(scene_, 0u, nullptr, &error_), 0);
   EXPECT_EQ(extension->mesh_uv_interpolation_view(scene_, 1u, &view, &error_), 0);
   EXPECT_EQ(extension->mesh_uv_interpolation_view(nullptr, 0u, nullptr, nullptr), 0);
+}
+
+TEST_F(BridgeReaderTests, HierarchyPreservesConcreteParentsLocalVisibilityAndAffineInstances) {
+  auto document = make_document();
+  auto &source = document.scene();
+  ASSERT_EQ(source.create_entity_with_id(90u, "Hidden parent", EntityKind::Generic), 90u);
+  ASSERT_TRUE(source.set_transform(90u, TransformComponent{.location = {4, 3, 2}}));
+  ASSERT_TRUE(source.set_parent(100u, 90u, false));
+  ASSERT_TRUE(source.set_transform(100u, TransformComponent{.location = {1, 0, 0}}));
+  ASSERT_TRUE(source.set_visible(90u, false));
+  ASSERT_EQ(source.create_entity_with_id(200u, "Definition storage", EntityKind::Generic), 200u);
+  ASSERT_TRUE(source.set_transform(200u, TransformComponent{.location = {100, 0, 0}}));
+  ASSERT_EQ(source.create_entity_with_id(201u, "Nested group", EntityKind::Empty), 201u);
+  ASSERT_TRUE(source.set_parent(201u, 200u, false));
+  ASSERT_TRUE(source.set_transform(201u, TransformComponent{.location = {2, 0, 0}}));
+  ASSERT_EQ(source.create_entity_with_id(202u, "Nested mesh", EntityKind::Mesh), 202u);
+  ASSERT_TRUE(source.set_parent(202u, 201u, false));
+  ASSERT_TRUE(source.set_mesh(202u, MeshComponent{.mesh = 10u}));
+  ASSERT_TRUE(source.set_transform(202u, TransformComponent{.location = {1, 1, 0}}));
+  ASSERT_TRUE(source.set_instance_definition(200u));
+  ASSERT_EQ(source.create_entity_with_id(300u, "Mirrored placement", EntityKind::Instance), 300u);
+  ASSERT_TRUE(source.set_instance_occurrence(300u, InstanceOccurrenceComponent{.definition = 200u}));
+  ASSERT_TRUE(source.set_transform(300u, TransformComponent{.location = {10, 3, 4}, .scale = {-1, 2, 1}}));
+  ASSERT_TRUE(source.set_visible(300u, false));
+  add_scene(kFirstScene, "Scenes/hierarchy.qdr", document);
+  open_project();
+  open_scene();
+  QuaderBridgeSceneView scene{};
+  ASSERT_EQ(api_->scene_view(scene_, &scene, &error_), 1) << error_.message;
+  ASSERT_EQ(scene.node_count, 5u);
+  std::map<std::pair<std::uint64_t, std::uint64_t>, QuaderBridgeNodeView> nodes;
+  for (std::uint32_t index = 0u; index < scene.node_count; ++index) {
+    QuaderBridgeNodeView node{};
+    ASSERT_EQ(api_->node_view(scene_, index, &node, &error_), 1) << error_.message;
+    EXPECT_EQ(node.order, index);
+    if (node.parent_entity != 0u) {
+      EXPECT_TRUE(nodes.contains({node.parent_entity, node.parent_occurrence_entity}));
+    }
+    ASSERT_TRUE(nodes.emplace(std::pair{node.entity, node.occurrence_entity}, node).second);
+  }
+  ASSERT_TRUE(nodes.contains({90u, 0u}));
+  ASSERT_TRUE(nodes.contains({100u, 0u}));
+  ASSERT_TRUE(nodes.contains({300u, 0u}));
+  ASSERT_TRUE(nodes.contains({201u, 300u}));
+  ASSERT_TRUE(nodes.contains({202u, 300u}));
+  EXPECT_FALSE(nodes.contains({200u, 0u}));
+  EXPECT_FALSE(nodes.contains({201u, 0u}));
+  EXPECT_FALSE(nodes.contains({202u, 0u}));
+  const auto &direct = nodes.at({100u, 0u});
+  EXPECT_EQ(direct.parent_entity, 90u);
+  EXPECT_EQ(direct.visible, 1u);
+  EXPECT_EQ(nodes.at({90u, 0u}).visible, 0u);
+  EXPECT_FLOAT_EQ(direct.transform[12], 5.0f);
+  const auto &group = nodes.at({201u, 300u});
+  EXPECT_EQ(group.parent_entity, 300u);
+  EXPECT_EQ(group.parent_occurrence_entity, 0u);
+  EXPECT_FLOAT_EQ(group.transform[12], 8.0f);
+  const auto &member = nodes.at({202u, 300u});
+  EXPECT_EQ(member.parent_entity, 201u);
+  EXPECT_EQ(member.parent_occurrence_entity, 300u);
+  EXPECT_EQ(member.visible, 1u);
+  EXPECT_EQ(nodes.at({300u, 0u}).visible, 0u);
+  EXPECT_FLOAT_EQ(member.transform[0], -1.0f);
+  EXPECT_FLOAT_EQ(member.transform[5], 2.0f);
+  EXPECT_FLOAT_EQ(member.transform[12], 7.0f);
+  EXPECT_FLOAT_EQ(member.transform[13], 5.0f);
+  EXPECT_FLOAT_EQ(member.transform[14], 4.0f);
+  api_->release_project(project_);project_ = nullptr;
+  QuaderBridgeNodeView retained{};
+  ASSERT_EQ(api_->node_view(scene_, member.order, &retained, &error_), 1);
+  EXPECT_STREQ(retained.name, "Nested mesh");
+  EXPECT_EQ(api_->node_view(scene_, scene.node_count, &retained, &error_), 0);
+  EXPECT_EQ(api_->node_view(nullptr, 0u, &retained, &error_), 0);
+}
+
+TEST_F(BridgeReaderTests, SourceTopologyUsesFinalSurfaceTriangleOrderAndRetainsAuthoredQuads) {
+  auto document = make_document(true);
+  quader_poly::Document polygon;
+  polygon.next_vertex_id = 13u;polygon.next_face_id = 4u;
+  for (std::uint32_t face = 0u; face < 3u; ++face) {
+    const auto first = face * 4u + 1u;const float x = static_cast<float>(face) * 3.0f;
+    polygon.vertices.push_back({.id = first, .position = {x, 0, 0}});
+    polygon.vertices.push_back({.id = first + 1u, .position = {x + 2, 0, 0}});
+    polygon.vertices.push_back({.id = first + 2u, .position = {x + 2, 1, 0}});
+    polygon.vertices.push_back({.id = first + 3u, .position = {x, 1, 0}});
+    polygon.faces.push_back({.id = face + 1u, .vertices = {first, first + 1u, first + 2u, first + 3u},
+        .uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}}, .material_slot = face % 2u});
+  }
+  auto asset = MeshProjectionService::compile_polygon_document_mesh(polygon);
+  asset.replace_authored_polygon_document(std::move(polygon));
+  ASSERT_TRUE(document.assets().replace_mesh(10u, std::move(asset)));
+  add_scene(kFirstScene, "Scenes/source-faces.qdr", document);
+  open_project();open_scene();
+  const auto *topology = quader_bridge_get_topology_api(QUADER_BRIDGE_TOPOLOGY_ABI_VERSION);
+  ASSERT_NE(topology, nullptr);
+  EXPECT_EQ(topology->struct_size, sizeof(QuaderBridgeTopologyApi));
+  EXPECT_EQ(quader_bridge_get_topology_api(0u), nullptr);
+  EXPECT_EQ(quader_bridge_get_topology_api(QUADER_BRIDGE_TOPOLOGY_ABI_VERSION + 1u), nullptr);
+  QuaderBridgeMeshView mesh{};ASSERT_EQ(api_->mesh_view(scene_, 0u, &mesh, &error_), 1);
+  QuaderBridgeTopologyView view{};ASSERT_EQ(topology->mesh_topology_view(scene_, 0u, &view, &error_), 1) << error_.message;
+  ASSERT_EQ(view.face_count, 3u);ASSERT_NE(view.faces, nullptr);
+  EXPECT_EQ(mesh.surface_count, 2u);EXPECT_EQ(mesh.index_count, 18u);
+  EXPECT_EQ(view.faces[0].triangles[0], 0u);EXPECT_EQ(view.faces[0].triangles[1], 1u);
+  EXPECT_EQ(view.faces[1].triangles[0], 4u);EXPECT_EQ(view.faces[1].triangles[1], 5u);
+  EXPECT_EQ(view.faces[2].triangles[0], 2u);EXPECT_EQ(view.faces[2].triangles[1], 3u);
+  for (std::uint32_t face = 0u; face < view.face_count; ++face) {
+    const auto &source = view.faces[face];EXPECT_EQ(source.corner_count, 4u);
+    for (const auto vertex : source.vertices)EXPECT_LT(vertex, mesh.vertex_count);
+    for (const auto triangle : source.triangles) {
+      ASSERT_LT(triangle, mesh.index_count / 3u);
+      for (std::uint32_t corner = 0u; corner < 3u; ++corner)
+        EXPECT_NE(std::find(std::begin(source.vertices), std::end(source.vertices), mesh.indices[triangle * 3u + corner]), std::end(source.vertices));
+    }
+  }
+  api_->release_project(project_);project_ = nullptr;
+  QuaderBridgeTopologyView retained{};ASSERT_EQ(topology->mesh_topology_view(scene_, 0u, &retained, &error_), 1);
+  EXPECT_EQ(retained.faces, view.faces);EXPECT_EQ(retained.face_count, view.face_count);
+  EXPECT_EQ(topology->mesh_topology_view(scene_, 1u, &retained, &error_), 0);
+  EXPECT_EQ(topology->mesh_topology_view(nullptr, 0u, &retained, &error_), 0);
 }
 
 TEST_F(BridgeReaderTests, QuadUvExtensionPreservesBilinearInteriorsThroughMappedMirroredOccurrences) {

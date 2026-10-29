@@ -6,6 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include "render/crimson/crimson_scene_projection.hpp"
+#include "render/crimson/crimson_render_host.hpp"
+#include "viewport/viewport_settings.hpp"
+#include "assets/asset_registry.hpp"
+#include "assets/curve_asset_payload.hpp"
+#include "render/curve_solid_geometry_cache.hpp"
+#include "render/scene_render_extraction.hpp"
 
 #include <gtest/gtest.h>
 
@@ -13,6 +19,8 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <array>
+#include <limits>
 
 namespace quader {
 namespace {
@@ -61,6 +69,19 @@ std::shared_ptr<RenderSceneSnapshot> make_scene(
   record.transform_revision = 1u;
   scene->meshes.push_back(std::move(record));
   return scene;
+}
+
+TEST(CrimsonSceneProjectionTests, InstanceContextFlagsRetainAuthoritativeOccurrenceMetadataWithoutGeometryUploads){
+  const auto geometry=make_quad_geometry();auto scene=std::make_shared<RenderSceneSnapshot>();
+  RenderSceneInstancePrimitiveRecord group;group.mesh=mesh_snapshot(geometry);group.primitive={0,6,4};group.material=untextured_material();group.key.double_sided=true;
+  group.occurrences.push_back({.entity_id=11,.occurrence=1,.dimmed=false});group.occurrences.push_back({.entity_id=12,.occurrence=2,.dimmed=true});scene->instance_primitives.push_back(group);
+  CrimsonSceneProjectionCache cache({});std::shared_ptr<const CrimsonSceneProjection> first,second;std::string error;
+  ASSERT_TRUE(cache.prepare(scene,{},1,first,error))<<error;ASSERT_EQ(first->instances.size(),2u);
+  EXPECT_FALSE(first->instances[0].context_dimmed);EXPECT_TRUE(first->instances[1].context_dimmed);
+  const auto work=cache.stats();auto reset=std::make_shared<RenderSceneSnapshot>(*scene);reset->instance_primitives[0].occurrences[1].dimmed=false;
+  ASSERT_TRUE(cache.prepare(reset,{},2,second,error))<<error;EXPECT_FALSE(second->instances[1].context_dimmed);
+  EXPECT_EQ(first->instances[1].id,second->instances[1].id);EXPECT_TRUE(first->instances[1].context_dimmed);
+  EXPECT_EQ(first->meshes[0].positions.pin,second->meshes[0].positions.pin);EXPECT_EQ(cache.stats().position_packs,work.position_packs);EXPECT_EQ(cache.stats().attribute_packs,work.attribute_packs);
 }
 
 TEST(CrimsonSceneProjectionTests, TransformOnlyPublicationRetainsPinnedStreams) {
@@ -288,5 +309,38 @@ TEST(CrimsonSceneProjectionTests, DefaultImagePinsSurviveFactorChangesWithoutDec
   EXPECT_FALSE(error.empty());
 }
 
+TEST(CrimsonSceneProjectionTests, CurveAndLightPreviewsPublishOneCompleteRetainedGeneration) {
+  AssetRegistry assets;CurveAsset curve;curve.name="Preview Curve";
+  const std::array<modeling::CurvePointSpec,2> points{{{.position={0,0,0}},{.position={2,0,0}}}};
+  auto document=modeling::CurveDocument::make_bezier(points);ASSERT_TRUE(document.ok());curve.document=std::make_shared<const modeling::CurveDocument>(std::move(document).value());
+  const auto curveId=assets.add_curve(std::move(curve));CurveSolidGeometryCache solids;
+  ToolPreviewScene input;input.revision=7;ToolPreviewCurve tube;tube.source_entity=601;tube.curve=curveId;tube.solidify=true;tube.solidify_radius=.2f;tube.solidify_resolution=8;tube.layout_key=91;tube.instance_transforms.resize(1);tube.instance_transforms[0].values[12]=3;input.curves.push_back(tube);
+  ToolPreviewLight lamp;lamp.source_entity=701;lamp.light.type=LightType::Point;lamp.light.intensity=12;lamp.suppress_source=true;lamp.layout_key=81;lamp.instance_transforms.resize(1);lamp.instance_transforms[0].values[12]=5;input.lights.push_back(lamp);
+  auto preview=std::make_shared<RenderToolPreviewSceneSnapshot>(build_render_tool_preview_scene_snapshot(std::move(input),assets,nullptr,nullptr,&solids));ASSERT_TRUE(preview->complete);ASSERT_EQ(preview->meshes.size(),1u);ASSERT_EQ(preview->curves.size(),1u);
+  auto scene=make_scene(make_quad_geometry());scene->meshes.front().mesh_component.cast_shadows=false;scene->lights.push_back({701,LightComponent{},QMat4{}});scene->lights.push_back({702,LightComponent{},QMat4{}});
+  CrimsonSceneProjectionCache cache({});std::shared_ptr<const CrimsonSceneProjection> projected;std::string error;ASSERT_TRUE(cache.prepare(scene,preview,1,projected,error))<<error;
+  ASSERT_EQ(projected->meshes.size(),2u);ASSERT_EQ(projected->lights.size(),2u);EXPECT_EQ(projected->lights[0].entity_id,702u);EXPECT_NE(projected->lights[1].entity_id,701u);EXPECT_FLOAT_EQ(projected->lights[1].world_transform.values[12],5);ASSERT_EQ(projected->instance_cast_shadows.size(),2u);EXPECT_FALSE(projected->instance_cast_shadows[0].second);EXPECT_TRUE(projected->instance_cast_shadows[1].second);
+  const auto transientId=projected->lights[1].entity_id;const auto stats=cache.stats();auto repeated=std::make_shared<RenderToolPreviewSceneSnapshot>(*preview);EXPECT_TRUE(crimson_tool_preview_snapshots_equal(*preview,*repeated));ASSERT_TRUE(cache.prepare(scene,repeated,2,projected,error))<<error;EXPECT_EQ(projected->lights[1].entity_id,transientId);EXPECT_EQ(cache.stats().position_packs,stats.position_packs);EXPECT_EQ(cache.stats().attribute_packs,stats.attribute_packs);EXPECT_EQ(cache.stats().index_packs,stats.index_packs);
+  repeated->lights.front().light.intensity=17;EXPECT_FALSE(crimson_tool_preview_snapshots_equal(*preview,*repeated));repeated->lights.front().instance_transforms[0].values[12]=8;ASSERT_TRUE(cache.prepare(scene,repeated,3,projected,error))<<error;EXPECT_EQ(projected->lights[1].entity_id,transientId);EXPECT_FLOAT_EQ(projected->lights[1].world_transform.values[12],8);
+  const auto accepted=projected;auto invalid=std::make_shared<RenderToolPreviewSceneSnapshot>(*repeated);invalid->lights.front().instance_transforms[0].values[0]=std::numeric_limits<float>::quiet_NaN();EXPECT_FALSE(cache.prepare(scene,invalid,4,projected,error));EXPECT_EQ(projected,accepted);EXPECT_FALSE(error.empty());
+  invalid=std::make_shared<RenderToolPreviewSceneSnapshot>(*repeated);invalid->curves.front().sample_payload.reset();EXPECT_FALSE(cache.prepare(scene,invalid,5,projected,error));EXPECT_EQ(projected,accepted);
+}
+
 } // namespace
+TEST(CrimsonContextPresentationTests, StyleChangesAndContextResetInvalidateOnlyTheirView){
+  auto host=create_crimson_render_host();
+  auto first=host->create_view(1,ViewportRenderSurface::Texture),second=host->create_view(2,ViewportRenderSurface::Texture);
+  auto settings=ViewportSettings::defaults();settings.set_float_value(ViewportFloatSettingId::InstanceEditContextStrength,.8f);
+  settings.set_float_value(ViewportFloatSettingId::InstanceEditBackgroundBlend,.4f);
+  SceneSettings scene;first->apply_scene_settings(scene,false,settings);second->apply_scene_settings(scene,false,settings);
+  const auto first_before=first->scene_settings_apply_count(),second_before=second->scene_settings_apply_count();
+  first->set_instance_edit_context_active(true,settings);
+  EXPECT_GT(first->scene_settings_apply_count(),first_before);EXPECT_EQ(second->scene_settings_apply_count(),second_before);
+  const auto active=first->scene_settings_apply_count();first->apply_scene_settings(scene,false,settings);EXPECT_EQ(first->scene_settings_apply_count(),active);
+  settings.set_float_value(ViewportFloatSettingId::InstanceEditContextDesaturation,.37f);
+  first->apply_scene_settings(scene,false,settings);EXPECT_GT(first->scene_settings_apply_count(),active);
+  const auto changed=first->scene_settings_apply_count();first->set_instance_edit_context_active(false,settings);EXPECT_GT(first->scene_settings_apply_count(),changed);
+  EXPECT_EQ(second->scene_settings_apply_count(),second_before);
+}
+
 } // namespace quader

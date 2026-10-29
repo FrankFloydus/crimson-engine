@@ -1693,6 +1693,19 @@ void ViewportSelectionInteraction::handle_frame(
       !tool_result.handled;
   const bool can_pick =
       can_use_selection_fallback && frame.input.viewport_hovered;
+  const bool requires_full_hover_clear =
+      !selection_fallback_active || frame.input.text_input_active ||
+      frame.input.modal_tool_active || frame.input.active_tool_owns_viewport ||
+      gizmo_blocks_hover || tool_result.handled;
+  // Camera gestures suspend spatial picking, not the component mesh source.
+  // All selection shapes share this policy, including remembered Paint fallback
+  // and the captured release sample before the host restores the real pointer.
+  const bool preserve_candidate_on_suppression =
+      !mode_context_changed && !requires_full_hover_clear &&
+      !frame.input.pointer_interaction_canceled &&
+      !frame.input_result.cancel_requested &&
+      (navigation_active || frame.input_result.camera_changed ||
+       !frame.input.viewport_hovered);
   const bool can_cycle_depth =
       can_pick && depth_cycle_context_available(frame);
   if (component_marquee_hover_barrier_.has_value()) {
@@ -1830,6 +1843,10 @@ void ViewportSelectionInteraction::handle_frame(
     hover_clear_state_ = preserve_component_candidate
                              ? HoverClearState::SpatialCandidatePreserved
                              : HoverClearState::FullyCleared;
+    if (gizmo_blocks_hover && tool_hover != nullptr) {
+      // Re-arm once: a handle can disappear under a stationary pointer.
+      tool_hover->invalidate();
+    }
   };
   auto clear_hover = [&]() { publish_empty_hover(false); };
   auto clear_spatial_hover = [&]() { publish_empty_hover(true); };
@@ -1887,7 +1904,7 @@ void ViewportSelectionInteraction::handle_frame(
       frame.input_result.cancel_requested || traversal_input_claimed;
   if (handle_component_double_click(editor, frame, traversal_interrupted)) {
     if (hover_clear_state_ == HoverClearState::Armed) {
-      if (traversal_interrupted) clear_hover();
+      if (traversal_interrupted && !preserve_candidate_on_suppression) clear_hover();
       else clear_spatial_hover();
     }
     refresh_hover_work_after_selection(frame.left_click_local, false);
@@ -1919,7 +1936,7 @@ void ViewportSelectionInteraction::handle_frame(
         }
       } else {
         if (hover_clear_state_ == HoverClearState::Armed) {
-          if (traversal_interrupted) clear_hover();
+          if (traversal_interrupted && !preserve_candidate_on_suppression) clear_hover();
           else clear_spatial_hover();
         }
         refresh_hover_work_after_selection(frame.left_click_local, false);
@@ -1941,12 +1958,6 @@ void ViewportSelectionInteraction::handle_frame(
         frame.input_result.view_changed ||
         frame.input.pointer_interaction_canceled ||
         frame.input_result.cancel_requested;
-    const bool preserve_candidate_on_leave = !frame.input.viewport_hovered &&
-        selection_fallback_active && !mode_context_changed &&
-        !frame.input.text_input_active && !frame.input.modal_tool_active &&
-        !frame.input.active_tool_owns_viewport && !gizmo_blocks_hover &&
-        !tool_result.handled && !frame.input.pointer_interaction_canceled &&
-        !frame.input_result.cancel_requested;
     const auto retire_paint_hover = [&](bool preserve_candidate) {
       if (hover_clear_state_ == HoverClearState::Armed ||
           (!preserve_candidate &&
@@ -1974,14 +1985,14 @@ void ViewportSelectionInteraction::handle_frame(
     }
     complete_paint_selection(editor, frame);
     if (owns_frame || interrupted) {
-      retire_paint_hover(!interrupted || preserve_candidate_on_leave);
+      retire_paint_hover(!interrupted || preserve_candidate_on_suppression);
       if (tool_hover != nullptr && work_stats_.paint_pick_count != picks_before) {
         tool_hover->invalidate();
         (void)tool_hover->claim(ModelingBoxDragState::Idle);
       }
       return;
     }
-    if (can_pick && !frame.left_down && claim_hover_work()) {
+    if (can_pick && !suppress_hover_work && !frame.left_down && claim_hover_work()) {
       ++work_stats_.hover_pick_count;
       ViewportModifiers modifiers = frame.input.modifiers;
       modifiers.alt = false;
@@ -1991,8 +2002,8 @@ void ViewportSelectionInteraction::handle_frame(
           selection_owner(editor), frame, frame.input.mouse_local, request,
           nullptr, &scene_surface_scratch_, true);
       preview_hover(hover.winner, hover.component_body_target);
-    } else if (!can_pick) {
-      retire_paint_hover(preserve_candidate_on_leave);
+    } else if (!can_pick || suppress_hover_work) {
+      retire_paint_hover(preserve_candidate_on_suppression);
     }
     return;
   }
@@ -2403,15 +2414,9 @@ void ViewportSelectionInteraction::handle_frame(
     return;
   }
 
-  const bool requires_full_hover_clear =
-      !selection_fallback_active || frame.input.text_input_active ||
-      frame.input.modal_tool_active || frame.input.active_tool_owns_viewport ||
-      gizmo_blocks_hover || tool_result.handled;
   const bool should_clear_hover =
       !frame.input.viewport_hovered || requires_full_hover_clear;
-  const bool preserve_component_candidate =
-      pointer_left_viewport && selection_fallback_active &&
-      !requires_full_hover_clear;
+  const bool preserve_component_candidate = preserve_candidate_on_suppression;
   const bool needs_spatial_clear =
       preserve_component_candidate && hover_clear_state_ == HoverClearState::Armed;
   const bool needs_full_clear =
@@ -2440,11 +2445,6 @@ void ViewportSelectionInteraction::handle_frame(
       // A gizmo is a different hover target, not an empty spatial sample.
       // Drop hover-only mesh wires; selected components retain their own wires.
       clear_hover();
-    }
-    if (gizmo_blocks_hover && tool_hover != nullptr) {
-      // A handle can disappear under a stationary pointer. Re-arm once so
-      // scene hover resumes even when its spatial work key has not changed.
-      tool_hover->invalidate();
     }
   }
 }

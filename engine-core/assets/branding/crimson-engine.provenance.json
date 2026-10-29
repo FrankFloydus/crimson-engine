@@ -1,0 +1,36 @@
+{
+  "source": "User-provided replacement PNG",
+  "date": "2026-10-13",
+  "input": "crimson-engine.png",
+  "inputSha256": "BD448B40923334DBBFA04B07D161464E60E5126BA43EC1C8067067CB4D410B00",
+  "dimensions": [
+    512,
+    512
+  ],
+  "output": "crimson-engine.ico",
+  "outputSizes": [
+    16,
+    20,
+    24,
+    32,
+    40,
+    48,
+    64,
+    128,
+    256
+  ],
+  "processing": "Deterministic export with scripts/Convert-AppIcon.ps1; source PNG unchanged.",
+  "previousGeneration": {
+    "tool": "Built-in imagegen",
+    "date": "2026-10-13",
+    "source": "User-provided crimson crystal emblem",
+    "prompt": "Create a clean flat logo based on the attached original emblem. Use case: logo-brand. Input image is the shape reference. Keep its recognizable three asymmetric pointed angular flame/crystal shapes surrounded by a broken circular ring. Simplify the reference into a flat graphic emblem. Render the ENTIRE emblem in ONE SOLID uniform bright crimson red (#E51B36) including the ring. Every shape is completely filled with this single red; omit every internal facet division. The empty gaps between the three separate crystal/flame pieces and four ring pieces must remain transparent. No shading, no gradients, no light, no texture, no shadows, no facets, no 3D, no glow, no thin contour lines, no speckles or particles. Smooth, clean, precise silhouette and bold geometry suitable for a desktop app icon. Centered with a small transparent margin on all sides. Square 512x512 canvas with actual transparent alpha background. No background color and no lettering.",
+    "output": "crimson-engine.png",
+    "dimensions": [
+      512,
+      512
+    ],
+    "background": "transparent",
+    "processing": "Lanczos resize to requested 512x512; ICO exported by scripts/Convert-AppIcon.ps1"
+  }
+}

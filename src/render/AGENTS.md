@@ -11,11 +11,12 @@ file except through prior written authorization from Francesco Di Blasi.
 - Render extraction, backend adapters, material/texture binding, overlays, and viewport drawing
   belong here. Scene, assets, and modeling remain authoritative; render caches never mutate them.
 - App/UI consume `RenderHost`, `RenderSceneSink`, `RenderView` and opaque surface lifetimes.
-  `quader_render_common` owns CPU extraction and semantic overlay builders. On `main`,
-  `quader_render_full_host` composes Filament `RenderSystem` for Full and Public 0.1.
-  On `quader-crimson`, Full keeps Filament and Public uses `quader_render_crimson_host`.
-  Both branches retain shared application and semantic overlay changes. The Crimson
-  dependency and optional probes remain available on `main`, outside its Public link closure.
+  `quader_render_common` owns CPU extraction and semantic overlay builders. The
+  current full modeling/Engine application composes `quader_render_crimson_host`
+  through the existing Qt lifecycle. `quader_render_full_host` and its Filament
+  sources remain an optional reference composition; they are not a second
+  active renderer. See [the application integration](../../ENGINE_INTEGRATION.md)
+  for the current device and presentation owners.
   Keep exactly one `create_app_render_host()` implementation
   in each editor executable. Backend choice belongs to final target composition, outside the shared
   runtime and product interaction paths. See the [Crimson integration contract](../../thirdparty/crimson/README.md)

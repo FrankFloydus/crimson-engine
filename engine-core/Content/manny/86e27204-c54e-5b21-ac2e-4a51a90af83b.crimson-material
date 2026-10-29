@@ -1,0 +1,102 @@
+{
+  "graph": {
+    "links": [],
+    "nextLinkId": 6,
+    "nextNodeId": 8,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5,
+          "attenuationColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "attenuationDistance": 1.0,
+          "baseColor": [
+            0.47773417830467224,
+            0.013564671389758587,
+            0.013564671389758587
+          ],
+          "blend": 0,
+          "decalColorEnabled": true,
+          "decalColorStrength": 1.0,
+          "decalMetallicEnabled": false,
+          "decalMetallicStrength": 1.0,
+          "decalNormalEnabled": false,
+          "decalNormalStrength": 1.0,
+          "decalRoughnessEnabled": false,
+          "decalRoughnessStrength": 1.0,
+          "doubleSided": true,
+          "emission": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "height": 0.5,
+          "ior": 1.5,
+          "metallic": 0.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "receiveFog": true,
+          "refraction": false,
+          "roughness": 0.699999988079071,
+          "shading": 0,
+          "specular": 0.5,
+          "tessellation": {
+            "amount": 0.10000000149011612,
+            "enabled": false,
+            "heightLod": 0.0,
+            "maxFactor": 8,
+            "midpoint": 0.5
+          },
+          "thickness": 0.0,
+          "transmission": 1.0
+        },
+        "position": [
+          700.0,
+          80.0
+        ]
+      },
+      {
+        "id": 7,
+        "kind": 1,
+        "name": "UV",
+        "position": [
+          35.0,
+          35.0
+        ],
+        "uv": {
+          "mode": 0,
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "scaleLinked": true
+        }
+      }
+    ],
+    "version": 20
+  },
+  "id": "86e27204-c54e-5b21-ac2e-4a51a90af83b",
+  "name": "M_Main",
+  "originModel": "c74cb23c-d3a5-597f-a79c-ca3b349e5401",
+  "type": "crimson-material",
+  "version": 6
+}

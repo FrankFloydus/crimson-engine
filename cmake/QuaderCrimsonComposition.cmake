@@ -31,6 +31,12 @@ set(CMAKE_PREFIX_PATH "${_quader_crimson_previous_prefix_path}")
 message(STATUS "Crimson Renderer ${CRIMSON_RENDERER_SOURCE_COMMIT}; bgfx ${CRIMSON_BGFX_VERSION}#${CRIMSON_BGFX_PORT_VERSION}")
 
 add_library(quader_render_crimson STATIC
+    src/render/crimson/crimson_environment.cpp
+    src/render/crimson/crimson_standard_material.cpp
+    src/render/crimson/crimson_material_preview.cpp
+    src/render/crimson/crimson_material_thumbnails.cpp
+    src/render/crimson/crimson_native_queue_handoff.cpp
+    src/render/crimson/crimson_d3d11_context_state.cpp
     src/render/crimson/crimson_render_host.cpp
     src/render/crimson/crimson_editor_projection.cpp
     src/render/crimson/crimson_scene_projection.cpp)
@@ -39,7 +45,7 @@ target_include_directories(quader_render_crimson PUBLIC src
     PRIVATE "${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}")
 target_link_libraries(quader_render_crimson
     PUBLIC quader_render_common Crimson::Renderer
-    PRIVATE lodepng quader_modeling_profile)
+    PRIVATE lodepng quader_modeling_profile Qt6::Gui bgfx::bimg_decode)
 target_compile_features(quader_render_crimson PUBLIC cxx_std_20)
 
 add_library(quader_render_crimson_host STATIC

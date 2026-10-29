@@ -16,10 +16,34 @@
 #include <string_view>
 #include <system_error>
 
+#if defined(QUADER_TEST_HEADLESS_GEOMETRY)
+#include <QCoreApplication>
+#include <QEventLoop>
+#include <QGuiApplication>
+#include <QRect>
+#include <QScreen>
+#include <qpa/qwindowsysteminterface.h>
+#endif
+
 namespace {
 
 constexpr std::string_view kTestProfilePrefix =
     "quader-tests-local-app-data-";
+
+#if defined(QUADER_TEST_HEADLESS_GEOMETRY)
+// Minimal QPA owns a virtual screen and never creates desktop windows. Its
+// 240x320 default is a device stub, not the application's supported work area.
+void configure_headless_test_screen() {
+  if (QGuiApplication::platformName() != QStringLiteral("minimal")) return;
+  QScreen *const screen = QGuiApplication::primaryScreen();
+  if (screen == nullptr) return;
+  const QRect geometry(0, 0, 1920, 1080);
+  QWindowSystemInterface::handleScreenGeometryChange(screen, geometry, geometry);
+  QWindowSystemInterface::handleScreenLogicalDotsPerInchChange(screen, 96., 96.);
+  QWindowSystemInterface::sendWindowSystemEvents(QEventLoop::AllEvents);
+}
+Q_COREAPP_STARTUP_FUNCTION(configure_headless_test_screen)
+#endif
 
 std::optional<std::filesystem::path> create_test_profile() {
   std::error_code error;
@@ -78,6 +102,22 @@ bool remove_test_profile(const std::filesystem::path &profile) {
 }
 
 } // namespace
+
+#if defined(QUADER_TEST_HEADLESS_GEOMETRY)
+TEST(HeadlessModelerScreenTests, UsesTheSupportedVirtualWorkAreaWithoutDesktopWindows) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "headless-modeler-screen";
+  char *argv[] = {name, nullptr};
+  QGuiApplication application(argc, argv);
+  if (QGuiApplication::platformName() != QStringLiteral("minimal"))
+    GTEST_SKIP() << "The native-theme subprocess has its own platform screen.";
+  ASSERT_NE(QGuiApplication::primaryScreen(), nullptr);
+  EXPECT_EQ(QGuiApplication::primaryScreen()->geometry(), QRect(0, 0, 1920, 1080));
+  EXPECT_EQ(QGuiApplication::primaryScreen()->availableGeometry(), QRect(0, 0, 1920, 1080));
+  EXPECT_DOUBLE_EQ(QGuiApplication::primaryScreen()->logicalDotsPerInch(), 96.);
+}
+#endif
 
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);

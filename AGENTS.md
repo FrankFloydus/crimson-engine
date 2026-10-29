@@ -6,7 +6,26 @@ No permission is granted to use, copy, modify, distribute, or sublicense this
 file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 -->
-# Quader Agent Guide
+# Crimson Engine and Quader Agent Guide
+
+This checkout is the complete Quader Crimson application base with Crimson
+Engine domains integrated into its existing Qt lifecycle. Start with
+[ENGINE_INTEGRATION.md](ENGINE_INTEGRATION.md) for current ownership and
+[engine-core/AGENTS.md](engine-core/AGENTS.md) for game, renderer, asset and
+simulation contracts. Those domain contracts remain authoritative; references
+to the replaced ImGui/SDL shell do not describe this application's presentation.
+
+The active native target is `crimson-renderer`, built in Release through
+`Build.cmd` and the `windows-Release` preset. Use the engine/modeling/native Qt
+regression targets for affected work. Historical Filament Full/public targets
+are retained source references and are excluded when
+`QUADER_BUILD_FILAMENT_REFERENCE=OFF`; they are not the application's handoff
+targets. Keep one coordinated build lane. Qt owns every application window,
+input capture, device and composition texture; engine CPU input has no SDL
+dependency. Do not recreate a second application or native event pump.
+
+The Quader package guides below continue to govern retained modeling, document,
+UI and tool behavior within that current application architecture.
 
 Quader is a native Windows level design tool: C++20, Qt Widgets, Filament,
 CMake and vcpkg. This file owns repository-wide agent policy. Read it first, then

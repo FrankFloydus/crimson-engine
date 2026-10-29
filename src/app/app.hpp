@@ -23,10 +23,14 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 
 class QApplication;
 class QScreen;
 class QTimer;
+namespace crimson::integration {class LevelSession;class LevelPanels;}
+namespace crimson::integration {class LevelProfiling;}
+namespace crimson::profiling {class EngineProfile;class FrameProfile;}
 
 namespace quader {
 
@@ -36,6 +40,11 @@ class ProjectSessionRenderMaterialResolver;
 /// Options owned by the native Qt application shell.
 struct AppOptions {
   RendererBackend render_backend = RendererBackend::Vulkan;
+  std::optional<RenderCompositionApi> composition_api;
+  std::filesystem::path engine_project_root;
+  std::string profile_mode;
+  std::uint32_t profile_duration{15};
+  std::filesystem::path profile_output,frame_profile;
 };
 
 /// Coordinates Qt lifecycle, editor services and render submission.
@@ -68,6 +77,21 @@ private:
   void request_viewport_presentation();
   void schedule_next_frame(bool submitted = false);
   void poll_autosave();
+#if defined(CRIMSON_ENGINE_APPLICATION)
+  void synchronize_engine_session();
+  bool open_engine_project(const std::filesystem::path&,bool explicit_selection);
+  std::unique_ptr<crimson::integration::LevelSession> engine_level_;
+  std::unique_ptr<crimson::integration::LevelPanels> engine_panels_;
+  std::filesystem::path engine_project_root_;
+  std::filesystem::path requested_engine_root_,engine_root_selection_path_,rejected_engine_root_;
+  bool engine_root_pinned_{};
+  std::unique_ptr<crimson::profiling::EngineProfile> engine_profile_;
+  std::unique_ptr<crimson::profiling::FrameProfile> frame_profile_;
+  std::unique_ptr<crimson::integration::LevelProfiling> profiling_controls_;
+  std::uint32_t profile_frame_{};
+  bool profile_backend_ready_{};
+  std::string engine_document_key_;
+#endif
 
   QApplication *application_ = nullptr;
   std::unique_ptr<QTimer> frame_timer_;

@@ -43,11 +43,11 @@ EdgeKey edge_key(Edge edge)
 }
 
 std::map<EdgeKey, std::set<EdgeKey>> collapsed_edge_donors(
-    const Document& source,
+    std::span<const Face> boundary_faces,
     const std::set<ElementId>& removed_vertices)
 {
     std::map<EdgeKey, std::set<EdgeKey>> donors_by_replacement;
-    for (const Face& face : source.faces) {
+    for (const Face& face : boundary_faces) {
         for (std::size_t start = 0; start < face.vertices.size(); ++start) {
             if (removed_vertices.contains(face.vertices[start])) {
                 continue;
@@ -79,13 +79,14 @@ std::map<EdgeKey, std::set<EdgeKey>> collapsed_edge_donors(
 
 void remap_edge_normal_modes_after_vertex_dissolve(
     const Document& source, Document& candidate,
+    std::span<const Face> boundary_faces,
     const std::set<ElementId>& removed_vertices)
 {
     const std::vector<Edge> source_edges = document_edges(source);
     const std::vector<Edge> candidate_edges = document_edges(candidate);
     const EdgeNormalModeLookup source_modes(source);
     const auto donors_by_replacement =
-        collapsed_edge_donors(source, removed_vertices);
+        collapsed_edge_donors(boundary_faces, removed_vertices);
     std::set<EdgeKey> source_edge_keys;
     for (const Edge edge : source_edges) {
         source_edge_keys.insert(edge_key(edge));
@@ -115,9 +116,70 @@ void remap_edge_normal_modes_after_vertex_dissolve(
     prune_normal_edge_states(candidate);
 }
 
-/**
- * Implements the Dissolve Vertices Operation modeling operation for the polygon document and mesh editing core.
- */
+/// Junctions nominate incident interior seams; original degree-two vertices
+/// only collapse their corners and must not join otherwise independent faces.
+std::vector<std::vector<std::size_t>> vertex_dissolve_face_regions(
+    const Document& document, const std::set<ElementId>& selected_vertices)
+{
+    std::map<ElementId, std::size_t> degrees;
+    for (const Edge edge : document_edges(document)) {
+        ++degrees[edge.a];
+        ++degrees[edge.b];
+    }
+    std::vector<std::vector<std::size_t>> adjacency(document.faces.size());
+    for (const auto& [edge, faces] : face_indices_by_edge(document)) {
+        const bool selected_junction =
+            (selected_vertices.contains(edge.first) && degrees.at(edge.first) > 2U) ||
+            (selected_vertices.contains(edge.second) && degrees.at(edge.second) > 2U);
+        if (selected_junction && faces.size() == 2U) {
+            adjacency[faces[0]].push_back(faces[1]);
+            adjacency[faces[1]].push_back(faces[0]);
+        }
+    }
+
+    std::vector<std::vector<std::size_t>> regions;
+    std::vector<bool> visited(document.faces.size(), false);
+    for (std::size_t seed = 0U; seed < document.faces.size(); ++seed) {
+        if (visited[seed]) {
+            continue;
+        }
+        std::vector<std::size_t> pending{seed};
+        visited[seed] = true;
+        std::vector<std::size_t> region;
+        while (!pending.empty()) {
+            const std::size_t index = pending.back();
+            pending.pop_back();
+            region.push_back(index);
+            for (const std::size_t neighbor : adjacency[index]) {
+                if (!visited[neighbor]) {
+                    visited[neighbor] = true;
+                    pending.push_back(neighbor);
+                }
+            }
+        }
+        std::ranges::sort(region);
+        regions.push_back(std::move(region));
+    }
+    return regions;
+}
+
+/// Removes selected corners without imposing automatic simplification's
+/// straightness predicate. Surviving corners keep their authored UV donors.
+bool dissolve_face_corners(const Document& document, Face& face,
+                           const std::set<ElementId>& selected_vertices)
+{
+    const Face source_face = face;
+    std::erase_if(face.vertices, [&](ElementId vertex_id) {
+        return selected_vertices.contains(vertex_id);
+    });
+    if (face.vertices.size() < 3U) {
+        return false;
+    }
+    return preserve_face_uvs(document, source_face, document, face);
+}
+
+/// Dissolves selected vertices through validated face regions and boundary
+/// corner collapse, retaining the existing document and selection on failure.
 class DissolveVerticesOperation final : public PolyOperation {
 public:
     [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::DissolveSelectedVertices).id; }
@@ -141,72 +203,65 @@ OperationResult DissolveVerticesOperation::apply(Document& document, Selection& 
         return OperationResult::failure("Select one or more valid vertices to dissolve.");
     }
 
-    std::set<ElementId> selected_vertex_set(selected_vertices.begin(), selected_vertices.end());
-    for (const ElementId vertex_id : selected_vertices) {
-        bool used_by_face = false;
-        for (const Face& face : document.faces) {
-            if (!contains_id(face.vertices, vertex_id)) {
-                continue;
-            }
-
-            used_by_face = true;
-            if (!loop_vertex_is_redundant(document, face.vertices, vertex_id)) {
-                return OperationResult::failure("Dissolve Vertex only removes redundant straight-line vertices.");
+    const std::set<ElementId> selected_vertex_set(selected_vertices.begin(), selected_vertices.end());
+    std::set<ElementId> used_selected_vertices;
+    std::vector<ElementId> neighbor_vertices;
+    for (const Face& face : document.faces) {
+        for (const ElementId vertex_id : face.vertices) {
+            if (selected_vertex_set.contains(vertex_id)) {
+                used_selected_vertices.insert(vertex_id);
+                append_loop_neighbors_for_vertex(face.vertices, vertex_id, neighbor_vertices);
             }
         }
-
-        if (!used_by_face) {
-            return OperationResult::failure("Dissolve Vertex needs vertices that belong to faces.");
-        }
+    }
+    if (used_selected_vertices != selected_vertex_set) {
+        return OperationResult::failure("Dissolve Vertex needs vertices that belong to faces.");
     }
 
     Document candidate = document;
-    std::vector<ElementId> neighbor_vertices;
-    std::vector<ElementId> dissolved_vertices;
-    bool changed = false;
-    for (Face& face : candidate.faces) {
-        if (std::ranges::none_of(face.vertices, [&selected_vertex_set](ElementId vertex_id) {
+    candidate.faces.clear();
+    candidate.faces.reserve(document.faces.size());
+    std::vector<Face> collapse_boundaries;
+    for (const auto& region : vertex_dissolve_face_regions(document, selected_vertex_set)) {
+        Face face = document.faces[region.front()];
+        if (region.size() > 1U) {
+            std::vector<Face> sources;
+            std::vector<ElementId> source_ids;
+            sources.reserve(region.size());
+            source_ids.reserve(region.size());
+            for (const std::size_t index : region) {
+                sources.push_back(document.faces[index]);
+                source_ids.push_back(document.faces[index].id);
+            }
+            const auto boundaries = selected_face_island_boundaries(document, sources);
+            if (boundaries.size() != 1U || boundaries.front().vertices.size() < 3U) {
+                return OperationResult::failure("Dissolve Vertex needs a single face boundary around each selected junction.");
+            }
+            face.vertices = boundaries.front().vertices;
+            face.uvs.clear();
+            orient_face_toward_normal(document, face, boundaries.front().normal);
+            // Inherit the existing boundary before collapsing selected corners;
+            // the removed seams need not retain their interior interpolation.
+            if (!assign_merged_face_texture_boundary(document, source_ids, face)) {
+                face.uvs.clear();
+            }
+        }
+        if (std::ranges::any_of(face.vertices, [&](ElementId vertex_id) {
                 return selected_vertex_set.contains(vertex_id);
             })) {
-            continue;
+            collapse_boundaries.push_back(face);
+            if (!dissolve_face_corners(document, face, selected_vertex_set)) {
+                return OperationResult::failure("Dissolve Vertex would create invalid face geometry.");
+            }
         }
-
-        const std::vector<ElementId> source_loop = face.vertices;
-        std::vector<ElementId> removed_from_face;
-        std::vector<ElementId> dissolved_loop = remove_redundant_vertices_from_loop(candidate, face.vertices, selected_vertex_set, removed_from_face);
-        if (removed_from_face.empty()) {
-            continue;
-        }
-        if (dissolved_loop.size() < 3U) {
-            return OperationResult::failure("Dissolve Vertex would create invalid face geometry.");
-        }
-
-        for (const ElementId vertex_id : removed_from_face) {
-            append_loop_neighbors_for_vertex(source_loop, vertex_id, neighbor_vertices);
-            add_unique_id(dissolved_vertices, vertex_id);
-        }
-        const Face source_face = face;
-        face.vertices = std::move(dissolved_loop);
-        if (!preserve_face_uvs(document, source_face, candidate, face)) {
-            face.uvs.clear();
-        }
-        changed = true;
-    }
-
-    if (!changed || dissolved_vertices.empty()) {
-        return OperationResult::failure("No dissolvable selected vertices were found.");
+        candidate.faces.push_back(std::move(face));
     }
 
     std::erase_if(candidate.vertices, [&](const Vertex& vertex) {
-        return contains_id(dissolved_vertices, vertex.id) &&
-            std::ranges::none_of(candidate.faces, [&](const Face& face) {
-                return contains_id(face.vertices, vertex.id);
-            });
+        return selected_vertex_set.contains(vertex.id);
     });
     remap_edge_normal_modes_after_vertex_dissolve(
-        document, candidate,
-        std::set<ElementId>(dissolved_vertices.begin(),
-                            dissolved_vertices.end()));
+        document, candidate, collapse_boundaries, selected_vertex_set);
     restore_source_face_orientation(document, candidate);
     const OperationResult validation = validate_authored_operation_candidate(document, candidate);
     if (!validation.success) {

@@ -1,0 +1,221 @@
+{
+  "graph": {
+    "links": [
+      {
+        "fromNode": 5,
+        "fromPin": 0,
+        "id": 4,
+        "toNode": 1,
+        "toPin": 12
+      },
+      {
+        "fromNode": 2,
+        "fromPin": 7,
+        "id": 14,
+        "toNode": 11,
+        "toPin": 7
+      },
+      {
+        "fromNode": 11,
+        "fromPin": 1,
+        "id": 15,
+        "toNode": 1,
+        "toPin": 10
+      },
+      {
+        "fromNode": 12,
+        "fromPin": 1,
+        "id": 17,
+        "toNode": 14,
+        "toPin": 8
+      },
+      {
+        "fromNode": 13,
+        "fromPin": 1,
+        "id": 18,
+        "toNode": 14,
+        "toPin": 9
+      },
+      {
+        "fromNode": 2,
+        "fromPin": 7,
+        "id": 21,
+        "toNode": 12,
+        "toPin": 7
+      },
+      {
+        "fromNode": 14,
+        "fromPin": 0,
+        "id": 22,
+        "toNode": 1,
+        "toPin": 11
+      }
+    ],
+    "nextLinkId": 23,
+    "nextNodeId": 15,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5,
+          "baseColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "blend": 0,
+          "doubleSided": false,
+          "emission": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "metallic": 0.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "roughness": 1.0,
+          "shading": 0,
+          "specular": 0.5
+        },
+        "position": [
+          -45.0,
+          35.0
+        ]
+      },
+      {
+        "id": 2,
+        "kind": 1,
+        "name": "UV",
+        "position": [
+          -1403.0,
+          -61.0
+        ],
+        "uv": {
+          "mode": 3,
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.25,
+            0.25,
+            0.25
+          ],
+          "scaleLinked": true
+        }
+      },
+      {
+        "id": 5,
+        "kind": 3,
+        "name": "Metallic",
+        "position": [
+          -367.0,
+          609.0
+        ],
+        "range": [
+          0.0,
+          1.0
+        ],
+        "scalar": 0.0
+      },
+      {
+        "id": 11,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -799.0,
+          -129.0
+        ],
+        "texture": {
+          "image": "assets/textures/str_stoneflr4.png",
+          "normalStrength": 1.0,
+          "role": 0,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "id": 12,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -799.0,
+          235.25
+        ],
+        "texture": {
+          "image": "assets/textures/0b21c54a-61bd-4a5a-a0a9-693d6ad4f15f_roughness_linear-2.png",
+          "normalStrength": 1.0,
+          "role": 1,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "color": [
+          0.8923174142837524,
+          0.8923174142837524,
+          0.8923174142837524,
+          1.0
+        ],
+        "id": 13,
+        "kind": 4,
+        "name": "Constant",
+        "position": [
+          -799.0,
+          577.0
+        ]
+      },
+      {
+        "id": 14,
+        "kind": 5,
+        "left": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "name": "Multiply",
+        "position": [
+          -381.0,
+          305.0
+        ],
+        "right": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    ],
+    "version": 3
+  },
+  "id": "assets/materials/55f2270f21c4-0.crimson-material",
+  "name": "New Material 3",
+  "originModel": "",
+  "type": "crimson-material",
+  "version": 6
+}

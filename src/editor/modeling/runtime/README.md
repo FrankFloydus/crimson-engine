@@ -28,17 +28,23 @@ consumer/parity tests for portable behavior. Real window/GPU output follows the 
 Component hover and picking use eligible scene meshes rather than a fixed Edit
 participant list. Retain the last eligible hovered mesh as a presentation candidate
 without mutating SDK component selection or scene membership. Its component wire,
-and Vertex-mode points, persist across empty-space hover and viewport leave. A new
-eligible mesh replaces the candidate; meshes with selected components remain
-additive. An empty target carried from object selection must not keep a stale wire
-when a different candidate takes over.
+and Vertex-mode points, persist across empty-space hover, viewport leave, and camera
+navigation (orbit, pan, zoom and fly). Preserve that candidate through the captured
+navigation release; the navigation cursor must neither replace nor clear it. A
+subsequent ordinary pointer hover over an eligible mesh replaces the candidate;
+meshes with selected components remain additive. These transitions do not mutate
+component selection or history. An empty target carried from object selection must
+not keep a stale wire when a different candidate takes over.
 
 Keep immediate component highlighting separate from the retained candidate. Blank
 clicks and finished box/lasso selection clear the immediate highlight but preserve
-the candidate. Gizmo ownership performs a hard clear of both while leaving selected
-components visible. Tool surface acquisition can target eligible peers through the
-same pick universe; operation validation must not reinstate a fixed-participant
-gate after a valid peer hit.
+the candidate. Treat navigation and camera-only suppression as transient spatial
+hover loss, including interrupted Paint and traversal feedback. Apply that distinction
+to every selection method and the remembered method beneath transform tools.
+Tool/gizmo ownership and invalid selection context still retire the candidate and
+immediate highlight while leaving selected components visible. Tool surface
+acquisition can target eligible peers through the same pick universe; operation
+validation must not reinstate a fixed-participant gate after a valid peer hit.
 
 Candidate changes and clears must reach persistent and volatile retained submission
 gates, including points. Preserve the existing wire colors, user settings, depth
@@ -46,6 +52,7 @@ classification and Wireframe suppression policy. Verify actual submitted wire an
 point data and GPU output; a fresh semantic overlay alone cannot prove the visible
 transition. Coverage lives in
 [interaction tests](../../../../tests/viewport_interaction_controller_tests.cpp),
+[Qt input tests](../../../../tests/qt_input_adapter_tests.cpp),
 [retained presentation tests](../../../../tests/selected_mesh_outline_presentation_tests.cpp)
 and [GPU overlay tests](../../../../tests/selection_overlay_runtime_tests.cpp).
 

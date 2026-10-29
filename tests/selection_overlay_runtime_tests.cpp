@@ -15,6 +15,7 @@
 #include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
+#include "editor/placement/scene_surface_query.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/render/standard_material_render_snapshot_adapter.hpp"
 #include "editor/session/project_session.hpp"
@@ -28,6 +29,7 @@
 #include "ui/qt_settings_controller.hpp"
 #include "ui/ui_settings.hpp"
 #include "editor/viewport/viewport_tool_overlay_projection.hpp"
+#include "editor/viewport/viewport_interaction_controller.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/overlay/selected_mesh_outline_mask_cache.hpp"
 #include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
@@ -396,6 +398,14 @@ public:
     pixel.y = static_cast<float>(kHeight - 1u) - pixel.y;
     return pixel;
   }
+
+  ViewportCameraController &component_interaction_camera() { return camera_; }
+
+  SceneSurfaceQuerySnapshot component_interaction_surfaces() {
+    return session_.scene_surface_query().snapshot();
+  }
+
+  void update_component_interaction_camera() { view_.update_camera(camera_); }
 
   bool create_outline_depth_quad(const std::array<MeshVertex, 4u> &points) {
     QuaderEditorApi api(QuaderApiSessionInternalAccess::from_scene_session(session_));
@@ -7197,6 +7207,242 @@ TEST(SelectionOverlayRuntimeTests,
       EXPECT_GT(cyan_pixels(additive, {260, 240}), 0);
       EXPECT_GT(cyan_pixels(additive, {560, 240}), 0);
       ++cycle;
+    }
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanPaintCandidateRemainsVisibleDuringOrbitFlyAndCaptureRelease) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-paint-navigation-topology-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString output = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (output.isEmpty()) {
+    output = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(
+        QStringLiteral("../selection_features_visual"));
+  }
+  ASSERT_TRUE(QDir().mkpath(output));
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
+                         QuaderSelectionMode::Face}) {
+    for (const bool fly : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(fly);
+      SelectionOverlayRuntimeHarness harness;
+      ASSERT_TRUE(harness.initialize(0.0f, false));
+      ASSERT_TRUE(harness.prepare_overlay_audit_camera(4.0f, ViewportProjection::Perspective));
+      auto &editor = harness.workflow_editor();
+      auto &camera = harness.component_interaction_camera();
+      const auto add_strip = [&](float left) {
+        quader_poly::Document document;
+        const std::array pixels{
+            QVec2{left, 150}, QVec2{left + 60, 150}, QVec2{left + 120, 150},
+            QVec2{left + 120, 330}, QVec2{left + 60, 330}, QVec2{left, 330}};
+        std::array<quader_poly::ElementId, 6> vertices;
+        for (std::size_t index = 0u; index < pixels.size(); ++index) {
+          vertices[index] = quader_poly::add_vertex(
+              document, harness.overlay_audit_world_point(pixels[index], 0.0f));
+        }
+        // Audit coordinates already include the readback's vertical mirror.
+        // Left-to-right image order therefore faces the positive-Z camera.
+        (void)quader_poly::add_face(document,
+            std::array{vertices[0], vertices[1], vertices[4], vertices[5]});
+        (void)quader_poly::add_face(document,
+            std::array{vertices[1], vertices[2], vertices[3], vertices[4]});
+        return editor.modeling().create_mesh(
+            QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+            {.name = "Paint navigation GPU strip"});
+      };
+      const auto candidate = add_strip(80);
+      const auto selected = add_strip(440);
+      const auto reticle_peer = add_strip(260);
+      ASSERT_TRUE(candidate.ok());
+      ASSERT_TRUE(selected.ok());
+      ASSERT_TRUE(reticle_peer.ok());
+      const auto candidate_edge = harness.overlay_audit_world_point({140, 240}, 0);
+      const auto selected_edge = harness.overlay_audit_world_point({560, 240}, 0);
+      const auto reticle_edge = harness.overlay_audit_world_point({320, 240}, 0);
+      const auto candidate_vertex = harness.overlay_audit_world_point({80, 150}, 0);
+      const auto candidate_body = harness.overlay_audit_world_point({110, 240}, 0);
+      const auto peer_body = harness.overlay_audit_world_point({290, 240}, 0);
+      const auto baseline_pose = camera.pose();
+      ViewportSettings settings = ViewportSettings::defaults();
+      (void)settings.set_color(ViewportColorSettingId::SourceWire, {0, 1, 1, 1});
+      (void)settings.set_color(ViewportColorSettingId::SelectionWire, {1, 1, 0, 0.5f});
+      (void)settings.set_color(ViewportColorSettingId::SelectionFace, {0, 0, 0, 0});
+      (void)settings.set_color(ViewportColorSettingId::HoverFace, {0, 0, 0, 0});
+      (void)settings.set_color(ViewportColorSettingId::HoverWire, {0, 0, 0, 0});
+      (void)settings.set_color(ViewportColorSettingId::Vertex, {1, 0, 1, 1});
+      const auto context = mode == QuaderSelectionMode::Vertex
+          ? ViewportOverlaySelectionContext::Vertex
+          : mode == QuaderSelectionMode::Edge ? ViewportOverlaySelectionContext::Edge
+                                             : ViewportOverlaySelectionContext::Face;
+      int cycle = 0;
+      for (const float scale : {1.0f, 2.0f, 1.0f}) {
+        SCOPED_TRACE(scale);
+        ASSERT_TRUE(camera.restore_perspective_pose(baseline_pose));
+        ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Object).ok());
+        ASSERT_TRUE(editor.selection().select_object(selected.value()).ok());
+        ASSERT_TRUE(enter_selection_context(editor, mode).ok());
+        ASSERT_TRUE(editor.selection().clear().ok());
+        if (mode == QuaderSelectionMode::Vertex) {
+          ASSERT_TRUE(editor.selection().select_vertex(selected.value(), 1).ok());
+        } else if (mode == QuaderSelectionMode::Edge) {
+          ASSERT_TRUE(editor.selection().select_edge(selected.value(), 1, 2).ok());
+        } else {
+          ASSERT_TRUE(editor.selection().select_face(selected.value(), 1).ok());
+        }
+        ASSERT_TRUE(editor.tools().activate(ViewportToolId::PaintSelect).ok());
+        ViewportInputRouter router;
+        router.set_active_tool(ViewportToolId::PaintSelect);
+        router.set_selection_mode(mode == QuaderSelectionMode::Vertex
+            ? ViewportSelectionMode::Vertex : mode == QuaderSelectionMode::Edge
+                ? ViewportSelectionMode::Edge : ViewportSelectionMode::Face);
+        ViewportInteractionController controller;
+        ViewportInputFrame input;
+        input.viewport_hovered = true;
+        input.viewport_focused = true;
+        input.viewport_size = camera.viewport_size();
+        input.delta_seconds = 1.0f / 600.0f;
+        const auto projected_body = camera.project_world_point(candidate_body);
+        ASSERT_TRUE(projected_body.visible);
+        input.mouse_local = projected_body.position;
+        const auto initial_surfaces = harness.component_interaction_surfaces();
+        ASSERT_TRUE(initial_surfaces.valid());
+        const auto initial_ray = camera.ray_from_viewport_point(input.mouse_local);
+        const auto initial_hit = initial_surfaces.nearest_hit({
+            .world_origin = initial_ray.origin,
+            .world_direction = initial_ray.direction,
+            .include_backfaces = false});
+        ASSERT_TRUE(initial_hit.has_value()) << "The GPU fixture's initial body ray must hit a front surface";
+        ASSERT_EQ(initial_hit->participant.geometry_entity, candidate.value().entity);
+        const auto dispatch = [&](bool pressed = false, bool down = false,
+                                  bool released = false) {
+          input.navigation_active = router.navigating();
+          input.fly_navigation_active = router.fly_navigating();
+          input.mouse_screen = input.mouse_local;
+          input.navigation_bindings = {};
+          if (fly) {
+            input.navigation_bindings.fly_pressed = pressed;
+            input.navigation_bindings.fly_down = down;
+            input.navigation_bindings.fly_released = released;
+          } else {
+            input.navigation_bindings.orbit_pressed = pressed;
+            input.navigation_bindings.orbit_down = down;
+            input.navigation_bindings.orbit_released = released;
+          }
+          const auto result = router.handle_frame(input, camera);
+          // Body hover in Vertex/Edge mode uses Qt's visible surface input;
+          // pin the owner's current snapshot through this controller dispatch.
+          const auto surfaces = harness.component_interaction_surfaces();
+          const ViewportInteractionFrame frame{
+              .input_router = router, .camera = camera, .settings = settings,
+              .input = input, .input_result = result,
+              .viewport_pixel_scale = scale,
+              .pointer_capture_recentered = fly && (pressed || down || released),
+              .active_tool_allows_selection_fallback = true,
+              .preferred_selection_tool = ViewportToolId::PaintSelect,
+              .scene_surfaces = &surfaces,
+              .selection_state = {.summary = editor.selection().summary()}};
+          controller.handle_after_active_tool(editor, frame, {}, {});
+          harness.update_component_interaction_camera();
+          return result;
+        };
+        const auto vertex_pixels = [&](const QImage &image) {
+          const auto point = harness.overlay_audit_image_point(candidate_vertex);
+          const QRect region(qRound(point.x) - 8, qRound(point.y) - 8, 17, 17);
+          int count = 0;
+          for (int y = region.top(); y <= region.bottom(); ++y) {
+            for (int x = region.left(); x <= region.right(); ++x) {
+              const auto color = image.pixelColor(x, y);
+              count += color.red() > 180 && color.blue() > 180 && color.green() < 100;
+            }
+          }
+          return count;
+        };
+        const auto capture = [&](const char *phase, bool transferred = false) {
+          EXPECT_TRUE(harness.present_component_sample(context, scale, settings));
+          const auto image = harness.capture();
+          EXPECT_FALSE(image.isNull());
+          if (image.isNull()) return image;
+          EXPECT_TRUE(image.save(QDir(output).filePath(
+              QStringLiteral("paint_navigation_%1_%2_%3_%4_%5.png")
+                  .arg(static_cast<int>(mode)).arg(fly).arg(qRound(scale * 100))
+                  .arg(cycle).arg(QString::fromLatin1(phase)))));
+          const auto candidate_pixel = harness.overlay_audit_image_point(candidate_edge);
+          const auto selected_pixel = harness.overlay_audit_image_point(selected_edge);
+          const auto peer_pixel = harness.overlay_audit_image_point(reticle_edge);
+          EXPECT_GT(cyan_pixels(image, selected_pixel), 0);
+          if (transferred) {
+            EXPECT_EQ(cyan_pixels(image, candidate_pixel), 0);
+            EXPECT_GT(cyan_pixels(image, peer_pixel), 0);
+            EXPECT_EQ(vertex_pixels(image), 0);
+          } else {
+            EXPECT_GT(cyan_pixels(image, candidate_pixel), 0);
+            EXPECT_EQ(cyan_pixels(image, peer_pixel), 0);
+            EXPECT_EQ(vertex_pixels(image) > 0, mode == QuaderSelectionMode::Vertex);
+          }
+          return image;
+        };
+        (void)dispatch();
+        ASSERT_EQ(harness.modeling().selection_hover_summary().candidate_object_id,
+                  candidate.value().modeling_object_id)
+            << "Initial controller body hover must acquire the GPU fixture before navigation starts";
+        const auto selection = editor.selection().summary();
+        const auto history = harness.undo_count();
+        const auto expect_selection = [&]() {
+          const auto current = editor.selection().summary();
+          EXPECT_EQ(current.selection_revision, selection.selection_revision);
+          EXPECT_EQ(current.content_revision, selection.content_revision);
+          EXPECT_EQ(current.selected_vertex_count, selection.selected_vertex_count);
+          EXPECT_EQ(current.selected_edge_count, selection.selected_edge_count);
+          EXPECT_EQ(current.selected_face_count, selection.selected_face_count);
+          EXPECT_EQ(harness.undo_count(), history);
+        };
+        (void)capture("hover");
+        input.mouse_local = input.viewport_size * 0.5f;
+        ASSERT_TRUE(dispatch(true, true).navigation_active);
+        (void)capture("navigation_begin");
+        for (int sample = 0; sample < 2; ++sample) {
+          input.mouse_delta = fly ? QVec2{} : QVec2{1.5f, -0.5f};
+          input.fly_local_direction = fly ? QVec3{0.25f, 0, 0.1f} : QVec3{};
+          ASSERT_TRUE(dispatch(false, true).camera_changed);
+          (void)capture(sample == 0 ? "camera_first" : "camera_second");
+          expect_selection();
+        }
+        input.mouse_delta = {};
+        input.fly_local_direction = {};
+        ASSERT_FALSE(dispatch(false, false, true).navigation_active);
+        ASSERT_TRUE(input.navigation_active);
+        const auto release = capture("captured_release");
+        input.mouse_local = {20, 20};
+        (void)dispatch();
+        const auto restored = capture("restored_pointer_miss");
+        EXPECT_EQ(restored, release);
+        const auto builds = harness.selection_frame_builds();
+        const auto volatile_builds = harness.modeling().volatile_overlay_cache_stats().build_count;
+        for (int idle = 0; idle < 3; ++idle) {
+          (void)dispatch();
+          EXPECT_TRUE(harness.present_component_sample(context, scale, settings));
+          EXPECT_FALSE(harness.last_submission().persistent_submitted);
+          EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+        }
+        EXPECT_EQ(harness.selection_frame_builds(), builds);
+        EXPECT_EQ(harness.modeling().volatile_overlay_cache_stats().build_count, volatile_builds);
+        EXPECT_EQ(harness.capture(), restored);
+        input.mouse_local = camera.project_world_point(peer_body).position;
+        (void)dispatch();
+        ASSERT_EQ(harness.modeling().selection_hover_summary().candidate_object_id,
+                  reticle_peer.value().modeling_object_id);
+        (void)capture("deliberate_peer_hover", true);
+        expect_selection();
+        ++cycle;
+      }
     }
   }
 }

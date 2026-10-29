@@ -1,0 +1,6 @@
+{
+  "name": "crimson-decal-proof",
+  "version-string": "0.1.0",
+  "builtin-baseline": "d0c191d142b7bc048141ddfb618aa9ae5dba0233",
+  "dependencies": ["geometry-central", "glm", "nlohmann-json"]
+}

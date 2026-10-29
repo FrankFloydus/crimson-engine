@@ -1,0 +1,38 @@
+{
+  "assetTags": [],
+  "duration": 3.0,
+  "durationPolicy": "hasDuration",
+  "executeOnApplication": true,
+  "grantedTags": [],
+  "id": "ba7d04bd-c78e-43ee-97df-4e5dd0762c04",
+  "modifiers": [
+    {
+      "attribute": "Stats.MovementSpeed",
+      "magnitude": {
+        "calculation": "",
+        "literal": 10.0,
+        "parameters": []
+      },
+      "operation": "addBase"
+    }
+  ],
+  "name": "New Gameplay Effect",
+  "period": 0.0,
+  "sourceBlocked": [],
+  "sourceRequired": [],
+  "stacking": {
+    "clearStackOnOverflow": false,
+    "denyOverflowApplication": false,
+    "durationRefresh": "refreshOnSuccessfulApplication",
+    "expiration": "clearEntireStack",
+    "factorInStackCount": true,
+    "limit": 0,
+    "maxDuration": 0.0,
+    "periodReset": "resetOnSuccessfulApplication",
+    "type": "none"
+  },
+  "targetBlocked": [],
+  "targetRequired": [],
+  "type": "crimson-gameplay-effect",
+  "version": 1
+}

@@ -8682,6 +8682,101 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportInteractionControllerTests,
+     ActiveTraversalNavigationSuppressionRetainsCandidateThroughCapturedRelease) {
+  GridComponentSelectionScenario scenario;
+  scenario.initialize(quader::QuaderSelectionMode::Face);
+  auto &harness = scenario.harness;
+  ASSERT_TRUE(harness.editor.mode().set(quader::QuaderEditorMode::Object).ok());
+  const auto selected = create_box_at(harness, {5, 0, 0});
+  select_single_component(harness, selected, quader::QuaderSelectionMode::Face);
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
+  ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Select).ok());
+  harness.router.set_active_tool(quader::ViewportToolId::Select);
+  harness.session.history().clear();
+  quader::ViewportSelectionInteraction interaction;
+  ViewportSelectionWorkGateHarness work_gate(harness);
+  const auto dispatch = [&](bool pressed = false, bool down = false,
+                            bool released = false) {
+    const auto frame = harness.frame(pressed, down, released, scenario.hit());
+    const auto before = harness.controller.handle_before_active_tool(
+        harness.editor, frame);
+    interaction.handle_frame(harness.editor, frame, {}, before,
+                             work_gate.hover_port());
+  };
+  const auto source_wires = [&](int object_id) {
+    const auto overlay = quader::test_support::visible_modeling_overlay_frame(
+        harness.session.modeling());
+    return std::ranges::count_if(overlay.lines, [&](const auto &line) {
+      return line.layer == quader::ViewportOverlayLayer::SourceWire &&
+             line.element.object_id == object_id;
+    });
+  };
+  harness.input.mouse_local = scenario.hit();
+  harness.input.mouse_screen = harness.input.mouse_local;
+  dispatch();
+  ASSERT_EQ(harness.session.modeling().selection_hover_summary().candidate_object_id,
+            scenario.object.modeling_object_id);
+  const auto candidate_wires = source_wires(scenario.object.modeling_object_id);
+  const auto selected_wires = source_wires(selected.modeling_object_id);
+  ASSERT_GT(candidate_wires, 0);
+  ASSERT_GT(selected_wires, 0);
+  ASSERT_TRUE(scenario.selected_components().empty());
+  const auto selection = harness.editor.selection().summary();
+  const auto before = quader::test::capture_command_observable_state(harness.editor);
+  const auto expect_preserved = [&]() {
+    EXPECT_EQ(harness.session.modeling().selection_hover_summary().candidate_object_id,
+              scenario.object.modeling_object_id);
+    EXPECT_EQ(source_wires(scenario.object.modeling_object_id), candidate_wires);
+    EXPECT_EQ(source_wires(selected.modeling_object_id), selected_wires);
+    EXPECT_TRUE(scenario.selected_components().empty());
+    const auto current = harness.editor.selection().summary();
+    EXPECT_EQ(current.selection_revision, selection.selection_revision);
+    EXPECT_EQ(current.active_object_id, selection.active_object_id);
+    EXPECT_EQ(current.active_face_id, selection.active_face_id);
+    EXPECT_EQ(current.selected_face_count, selection.selected_face_count);
+    EXPECT_EQ(harness.session.history().undo_count(), 0u);
+  };
+  harness.input.modifiers.alt = true;
+  dispatch(true, true);
+  ASSERT_TRUE(interaction.pointer_interaction_active());
+  expect_preserved();
+
+  harness.input.mouse_local = harness.camera.project_world_point({5, 0, 1}).position;
+  harness.input.mouse_screen = harness.input.mouse_local;
+  harness.input.navigation_active = true;
+  harness.input_result.navigation_active = true;
+  harness.input_result.camera_changed = true;
+  dispatch(false, true);
+  // The interrupted traversal reserves its original Left release.
+  EXPECT_TRUE(interaction.pointer_interaction_active());
+  expect_preserved();
+  harness.input_result.navigation_active = false;
+  harness.input_result.camera_changed = false;
+  dispatch(false, false, true);
+  EXPECT_FALSE(interaction.pointer_interaction_active());
+  expect_preserved();
+  harness.input.navigation_active = false;
+  harness.input.modifiers = {};
+  harness.input.mouse_local = {20, 20};
+  harness.input.mouse_screen = harness.input.mouse_local;
+  dispatch();
+  expect_preserved();
+  const auto picks = interaction.work_stats().hover_pick_count;
+  for (int idle = 0; idle < 3; ++idle) {
+    dispatch();
+    expect_preserved();
+    EXPECT_EQ(interaction.work_stats().hover_pick_count, picks);
+  }
+  const auto after = quader::test::capture_command_observable_state(harness.editor);
+  for (const auto domain : {quader::test::CommandObservableDomain::Scene,
+                            quader::test::CommandObservableDomain::Geometry,
+                            quader::test::CommandObservableDomain::Assets,
+                            quader::test::CommandObservableDomain::History}) {
+    EXPECT_EQ(after.domain(domain).fingerprint, before.domain(domain).fingerprint);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
      AltClickAndDoubleClickSelectCylinderCapPerimeter) {
   for (const int side_count : {8, 32}) {
     for (const auto [alt, double_click] :
@@ -10198,99 +10293,120 @@ TEST(ViewportInteractionControllerTests,
                             quader::ViewportToolId::Scale,
                             quader::ViewportToolId::Rotate}) {
       SCOPED_TRACE(static_cast<int>(tool));
-      ViewportInteractionHarness harness;
-      const auto background = harness.editor.modeling().create_box(
-          quader::QuaderBounds{.min = {-4.0f, -3.0f, -6.0f},
-                               .max = {4.0f, 3.0f, -5.0f}},
-          "Gizmo hover background");
-      ASSERT_TRUE(background.ok());
-      const auto box = create_unit_box(harness);
-      select_single_component(harness, box, mode);
-      harness.router.set_selection_mode(mode == quader::QuaderSelectionMode::Vertex
-          ? quader::ViewportSelectionMode::Vertex
-          : mode == quader::QuaderSelectionMode::Edge
-              ? quader::ViewportSelectionMode::Edge
-              : quader::ViewportSelectionMode::Face);
-      ASSERT_TRUE(harness.editor.tools().activate(tool).ok());
-      harness.router.set_active_tool(tool);
-      const auto selected = harness.editor.selection().summary();
-      const auto dispatch = [&](quader::QVec2 point) {
-        harness.input.mouse_local = point;
-        harness.input.mouse_screen = point;
-        return harness.dispatch_frame(harness.frame());
-      };
-      const auto source_wire_count = [&](int object_id) {
-        const auto overlay = quader::test_support::visible_modeling_overlay_frame(
-            harness.session.modeling());
-        return std::count_if(overlay.lines.begin(), overlay.lines.end(), [&](const auto &line) {
-          return line.layer == quader::ViewportOverlayLayer::SourceWire &&
-                 line.element.object_id == object_id;
-        });
-      };
-      (void)dispatch({20.0f, 20.0f});
-      const auto *gizmo = harness.controller.transform_gizmo_frame();
-      ASSERT_NE(gizmo, nullptr);
-      const auto background_target = harness.camera.project_world_point(
-          mode == quader::QuaderSelectionMode::Vertex ? quader::QVec3{4.0f, 3.0f, -5.0f}
-          : mode == quader::QuaderSelectionMode::Edge ? quader::QVec3{4.0f, 0.0f, -5.0f}
-                                                     : quader::QVec3{3.0f, 2.0f, -5.0f});
-      ASSERT_TRUE(background_target.visible);
-      const auto away = background_target.position;
-      std::vector<quader::QVec2> handles;
-      if (tool == quader::ViewportToolId::Rotate) {
-        const auto *ring = find_ring(*gizmo, quader_editor_core::TransformAxis::Z);
-        ASSERT_NE(ring, nullptr);
-        handles.push_back(ring->screen_start);
-        handles.push_back(gizmo->info.screen_pivot + quader::QVec2{25.0f, 25.0f});
-      } else {
-        handles.push_back(gizmo->info.screen_pivot);
-        const auto *axis = find_axis(*gizmo, quader_editor_core::TransformAxis::X);
-        ASSERT_NE(axis, nullptr);
-        handles.push_back(axis->screen_tip);
-        const auto plane = std::find_if(
-            gizmo->planes.begin(), gizmo->planes.end(), [](const auto &value) {
-              return value.axis == quader_editor_core::TransformAxis::Xy;
-            });
-        ASSERT_NE(plane, gizmo->planes.end());
-        handles.push_back((plane->screen0 + plane->screen1 +
-                           plane->screen2 + plane->screen3) * 0.25f);
-      }
-      for (const auto handle : handles) {
-        SCOPED_TRACE(::testing::Message() << handle.x << ", " << handle.y);
-        EXPECT_FALSE(dispatch(away).gizmo_hovered);
-        ASSERT_EQ(harness.editor.selection().hover_summary().target.object_id,
-                  background.value().modeling_object_id);
-        ASSERT_GT(source_wire_count(background.value().modeling_object_id), 0);
-        const auto selected_wire_count = source_wire_count(box.modeling_object_id);
-        ASSERT_GT(selected_wire_count, 0);
-        const auto hovered = dispatch(handle);
-        EXPECT_TRUE(hovered.gizmo_hovered);
-        EXPECT_FALSE(hovered.gizmo_consumed);
-        gizmo = harness.controller.transform_gizmo_frame();
+      for (const auto selection_tool : {quader::ViewportToolId::Select,
+                                         quader::ViewportToolId::LassoSelect,
+                                         quader::ViewportToolId::PaintSelect}) {
+        SCOPED_TRACE(static_cast<int>(selection_tool));
+        ViewportInteractionHarness harness;
+        const auto background = harness.editor.modeling().create_box(
+            quader::QuaderBounds{.min = {-4.0f, -3.0f, -6.0f},
+                                 .max = {4.0f, 3.0f, -5.0f}},
+            "Gizmo hover background");
+        ASSERT_TRUE(background.ok());
+        const auto box = create_unit_box(harness);
+        select_single_component(harness, box, mode);
+        harness.router.set_selection_mode(mode == quader::QuaderSelectionMode::Vertex
+            ? quader::ViewportSelectionMode::Vertex
+            : mode == quader::QuaderSelectionMode::Edge
+                ? quader::ViewportSelectionMode::Edge
+                : quader::ViewportSelectionMode::Face);
+        ASSERT_TRUE(harness.editor.tools().activate(selection_tool).ok());
+        ASSERT_TRUE(harness.editor.tools().activate(tool).ok());
+        harness.router.set_active_tool(tool);
+        const auto selected = harness.editor.selection().summary();
+        quader::ViewportSelectionInteraction interaction;
+        ViewportSelectionWorkGateHarness work_gate(harness);
+        const auto dispatch = [&](quader::QVec2 point) {
+          harness.input.mouse_local = point;
+          harness.input.mouse_screen = point;
+          auto frame = harness.frame();
+          frame.preferred_selection_tool = selection_tool;
+          const auto before = harness.controller.handle_before_active_tool(
+              harness.editor, frame);
+          interaction.handle_frame(harness.editor, frame, {}, before,
+                                   work_gate.hover_port());
+          return before;
+        };
+        const auto source_wire_count = [&](int object_id) {
+          const auto overlay = quader::test_support::visible_modeling_overlay_frame(
+              harness.session.modeling());
+          return std::count_if(overlay.lines.begin(), overlay.lines.end(), [&](const auto &line) {
+            return line.layer == quader::ViewportOverlayLayer::SourceWire &&
+                   line.element.object_id == object_id;
+          });
+        };
+        (void)dispatch({20.0f, 20.0f});
+        const auto *gizmo = harness.controller.transform_gizmo_frame();
         ASSERT_NE(gizmo, nullptr);
-        EXPECT_NE(gizmo->info.hover_axis, quader_editor_core::TransformAxis::None);
-        EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
-                  quader::QuaderActiveSelectionKind::None);
-        EXPECT_EQ(source_wire_count(background.value().modeling_object_id), 0);
-        EXPECT_EQ(source_wire_count(box.modeling_object_id), selected_wire_count);
-        const auto scene_revision = harness.session.scene().revision();
-        const auto content_revision = harness.session.modeling().content_revision();
-        for (int frame = 0; frame < 5; ++frame) {
-          EXPECT_TRUE(dispatch(handle).gizmo_hovered);
-          EXPECT_EQ(harness.session.scene().revision(), scene_revision);
-          EXPECT_EQ(harness.session.modeling().content_revision(), content_revision);
+        const auto background_target = harness.camera.project_world_point(
+            mode == quader::QuaderSelectionMode::Vertex ? quader::QVec3{4.0f, 3.0f, -5.0f}
+            : mode == quader::QuaderSelectionMode::Edge ? quader::QVec3{4.0f, 0.0f, -5.0f}
+                                                       : quader::QVec3{3.0f, 2.0f, -5.0f});
+        ASSERT_TRUE(background_target.visible);
+        const auto away = background_target.position;
+        std::vector<quader::QVec2> handles;
+        if (tool == quader::ViewportToolId::Rotate) {
+          const auto *ring = find_ring(*gizmo, quader_editor_core::TransformAxis::Z);
+          ASSERT_NE(ring, nullptr);
+          handles.push_back(ring->screen_start);
+          handles.push_back(gizmo->info.screen_pivot + quader::QVec2{25.0f, 25.0f});
+        } else {
+          handles.push_back(gizmo->info.screen_pivot);
+          const auto *axis = find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+          ASSERT_NE(axis, nullptr);
+          handles.push_back(axis->screen_tip);
+          const auto plane = std::find_if(
+              gizmo->planes.begin(), gizmo->planes.end(), [](const auto &value) {
+                return value.axis == quader_editor_core::TransformAxis::Xy;
+              });
+          ASSERT_NE(plane, gizmo->planes.end());
+          handles.push_back((plane->screen0 + plane->screen1 +
+                             plane->screen2 + plane->screen3) * 0.25f);
         }
-        EXPECT_FALSE(dispatch(away).gizmo_hovered);
-        EXPECT_GT(source_wire_count(background.value().modeling_object_id), 0);
-        EXPECT_EQ(source_wire_count(box.modeling_object_id), selected_wire_count);
-        EXPECT_EQ(harness.editor.selection().summary().selection_revision,
-                  selected.selection_revision);
-        EXPECT_EQ(harness.editor.selection().summary().selected_vertex_count,
-                  selected.selected_vertex_count);
-        EXPECT_EQ(harness.editor.selection().summary().selected_edge_count,
-                  selected.selected_edge_count);
-        EXPECT_EQ(harness.editor.selection().summary().selected_face_count,
-                  selected.selected_face_count);
+        for (const auto handle : handles) {
+          SCOPED_TRACE(::testing::Message() << handle.x << ", " << handle.y);
+          EXPECT_FALSE(dispatch(away).gizmo_hovered);
+          ASSERT_EQ(harness.editor.selection().hover_summary().target.object_id,
+                    background.value().modeling_object_id);
+          ASSERT_GT(source_wire_count(background.value().modeling_object_id), 0);
+          const auto selected_wire_count = source_wire_count(box.modeling_object_id);
+          ASSERT_GT(selected_wire_count, 0);
+          const auto picks_before_gizmo = interaction.work_stats().hover_pick_count;
+          const auto hovered = dispatch(handle);
+          EXPECT_TRUE(hovered.gizmo_hovered);
+          EXPECT_FALSE(hovered.gizmo_consumed);
+          gizmo = harness.controller.transform_gizmo_frame();
+          ASSERT_NE(gizmo, nullptr);
+          EXPECT_NE(gizmo->info.hover_axis, quader_editor_core::TransformAxis::None);
+          EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+                    quader::QuaderActiveSelectionKind::None);
+          EXPECT_EQ(source_wire_count(background.value().modeling_object_id), 0);
+          EXPECT_EQ(source_wire_count(box.modeling_object_id), selected_wire_count);
+          EXPECT_EQ(interaction.work_stats().hover_pick_count, picks_before_gizmo);
+          const auto scene_revision = harness.session.scene().revision();
+          const auto content_revision = harness.session.modeling().content_revision();
+          const auto preview_revision =
+              harness.session.modeling().tool_preview_source_revision();
+          for (int frame = 0; frame < 5; ++frame) {
+            EXPECT_TRUE(dispatch(handle).gizmo_hovered);
+            EXPECT_EQ(interaction.work_stats().hover_pick_count, picks_before_gizmo);
+            EXPECT_EQ(harness.session.scene().revision(), scene_revision);
+            EXPECT_EQ(harness.session.modeling().content_revision(), content_revision);
+            EXPECT_EQ(harness.session.modeling().tool_preview_source_revision(),
+                      preview_revision);
+          }
+          EXPECT_FALSE(dispatch(away).gizmo_hovered);
+          EXPECT_GT(source_wire_count(background.value().modeling_object_id), 0);
+          EXPECT_EQ(source_wire_count(box.modeling_object_id), selected_wire_count);
+          EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+                    selected.selection_revision);
+          EXPECT_EQ(harness.editor.selection().summary().selected_vertex_count,
+                    selected.selected_vertex_count);
+          EXPECT_EQ(harness.editor.selection().summary().selected_edge_count,
+                    selected.selected_edge_count);
+          EXPECT_EQ(harness.editor.selection().summary().selected_face_count,
+                    selected.selected_face_count);
+        }
       }
     }
   }
@@ -10298,37 +10414,75 @@ TEST(ViewportInteractionControllerTests,
 
 TEST(ViewportInteractionControllerTests,
      TransformGizmoHoverOwnershipClearsWhenHandleIsUnavailable) {
-  ViewportInteractionHarness harness;
-  const auto box = create_unit_box(harness);
-  ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
-  ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
-  harness.router.set_active_tool(quader::ViewportToolId::Move);
-  (void)harness.dispatch_frame(harness.frame());
-  const auto *gizmo = harness.controller.transform_gizmo_frame();
-  ASSERT_NE(gizmo, nullptr);
-  harness.input.mouse_local = gizmo->info.screen_pivot;
-  const auto hover = [&]() { return harness.dispatch_frame(harness.frame()); };
-  ASSERT_TRUE(hover().gizmo_hovered);
-  for (int unavailable = 0; unavailable < 6; ++unavailable) {
-    SCOPED_TRACE(unavailable);
-    harness.input.viewport_focused = unavailable != 0;
-    harness.input.viewport_hovered = unavailable != 1;
-    harness.input.navigation_active = unavailable == 2;
-    harness.input.pointer_interaction_canceled = unavailable == 3;
-    harness.settings.set_bool_value(quader::ViewportBoolSettingId::ShowGizmos,
-                                    unavailable != 4);
-    harness.input_result.camera_changed = unavailable == 5;
-    EXPECT_FALSE(hover().gizmo_hovered);
+  for (const auto mode : {quader::QuaderSelectionMode::Object,
+                          quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    for (const auto tool : {quader::ViewportToolId::Move,
+                            quader::ViewportToolId::Rotate,
+                            quader::ViewportToolId::Scale}) {
+      SCOPED_TRACE(static_cast<int>(tool));
+      for (const auto selection_tool : {quader::ViewportToolId::Select,
+                                         quader::ViewportToolId::LassoSelect,
+                                         quader::ViewportToolId::PaintSelect}) {
+        SCOPED_TRACE(static_cast<int>(selection_tool));
+        ViewportInteractionHarness harness;
+        const auto box = create_unit_box(harness);
+        if (mode == quader::QuaderSelectionMode::Object) {
+          ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
+        } else {
+          select_single_component(harness, box, mode);
+        }
+        harness.router.set_selection_mode(mode == quader::QuaderSelectionMode::Vertex
+            ? quader::ViewportSelectionMode::Vertex
+            : mode == quader::QuaderSelectionMode::Edge
+                ? quader::ViewportSelectionMode::Edge
+                : mode == quader::QuaderSelectionMode::Face
+                    ? quader::ViewportSelectionMode::Face
+                    : quader::ViewportSelectionMode::Object);
+        ASSERT_TRUE(harness.editor.tools().activate(selection_tool).ok());
+        ASSERT_TRUE(harness.editor.tools().activate(tool).ok());
+        harness.router.set_active_tool(tool);
+        const auto hover = [&]() {
+          auto frame = harness.frame();
+          frame.preferred_selection_tool = selection_tool;
+          return harness.dispatch_frame(frame);
+        };
+        (void)hover();
+        const auto *gizmo = harness.controller.transform_gizmo_frame();
+        ASSERT_NE(gizmo, nullptr);
+        harness.input.mouse_local = gizmo->info.screen_pivot;
+        if (tool == quader::ViewportToolId::Rotate) {
+          const auto *ring = find_ring(*gizmo, quader_editor_core::TransformAxis::Z);
+          ASSERT_NE(ring, nullptr);
+          harness.input.mouse_local = ring->screen_start;
+        }
+        harness.input.mouse_screen = harness.input.mouse_local;
+        ASSERT_TRUE(hover().gizmo_hovered);
+        for (int unavailable = 0; unavailable < 6; ++unavailable) {
+          SCOPED_TRACE(unavailable);
+          harness.input.viewport_focused = unavailable != 0;
+          harness.input.viewport_hovered = unavailable != 1;
+          harness.input.navigation_active = unavailable == 2;
+          harness.input.pointer_interaction_canceled = unavailable == 3;
+          harness.settings.set_bool_value(quader::ViewportBoolSettingId::ShowGizmos,
+                                          unavailable != 4);
+          harness.input_result.camera_changed = unavailable == 5;
+          EXPECT_FALSE(hover().gizmo_hovered);
+        }
+        harness.input.viewport_focused = true;
+        harness.input.viewport_hovered = true;
+        harness.input.navigation_active = false;
+        harness.input.pointer_interaction_canceled = false;
+        harness.settings.set_bool_value(quader::ViewportBoolSettingId::ShowGizmos, true);
+        harness.input_result = {};
+        EXPECT_TRUE(hover().gizmo_hovered);
+        ASSERT_TRUE(harness.editor.selection().clear().ok());
+        EXPECT_FALSE(hover().gizmo_hovered);
+      }
+    }
   }
-  harness.input.viewport_focused = true;
-  harness.input.viewport_hovered = true;
-  harness.input.navigation_active = false;
-  harness.input.pointer_interaction_canceled = false;
-  harness.settings.set_bool_value(quader::ViewportBoolSettingId::ShowGizmos, true);
-  harness.input_result = {};
-  EXPECT_TRUE(hover().gizmo_hovered);
-  ASSERT_TRUE(harness.editor.selection().clear().ok());
-  EXPECT_FALSE(hover().gizmo_hovered);
 }
 
 TEST(ViewportInteractionControllerTests, TransformGizmoFrameSurvivesNavigationFrames) {
@@ -12965,89 +13119,124 @@ TEST(ViewportInteractionControllerTests,
 
 TEST(ViewportSelectionInteractionTests,
      GizmoHoverClearsCandidateAfterSpatialMissAndRearmsStationaryPick) {
-  for (int entry_path = 0; entry_path < 3; ++entry_path) {
-    SCOPED_TRACE(entry_path);
-    ViewportInteractionHarness harness;
-    const auto candidate = create_box_at(harness, {0.0f, 0.0f, 2.0f});
-    const auto box = create_box_at(harness, {0.0f, 0.0f, -2.0f});
-    select_single_component(harness, box, quader::QuaderSelectionMode::Face);
-    harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
-    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
-    harness.router.set_active_tool(quader::ViewportToolId::Move);
-    (void)harness.controller.handle_before_active_tool(harness.editor, harness.frame());
-    const auto *gizmo = harness.controller.transform_gizmo_frame();
-    ASSERT_NE(gizmo, nullptr);
-    const auto handle = gizmo->info.screen_pivot;
-    harness.input.mouse_local = handle;
-    harness.input.mouse_screen = harness.input.mouse_local;
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    for (const auto tool : {quader::ViewportToolId::Move,
+                            quader::ViewportToolId::Rotate,
+                            quader::ViewportToolId::Scale}) {
+      SCOPED_TRACE(static_cast<int>(tool));
+      for (const auto selection_tool : {quader::ViewportToolId::Select,
+                                         quader::ViewportToolId::LassoSelect,
+                                         quader::ViewportToolId::PaintSelect}) {
+        SCOPED_TRACE(static_cast<int>(selection_tool));
+        for (int entry_path = 0; entry_path < 3; ++entry_path) {
+          SCOPED_TRACE(entry_path);
+          ViewportInteractionHarness harness;
+          const auto candidate_result = harness.editor.modeling().create_box(
+              {.min = {-4, -3, 1}, .max = {4, 3, 2}}, "Gizmo reacquisition candidate");
+          ASSERT_TRUE(candidate_result.ok()) << candidate_result.error_message();
+          const auto candidate = candidate_result.value();
+          const auto box = create_box_at(harness, {0.0f, 0.0f, -2.0f});
+          select_single_component(harness, box, mode);
+          harness.router.set_selection_mode(mode == quader::QuaderSelectionMode::Vertex
+              ? quader::ViewportSelectionMode::Vertex
+              : mode == quader::QuaderSelectionMode::Edge
+                  ? quader::ViewportSelectionMode::Edge : quader::ViewportSelectionMode::Face);
+          ASSERT_TRUE(harness.editor.tools().activate(selection_tool).ok());
+          ASSERT_TRUE(harness.editor.tools().activate(tool).ok());
+          harness.router.set_active_tool(tool);
+          (void)harness.controller.handle_before_active_tool(harness.editor, harness.frame());
+          const auto *gizmo = harness.controller.transform_gizmo_frame();
+          ASSERT_NE(gizmo, nullptr);
+          quader::QVec2 handle = gizmo->info.screen_pivot;
+          if (tool == quader::ViewportToolId::Rotate) {
+            const auto *ring = find_ring(*gizmo, quader_editor_core::TransformAxis::Z);
+            ASSERT_NE(ring, nullptr);
+            handle = ring->screen_start;
+          }
+          harness.input.mouse_local = handle;
+          harness.input.mouse_screen = harness.input.mouse_local;
 
-    quader::ViewportSelectionInteraction interaction;
-    ViewportSelectionWorkGateHarness work_gate(harness);
-    const auto dispatch = [&]() {
-      const auto frame = harness.frame();
-      const auto before = harness.controller.handle_before_active_tool(harness.editor, frame);
-      interaction.handle_frame(harness.editor, frame, {}, before, work_gate.hover_port());
-      return before;
-    };
-    const auto source_wire_count = [&](int object_id) {
-      const auto overlay = quader::test_support::visible_modeling_overlay_frame(
-          harness.session.modeling());
-      return std::count_if(overlay.lines.begin(), overlay.lines.end(), [&](const auto &line) {
-        return line.layer == quader::ViewportOverlayLayer::SourceWire &&
-               line.element.object_id == object_id;
-      });
-    };
-    harness.settings.set_bool_value(quader::ViewportBoolSettingId::ShowGizmos, false);
-    EXPECT_FALSE(dispatch().gizmo_hovered);
-    ASSERT_EQ(interaction.work_stats().hover_pick_count, 1u);
-    ASSERT_EQ(harness.editor.selection().hover_summary().target.kind,
-              quader::QuaderActiveSelectionKind::Face);
-    ASSERT_EQ(harness.editor.selection().hover_summary().target.object_id,
-              candidate.modeling_object_id);
-    const auto selected_wire_count = source_wire_count(box.modeling_object_id);
-    const auto candidate_wire_count = source_wire_count(candidate.modeling_object_id);
-    ASSERT_GT(selected_wire_count, 0);
-    ASSERT_GT(candidate_wire_count, 0);
-    if (entry_path != 0) {
-      // A prior grid miss or editor-UI leave clears the face while retaining its
-      // candidate wire. Entering a gizmo must also clear this intermediate state.
-      if (entry_path == 1) harness.input.mouse_local = {20.0f, 20.0f};
-      else harness.input.viewport_hovered = false;
-      EXPECT_FALSE(dispatch().gizmo_hovered);
-      EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
-                quader::QuaderActiveSelectionKind::None);
-      EXPECT_EQ(source_wire_count(candidate.modeling_object_id), candidate_wire_count);
-      harness.input.mouse_local = handle;
-      harness.input.viewport_hovered = true;
+          quader::ViewportSelectionInteraction interaction;
+          ViewportSelectionWorkGateHarness work_gate(harness);
+          const auto dispatch = [&]() {
+            auto frame = harness.frame();
+            frame.preferred_selection_tool = selection_tool;
+            const auto before = harness.controller.handle_before_active_tool(harness.editor, frame);
+            interaction.handle_frame(harness.editor, frame, {}, before, work_gate.hover_port());
+            return before;
+          };
+          const auto source_wire_count = [&](int object_id) {
+            const auto overlay = quader::test_support::visible_modeling_overlay_frame(
+                harness.session.modeling());
+            return std::count_if(overlay.lines.begin(), overlay.lines.end(), [&](const auto &line) {
+              return line.layer == quader::ViewportOverlayLayer::SourceWire &&
+                     line.element.object_id == object_id;
+            });
+          };
+          harness.settings.set_bool_value(quader::ViewportBoolSettingId::ShowGizmos, false);
+          EXPECT_FALSE(dispatch().gizmo_hovered);
+          ASSERT_EQ(interaction.work_stats().hover_pick_count, 1u);
+          if (mode == quader::QuaderSelectionMode::Face) {
+            ASSERT_EQ(harness.editor.selection().hover_summary().target.kind,
+                      quader::QuaderActiveSelectionKind::Face);
+          }
+          ASSERT_EQ(harness.session.modeling().selection_hover_summary().candidate_object_id,
+                    candidate.modeling_object_id);
+          const auto selected_wire_count = source_wire_count(box.modeling_object_id);
+          const auto candidate_wire_count = source_wire_count(candidate.modeling_object_id);
+          ASSERT_GT(selected_wire_count, 0);
+          ASSERT_GT(candidate_wire_count, 0);
+          if (entry_path != 0) {
+            // A prior grid miss or editor-UI leave retains the candidate wire.
+            // Entering a gizmo must also clear this intermediate state.
+            if (entry_path == 1) harness.input.mouse_local = {20.0f, 20.0f};
+            else harness.input.viewport_hovered = false;
+            EXPECT_FALSE(dispatch().gizmo_hovered);
+            EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+                      quader::QuaderActiveSelectionKind::None);
+            EXPECT_EQ(source_wire_count(candidate.modeling_object_id), candidate_wire_count);
+            harness.input.mouse_local = handle;
+            harness.input.viewport_hovered = true;
+          }
+          const auto picks_before_gizmo = interaction.work_stats().hover_pick_count;
+          harness.settings.set_bool_value(quader::ViewportBoolSettingId::ShowGizmos, true);
+          ASSERT_TRUE(dispatch().gizmo_hovered);
+          EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+                    quader::QuaderActiveSelectionKind::None);
+          EXPECT_EQ(source_wire_count(candidate.modeling_object_id), 0);
+          EXPECT_EQ(harness.session.modeling().selection_hover_summary().candidate_object_id, -1);
+          EXPECT_EQ(source_wire_count(box.modeling_object_id), selected_wire_count);
+          EXPECT_EQ(interaction.work_stats().hover_pick_count, picks_before_gizmo);
+          const auto selection_revision = harness.editor.selection().summary().selection_revision;
+          const auto preview_revision = harness.session.modeling().tool_preview_source_revision();
+          for (int frame = 0; frame < 8; ++frame) {
+            EXPECT_TRUE(dispatch().gizmo_hovered);
+            EXPECT_EQ(interaction.work_stats().hover_pick_count, picks_before_gizmo);
+            EXPECT_EQ(harness.editor.selection().summary().selection_revision, selection_revision);
+            EXPECT_EQ(harness.session.modeling().tool_preview_source_revision(), preview_revision);
+            EXPECT_EQ(source_wire_count(candidate.modeling_object_id), 0);
+            EXPECT_EQ(source_wire_count(box.modeling_object_id), selected_wire_count);
+          }
+          harness.settings.set_bool_value(quader::ViewportBoolSettingId::ShowGizmos, false);
+          EXPECT_FALSE(dispatch().gizmo_hovered);
+          EXPECT_EQ(interaction.work_stats().hover_pick_count, picks_before_gizmo + 1u);
+          if (mode == quader::QuaderSelectionMode::Face) {
+            EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+                      quader::QuaderActiveSelectionKind::Face);
+          }
+          EXPECT_EQ(harness.session.modeling().selection_hover_summary().candidate_object_id,
+                    candidate.modeling_object_id);
+          EXPECT_EQ(source_wire_count(candidate.modeling_object_id), candidate_wire_count);
+          EXPECT_EQ(source_wire_count(box.modeling_object_id), selected_wire_count);
+          EXPECT_FALSE(dispatch().gizmo_hovered);
+          EXPECT_EQ(interaction.work_stats().hover_pick_count, picks_before_gizmo + 1u);
+          EXPECT_EQ(harness.editor.selection().summary().selection_revision, selection_revision);
+        }
+      }
     }
-    const auto picks_before_gizmo = interaction.work_stats().hover_pick_count;
-    harness.settings.set_bool_value(quader::ViewportBoolSettingId::ShowGizmos, true);
-    ASSERT_TRUE(dispatch().gizmo_hovered);
-    EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
-              quader::QuaderActiveSelectionKind::None);
-    EXPECT_EQ(source_wire_count(candidate.modeling_object_id), 0);
-    EXPECT_EQ(source_wire_count(box.modeling_object_id), selected_wire_count);
-    EXPECT_EQ(interaction.work_stats().hover_pick_count, picks_before_gizmo);
-    const auto selection_revision = harness.editor.selection().summary().selection_revision;
-    const auto preview_revision = harness.session.modeling().tool_preview_source_revision();
-    for (int frame = 0; frame < 8; ++frame) {
-      EXPECT_TRUE(dispatch().gizmo_hovered);
-      EXPECT_EQ(interaction.work_stats().hover_pick_count, picks_before_gizmo);
-      EXPECT_EQ(harness.editor.selection().summary().selection_revision, selection_revision);
-      EXPECT_EQ(harness.session.modeling().tool_preview_source_revision(), preview_revision);
-    }
-    harness.settings.set_bool_value(quader::ViewportBoolSettingId::ShowGizmos, false);
-    EXPECT_FALSE(dispatch().gizmo_hovered);
-    EXPECT_EQ(interaction.work_stats().hover_pick_count, picks_before_gizmo + 1u);
-    EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
-              quader::QuaderActiveSelectionKind::Face);
-    EXPECT_EQ(harness.editor.selection().hover_summary().target.object_id,
-              candidate.modeling_object_id);
-    EXPECT_EQ(source_wire_count(candidate.modeling_object_id), candidate_wire_count);
-    EXPECT_EQ(source_wire_count(box.modeling_object_id), selected_wire_count);
-    EXPECT_FALSE(dispatch().gizmo_hovered);
-    EXPECT_EQ(interaction.work_stats().hover_pick_count, picks_before_gizmo + 1u);
-    EXPECT_EQ(harness.editor.selection().summary().selection_revision, selection_revision);
   }
 }
 
@@ -14356,6 +14545,134 @@ TEST(ViewportSelectionInteractionTests,
             box.modeling_object_id);
   handle_frame();
   EXPECT_EQ(interaction.work_stats().hover_pick_count, 2u);
+}
+
+TEST(ViewportInteractionControllerTests,
+     ComponentCandidateSurvivesNavigationAcrossEverySelectionFallback) {
+  constexpr std::array kRoutes{
+      std::pair{quader::ViewportToolId::Select, quader::ViewportToolId::Select},
+      std::pair{quader::ViewportToolId::LassoSelect, quader::ViewportToolId::LassoSelect},
+      std::pair{quader::ViewportToolId::PaintSelect, quader::ViewportToolId::PaintSelect},
+      std::pair{quader::ViewportToolId::Move, quader::ViewportToolId::Select},
+      std::pair{quader::ViewportToolId::Move, quader::ViewportToolId::LassoSelect},
+      std::pair{quader::ViewportToolId::Move, quader::ViewportToolId::PaintSelect},
+      std::pair{quader::ViewportToolId::Rotate, quader::ViewportToolId::PaintSelect},
+      std::pair{quader::ViewportToolId::Scale, quader::ViewportToolId::PaintSelect}};
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Face}) {
+    for (const auto &[active_tool, selection_tool] : kRoutes) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(static_cast<int>(active_tool));
+      SCOPED_TRACE(static_cast<int>(selection_tool));
+      ViewportInteractionHarness harness;
+      const auto candidate = create_box_at(harness, {-3, 0, 0});
+      const auto selected = create_box_at(harness, {3, 0, 0});
+      const auto reticle_peer = create_box_at(harness, {});
+      ASSERT_TRUE(enter_selection_context(harness.editor, mode).ok());
+      ASSERT_TRUE(harness.editor.selection().clear().ok());
+      if (mode == quader::QuaderSelectionMode::Vertex) {
+        ASSERT_TRUE(harness.editor.selection().select_vertex(selected, 1).ok());
+        harness.router.set_selection_mode(quader::ViewportSelectionMode::Vertex);
+      } else if (mode == quader::QuaderSelectionMode::Edge) {
+        ASSERT_TRUE(harness.editor.selection().select_edge(selected, 1, 2).ok());
+        harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+      } else {
+        ASSERT_TRUE(harness.editor.selection().select_face(selected, 1).ok());
+        harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
+      }
+      ASSERT_TRUE(harness.editor.tools().activate(active_tool).ok());
+      harness.router.set_active_tool(active_tool);
+      const auto dispatch = [&]() {
+        auto frame = harness.frame();
+        frame.preferred_selection_tool = selection_tool;
+        harness.dispatch_frame(frame);
+      };
+      const auto count_source = [&](int object_id, bool points = false) {
+        const auto overlay = quader::test_support::visible_modeling_overlay_frame(
+            harness.session.modeling());
+        if (points) {
+          return std::ranges::count_if(overlay.points, [&](const auto &point) {
+            return point.element.object_id == object_id &&
+                point.layer == quader::ViewportOverlayLayer::UnselectedVertex;
+          });
+        }
+        return std::ranges::count_if(overlay.lines, [&](const auto &line) {
+          return line.element.object_id == object_id &&
+              line.layer == quader::ViewportOverlayLayer::SourceWire;
+        });
+      };
+      harness.input.mouse_local = harness.camera.project_world_point({-3, 0, 1}).position;
+      harness.input.mouse_screen = harness.input.mouse_local;
+      dispatch();
+      ASSERT_EQ(harness.session.modeling().selection_hover_summary().candidate_object_id,
+                candidate.modeling_object_id);
+      const auto candidate_wires = count_source(candidate.modeling_object_id);
+      const auto candidate_points = count_source(candidate.modeling_object_id, true);
+      const auto selected_wires = count_source(selected.modeling_object_id);
+      ASSERT_GT(candidate_wires, 0);
+      ASSERT_GT(selected_wires, 0);
+      if (mode == quader::QuaderSelectionMode::Vertex) ASSERT_GT(candidate_points, 0);
+      const auto before = quader::test::capture_command_observable_state(harness.editor);
+      const auto selection_before = harness.editor.selection().summary();
+      const auto expect_retained = [&]() {
+        EXPECT_EQ(harness.session.modeling().selection_hover_summary().candidate_object_id,
+                  candidate.modeling_object_id);
+        EXPECT_EQ(count_source(candidate.modeling_object_id), candidate_wires);
+        EXPECT_EQ(count_source(candidate.modeling_object_id, true), candidate_points);
+        EXPECT_EQ(count_source(selected.modeling_object_id), selected_wires);
+        EXPECT_EQ(count_source(reticle_peer.modeling_object_id), 0);
+      };
+      harness.input.mouse_local = harness.camera.project_world_point({0, 0, 1}).position;
+      harness.input.mouse_screen = harness.input.mouse_local;
+      harness.input.navigation_active = true;
+      harness.input_result.navigation_active = true;
+      harness.input_result.camera_changed = true;
+      dispatch();
+      expect_retained();
+      dispatch();
+      expect_retained();
+      // The router ends navigation before the host restores the pointer. The
+      // incoming captured sample still fences the centered release position.
+      harness.input_result.navigation_active = false;
+      harness.input_result.camera_changed = false;
+      dispatch();
+      expect_retained();
+      harness.input.navigation_active = false;
+      harness.input_result.camera_changed = true;
+      dispatch();
+      expect_retained();
+      harness.input_result.camera_changed = false;
+      harness.input.mouse_local = {20, 20};
+      harness.input.mouse_screen = harness.input.mouse_local;
+      dispatch();
+      expect_retained();
+      const auto after = quader::test::capture_command_observable_state(harness.editor);
+      for (const auto domain : {quader::test::CommandObservableDomain::Scene,
+                                quader::test::CommandObservableDomain::Geometry,
+                                quader::test::CommandObservableDomain::Assets,
+                                quader::test::CommandObservableDomain::History}) {
+        EXPECT_EQ(before.domain(domain).fingerprint, after.domain(domain).fingerprint);
+      }
+      const auto selection_after = harness.editor.selection().summary();
+      EXPECT_EQ(selection_after.selection_revision, selection_before.selection_revision);
+      EXPECT_EQ(selection_after.active_object_id, selection_before.active_object_id);
+      EXPECT_EQ(selection_after.active_vertex_id, selection_before.active_vertex_id);
+      EXPECT_EQ(selection_after.active_edge_a, selection_before.active_edge_a);
+      EXPECT_EQ(selection_after.active_edge_b, selection_before.active_edge_b);
+      EXPECT_EQ(selection_after.active_face_id, selection_before.active_face_id);
+      EXPECT_EQ(selection_after.selected_vertex_count, selection_before.selected_vertex_count);
+      EXPECT_EQ(selection_after.selected_edge_count, selection_before.selected_edge_count);
+      EXPECT_EQ(selection_after.selected_face_count, selection_before.selected_face_count);
+      harness.input.mouse_local = harness.camera.project_world_point({0, 0, 1}).position;
+      harness.input.mouse_screen = harness.input.mouse_local;
+      dispatch();
+      EXPECT_EQ(harness.session.modeling().selection_hover_summary().candidate_object_id,
+                reticle_peer.modeling_object_id);
+      EXPECT_EQ(count_source(candidate.modeling_object_id), 0);
+      EXPECT_EQ(count_source(selected.modeling_object_id), selected_wires);
+    }
+  }
 }
 
 TEST(ViewportInteractionControllerTests, HoverSurvivesNavigationSuppressionAndClearsWhenPointerLeaves) {

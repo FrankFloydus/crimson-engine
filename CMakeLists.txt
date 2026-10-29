@@ -28,6 +28,13 @@ endif()
 
 project(QuaderApp VERSION ${QUADER_APP_VERSION} LANGUAGES CXX)
 
+if(WIN32 AND CMAKE_GENERATOR MATCHES "^Ninja")
+    # Release links perform whole-program optimization. Bound simultaneous
+    # linker memory independently of the compiler job count.
+    set_property(GLOBAL APPEND PROPERTY JOB_POOLS crimson_link_pool=2)
+    set(CMAKE_JOB_POOL_LINK crimson_link_pool)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -40,6 +47,9 @@ configure_file(
     @ONLY)
 
 include(cmake/QuaderBuildOptions.cmake)
+option(CRIMSON_ENGINE_APPLICATION "Build the full modeling application with Crimson Engine integration" ON)
+option(CRIMSON_ENABLE_PROFILING "Compile Engine CPU/GPU on-demand Tracy instrumentation" ON)
+option(QUADER_BUILD_FILAMENT_REFERENCE "Build the retained Filament reference executable" OFF)
 
 # Release is the canonical maximum-throughput build. Enable whole-program
 # optimization before any project-owned target is created so static libraries
@@ -723,7 +733,9 @@ function(quader_validate_filament_sdk sdk_root)
     quader_validate_filament_patch("${sdk_root}")
 endfunction()
 
-quader_validate_filament_sdk("${FILAMENT_SDK_ROOT}")
+if(QUADER_BUILD_FILAMENT_REFERENCE)
+    quader_validate_filament_sdk("${FILAMENT_SDK_ROOT}")
+endif()
 
 add_library(filament_sdk INTERFACE)
 target_include_directories(filament_sdk INTERFACE "${FILAMENT_SDK_ROOT}/include")
@@ -739,7 +751,8 @@ endif()
 
 find_package(lodepng CONFIG REQUIRED)
 
-if(CMAKE_CONFIGURATION_TYPES)
+get_property(_quader_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(_quader_multi_config)
     set(QUADER_RUNTIME_DEPLOY_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
 else()
     set(QUADER_RUNTIME_DEPLOY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
@@ -774,6 +787,7 @@ set(QUADER_FILAMENT_MATERIAL_TARGETS)
 set(QUADER_FILAMENT_MATERIAL_OUTPUTS)
 set(QUADER_FILAMENT_MATERIAL_COPY_COMMANDS)
 macro(quader_register_filament_material target_name input_file output_name)
+    if(QUADER_BUILD_FILAMENT_REFERENCE)
     quader_compile_material("${target_name}" "${input_file}" "${output_name}" ${ARGN})
     list(APPEND QUADER_FILAMENT_MATERIAL_TARGETS "${target_name}")
     list(APPEND QUADER_FILAMENT_MATERIAL_OUTPUTS
@@ -782,6 +796,7 @@ macro(quader_register_filament_material target_name input_file output_name)
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                 "${${target_name}_OUTPUT}"
                 "${QUADER_RUNTIME_DEPLOY_DIR}/materials/${output_name}.filamat")
+    endif()
 endmacro()
 
 set(QUADER_DEFAULT_MATERIAL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/modeling_assets/materials/default")
@@ -873,7 +888,9 @@ add_library(quader_render_common STATIC
     src/render/overlay/collision_shape_overlay_planner.cpp
     src/render/overlay/overlay_line_mesh_builder.cpp
     src/render/overlay/overlay_edit_wire_retention.cpp
+    src/render/overlay/overlay_retained_edit_wire_update.cpp
     src/render/overlay/overlay_point_mesh_builder.cpp
+    src/render/overlay/overlay_icon_image.cpp
     src/render/overlay/render_overlay_snapshot.cpp
     src/render/overlay/render_overlay_collision_snapshot.cpp
     src/render/overlay/overlay_renderable_builder.cpp
@@ -965,7 +982,7 @@ add_library(quader_render_full_host STATIC
 target_link_libraries(quader_render_full_host PUBLIC quader_render)
 target_compile_features(quader_render_full_host PUBLIC cxx_std_20)
 
-if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
+if(QUADER_BUILD_PERFORMANCE_BENCHMARKS AND QUADER_BUILD_FILAMENT_REFERENCE)
     add_executable(qdr_phase8_performance_baseline
         benchmarks/modeling/qdr_phase8_performance_baseline.cpp)
     quader_enable_common_pch(qdr_phase8_performance_baseline)
@@ -1185,7 +1202,7 @@ qt_add_resources(quader_ui "quader_project_home_artwork"
 quader_enable_common_pch(quader_ui)
 target_include_directories(quader_ui
     PUBLIC src
-    PRIVATE "${QUADER_GENERATED_DIR}")
+    PRIVATE "${QUADER_GENERATED_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/qt-d3d12-allocator")
 target_link_libraries(quader_ui
     PUBLIC
         quader_editor_api
@@ -1201,6 +1218,14 @@ target_link_libraries(quader_ui
 target_compile_features(quader_ui PUBLIC cxx_std_20)
 
 include(cmake/QuaderCrimsonComposition.cmake)
+if(CRIMSON_ENGINE_APPLICATION)
+    add_subdirectory(engine-core)
+    target_sources(quader_render_crimson PRIVATE
+        src/render/crimson/crimson_rich_scene.cpp
+        src/render/crimson/crimson_rich_geometry.cpp)
+    target_compile_definitions(quader_render_crimson PRIVATE QUADER_HAS_CRIMSON_RICH_SCENE=1)
+    target_link_libraries(quader_render_crimson PRIVATE CrimsonEngine::Host)
+endif()
 if(TARGET quader_crimson_composition_probe)
     target_sources(quader_crimson_composition_probe PRIVATE
         tests/crimson_vulkan_composition_probe.cpp)
@@ -1250,7 +1275,7 @@ target_link_libraries(quader_runtime
         quader_render_common
         quader_ui)
 
-if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
+if(QUADER_BUILD_PERFORMANCE_BENCHMARKS AND QUADER_BUILD_FILAMENT_REFERENCE)
     add_executable(qdr_fixture_performance_baseline
         benchmarks/modeling/qdr_fixture_performance_baseline.cpp)
     quader_enable_common_pch(qdr_fixture_performance_baseline)
@@ -1444,8 +1469,72 @@ target_compile_definitions(quader_public_app PRIVATE QUADER_HAS_CRIMSON_DIAGNOST
 target_link_libraries(quader_public_app PRIVATE quader_runtime quader_render_crimson_host quader_release_profile_public)
 # Both post-build deployment steps clean and refill the same DLL directories.
 # A target dependency serializes them even during a parallel aggregate build.
-add_dependencies(quader_public_app quader quader_fatal_diagnostics
+add_dependencies(quader_public_app quader_fatal_diagnostics
     ${QUADER_FILAMENT_MATERIAL_TARGETS})
+if(QUADER_BUILD_FILAMENT_REFERENCE)
+    add_dependencies(quader_public_app quader)
+endif()
+
+if(CRIMSON_ENGINE_APPLICATION)
+    add_library(crimson-engine-app STATIC src/app/app_frame_clock.cpp
+        src/app/app_window_settings.cpp src/app/app.cpp
+        engine-core/src/integration/LevelPanels.cpp
+        engine-core/src/integration/LevelViewportTools.cpp
+        engine-core/src/integration/LevelDocumentPreviews.cpp)
+    quader_enable_common_pch(crimson-engine-app)
+    target_include_directories(crimson-engine-app PUBLIC src "${QUADER_GENERATED_DIR}")
+    target_compile_definitions(crimson-engine-app PRIVATE CRIMSON_ENGINE_APPLICATION=1
+        "CRIMSON_ENGINE_DEFAULT_PROJECT_ROOT=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
+    target_link_libraries(crimson-engine-app PUBLIC quader_editor_api quader_platform
+        quader_render_common quader_ui CrimsonEngine::Widgets PRIVATE quader_modeling_profile)
+    target_compile_features(crimson-engine-app PUBLIC cxx_std_20)
+    set(_crimson_native_host_sources ${QUADER_NATIVE_HOST_SOURCES})
+    list(FILTER _crimson_native_host_sources EXCLUDE REGEX "(^|[/\\\\])quader\\.rc$")
+    add_executable(crimson-renderer WIN32 ${_crimson_native_host_sources} src/platform/crimson_application.rc)
+    crimson_engine_attach_profiling_runtime(crimson-renderer)
+    set_source_files_properties(src/platform/crimson_application.rc PROPERTIES
+        INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding"
+        OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/crimson-engine.ico")
+    qt_add_resources(crimson-renderer crimson_engine_branding PREFIX "/crimson"
+        BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding"
+        FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/crimson-engine.ico")
+    target_include_directories(crimson-renderer PRIVATE src "${QUADER_GENERATED_DIR}")
+    target_compile_definitions(crimson-renderer PRIVATE CRIMSON_ENGINE_APPLICATION=1)
+    target_link_libraries(crimson-renderer PRIVATE crimson-engine-app quader_render_crimson_host
+        quader_release_profile_full CrimsonEngine::Host)
+    crimson_engine_attach_runtime(crimson-renderer)
+    add_dependencies(crimson-renderer quader_fatal_diagnostics)
+    if(WIN32)
+        target_link_options(crimson-renderer PRIVATE /ENTRY:mainCRTStartup)
+    endif()
+    if(QUADER_BUILD_TESTS)
+        add_executable(crimson_queue_handoff_tests EXCLUDE_FROM_ALL
+            tests/crimson_queue_handoff_tests.cpp src/render/crimson/crimson_native_queue_handoff.cpp)
+        target_include_directories(crimson_queue_handoff_tests PRIVATE src)
+        target_link_libraries(crimson_queue_handoff_tests PRIVATE d3d12 dxgi)
+        target_compile_features(crimson_queue_handoff_tests PRIVATE cxx_std_20)
+        add_test(NAME crimson_queue_handoff_native_core COMMAND crimson_queue_handoff_tests)
+        set_tests_properties(crimson_queue_handoff_native_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 10 LABELS "gpu;native;dx12")
+        add_executable(crimson_qt_composition_tests EXCLUDE_FROM_ALL tests/crimson_qt_composition_tests.cpp)
+        set_target_properties(crimson_qt_composition_tests PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/qt-composition-tests")
+        target_include_directories(crimson_qt_composition_tests PRIVATE src)
+        target_link_libraries(crimson_qt_composition_tests PRIVATE quader_render_crimson_host
+            quader_ui quader_editor_viewport quader_release_profile_full CrimsonEngine::Host Qt6::WidgetsPrivate Qt6::GuiPrivate)
+        target_compile_features(crimson_qt_composition_tests PRIVATE cxx_std_20)
+        target_compile_definitions(crimson_qt_composition_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+        add_test(NAME crimson_qt_composition_native_core COMMAND crimson_qt_composition_tests "$<TARGET_FILE_DIR:crimson-renderer>")
+        add_test(NAME crimson_qt_composition_dx11_native_core COMMAND crimson_qt_composition_tests "$<TARGET_FILE_DIR:crimson-renderer>" dx11)
+        set_tests_properties(crimson_qt_composition_native_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 35
+            LABELS "gpu;native;dx12;qt"
+            ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_QPA_PLATFORM_PLUGIN_PATH=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+        set_tests_properties(crimson_qt_composition_dx11_native_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 40
+            LABELS "gpu;native;dx11;qt"
+            ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_QPA_PLATFORM_PLUGIN_PATH=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+    endif()
+endif()
 
 if(WIN32)
     if(NOT TARGET Qt6::windeployqt)
@@ -1557,6 +1646,9 @@ if(WIN32)
 
     quader_deploy_windows_qt_runtime(quader)
     quader_deploy_windows_qt_runtime(quader_public_app)
+    if(TARGET crimson-renderer)
+        quader_deploy_windows_qt_runtime(crimson-renderer)
+    endif()
     if(TARGET quader_crimson_composition_probe)
         # The probe deploys into its own directory so its smaller DLL closure
         # cannot remove dependencies needed by either shipping host.
@@ -1608,6 +1700,7 @@ file(GLOB QUADER_RUNTIME_LOCALE_INPUTS
 
 set(QUADER_RUNTIME_RESOURCE_INPUTS
     "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/licenses/godot-MIT.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/licenses/filament-Apache-2.0.txt"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/logo.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/point_light.png"
     "${QUADER_DEFAULT_ALBEDO_TEXTURE}"
@@ -1631,7 +1724,7 @@ file(GENERATE
     OUTPUT "${QUADER_RUNTIME_RESOURCE_MANIFEST}"
     CONTENT "${QUADER_RUNTIME_RESOURCE_MANIFEST_CONTENT}\n")
 
-if(CMAKE_CONFIGURATION_TYPES)
+if(_quader_multi_config)
     set(QUADER_RUNTIME_RESOURCE_STAMP_DIR
         "${QUADER_RUNTIME_RESOURCE_STAMP_ROOT}/$<CONFIG>")
 else()
@@ -1708,6 +1801,9 @@ add_custom_command(
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/licenses/godot-MIT.txt"
             "${QUADER_RUNTIME_DEPLOY_DIR}/licenses/godot-MIT.txt"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/licenses/filament-Apache-2.0.txt"
+            "${QUADER_RUNTIME_DEPLOY_DIR}/licenses/filament-Apache-2.0.txt"
     COMMAND "${CMAKE_COMMAND}" -E touch
             "${QUADER_RUNTIME_RESOURCE_STAMP}"
     DEPENDS
@@ -1721,6 +1817,9 @@ add_custom_target(quader_runtime_resources
     DEPENDS "${QUADER_RUNTIME_RESOURCE_STAMP}")
 add_dependencies(quader quader_runtime_resources)
 add_dependencies(quader_public_app quader_runtime_resources)
+if(TARGET crimson-renderer)
+    add_dependencies(crimson-renderer quader_runtime_resources)
+endif()
 
 if(QUADER_ENABLE_SENTRY AND WIN32)
     add_custom_command(TARGET quader POST_BUILD
@@ -1770,7 +1869,7 @@ if(QUADER_BUILD_TESTS)
     quader_deploy_test_runtime_dlls(quader_guardrail_tests)
     add_test(NAME quader_guardrail_tests COMMAND quader_guardrail_tests)
 
-    if(QUADER_BUILD_NATIVE_APP)
+    if(QUADER_BUILD_NATIVE_APP AND QUADER_BUILD_FILAMENT_REFERENCE)
     add_executable(quader_tests
         tests/quader_tests_main.cpp
         tests/app_frame_clock_tests.cpp
@@ -2002,8 +2101,12 @@ if(QUADER_BUILD_TESTS)
     if(TARGET quader_render_crimson)
         target_sources(quader_tests PRIVATE
             tests/crimson_scene_projection_tests.cpp
-            tests/crimson_editor_projection_tests.cpp)
+            tests/crimson_editor_projection_tests.cpp
+            tests/crimson_icon_projection_tests.cpp)
         target_link_libraries(quader_tests PRIVATE quader_render_crimson)
+        if(CRIMSON_ENGINE_APPLICATION)
+            target_sources(quader_tests PRIVATE tests/crimson_rich_geometry_tests.cpp)
+        endif()
     endif()
     quader_deploy_test_runtime_dlls(quader_tests)
     if(WIN32)
@@ -2096,3 +2199,25 @@ if(QUADER_BUILD_TESTS)
     endif()
 
 endif()
+
+# Keep the complete reference source available without making an inactive
+# renderer/SDK or a second application an implicit default-build dependency.
+if(NOT QUADER_BUILD_FILAMENT_REFERENCE)
+    foreach(_quader_reference_target IN ITEMS quader quader_render quader_render_full_host
+            quader_filament_editor_composition_probe quader_filament_depth_composition_probe
+            quader_example_create_box quader_example_script_modeling_workflow)
+        if(TARGET ${_quader_reference_target})
+            set_target_properties(${_quader_reference_target} PROPERTIES
+                EXCLUDE_FROM_ALL TRUE EXCLUDE_FROM_DEFAULT_BUILD TRUE)
+        endif()
+    endforeach()
+endif()
+if(CRIMSON_ENGINE_APPLICATION)
+    foreach(_quader_secondary_target IN ITEMS quader_public_app quader_app)
+        if(TARGET ${_quader_secondary_target})
+            set_target_properties(${_quader_secondary_target} PROPERTIES
+                EXCLUDE_FROM_ALL TRUE EXCLUDE_FROM_DEFAULT_BUILD TRUE)
+        endif()
+    endforeach()
+endif()
+include(cmake/QuaderCrimsonModelerTests.cmake)

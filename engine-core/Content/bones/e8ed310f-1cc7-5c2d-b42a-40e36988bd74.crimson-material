@@ -1,0 +1,271 @@
+{
+  "graph": {
+    "links": [
+      {
+        "fromNode": 2,
+        "fromPin": 7,
+        "id": 1,
+        "toNode": 3,
+        "toPin": 7
+      },
+      {
+        "fromNode": 3,
+        "fromPin": 5,
+        "id": 6,
+        "toNode": 1,
+        "toPin": 17
+      },
+      {
+        "fromNode": 3,
+        "fromPin": 27,
+        "id": 7,
+        "toNode": 7,
+        "toPin": 8
+      },
+      {
+        "fromNode": 7,
+        "fromPin": 0,
+        "id": 11,
+        "toNode": 8,
+        "toPin": 8
+      },
+      {
+        "fromNode": 8,
+        "fromPin": 0,
+        "id": 13,
+        "toNode": 9,
+        "toPin": 8
+      },
+      {
+        "fromNode": 9,
+        "fromPin": 0,
+        "id": 17,
+        "toNode": 1,
+        "toPin": 10
+      }
+    ],
+    "nextLinkId": 18,
+    "nextNodeId": 11,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5,
+          "attenuationColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "attenuationDistance": 1.0,
+          "baseColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "blend": 0,
+          "decalColorEnabled": true,
+          "decalColorStrength": 1.0,
+          "decalMetallicEnabled": false,
+          "decalMetallicStrength": 1.0,
+          "decalNormalEnabled": false,
+          "decalNormalStrength": 1.0,
+          "decalRoughnessEnabled": false,
+          "decalRoughnessStrength": 1.0,
+          "doubleSided": true,
+          "emission": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "height": 0.5,
+          "ior": 1.5,
+          "metallic": 0.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "receiveFog": true,
+          "refraction": false,
+          "roughness": 0.8999999761581421,
+          "shading": 0,
+          "specular": 0.5,
+          "tessellation": {
+            "amount": 0.10000000149011612,
+            "enabled": false,
+            "heightLod": 0.0,
+            "maxFactor": 8,
+            "midpoint": 0.5
+          },
+          "thickness": 0.0,
+          "transmission": 1.0
+        },
+        "position": [
+          467.0,
+          -40.0
+        ]
+      },
+      {
+        "id": 2,
+        "kind": 1,
+        "name": "UV",
+        "position": [
+          -1760.0,
+          -13.0
+        ],
+        "uv": {
+          "mode": 0,
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "scaleLinked": true
+        }
+      },
+      {
+        "id": 3,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -1348.0,
+          -106.0
+        ],
+        "texture": {
+          "image": "ad86efbd-67cd-56c8-b6b9-8cc49652f78f",
+          "normalStrength": 1.0,
+          "role": 0,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "alpha": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "color": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "id": 7,
+        "image": {
+          "blendMode": 0,
+          "brightness": 0.017000000923871994,
+          "contrast": -0.01899999938905239,
+          "featureSize": 12.0,
+          "gamma": 1.0,
+          "grayMode": 0,
+          "inputBlack": 0.0,
+          "inputWhite": 1.0,
+          "noiseContrast": 0.5,
+          "noisePattern": 0,
+          "normalFlipY": false,
+          "normalStrength": 1.0,
+          "opacity": 1.0,
+          "outputBlack": 0.0,
+          "outputWhite": 1.0,
+          "radius": 0.0009765625,
+          "roughness": 0.5,
+          "seed": 0,
+          "sharpen": 1.0
+        },
+        "kind": 26,
+        "left": {
+          "type": 0,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "name": "Brightness / Contrast",
+        "position": [
+          -1101.666748046875,
+          -234.0
+        ],
+        "right": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      {
+        "id": 8,
+        "kind": 49,
+        "kuwahara": {
+          "mix": 0.6439999938011169,
+          "radius": 7
+        },
+        "left": {
+          "type": 0,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "name": "Kuwahara",
+        "position": [
+          -557.199951171875,
+          -282.4000244140625
+        ]
+      },
+      {
+        "id": 9,
+        "kind": 47,
+        "left": {
+          "type": 0,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "name": "Posterization",
+        "position": [
+          -157.79998779296875,
+          -243.60000610351563
+        ],
+        "stylization": {
+          "levels": 16
+        }
+      }
+    ],
+    "version": 20
+  },
+  "id": "e8ed310f-1cc7-5c2d-b42a-40e36988bd74",
+  "name": "tripo_mat_7e26b674-1fc6-47b6-b1e4-463008bce1ff",
+  "originModel": "997bffe6-0263-58e3-a216-7c9e59fe74a2",
+  "type": "crimson-material",
+  "version": 6
+}

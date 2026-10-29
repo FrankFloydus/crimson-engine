@@ -22,45 +22,9 @@ if(QUADER_BUILD_NATIVE_APP)
 add_library(quader_modeling_profile INTERFACE)
 
 if(QUADER_ENABLE_TRACY)
-    set(_quader_tracy_source_dir "${QUADER_TRACY_SOURCE_DIR}")
-    if(_quader_tracy_source_dir STREQUAL "" AND DEFINED ENV{QUADER_TRACY_SOURCE_DIR})
-        file(TO_CMAKE_PATH "$ENV{QUADER_TRACY_SOURCE_DIR}" _quader_tracy_source_dir)
-    endif()
-    if(_quader_tracy_source_dir STREQUAL "")
-        set(_quader_tracy_default_source_dir
-            "${CMAKE_CURRENT_SOURCE_DIR}/../_SOURCES/tracy-0.13.1")
-        if(EXISTS "${_quader_tracy_default_source_dir}/public/tracy/Tracy.hpp")
-            set(_quader_tracy_source_dir "${_quader_tracy_default_source_dir}")
-        endif()
-    endif()
-    if(_quader_tracy_source_dir STREQUAL "")
-        set(_quader_tracy_default_source_dir
-            "${QUADER_APP_THIRDPARTY_DIR}/tracy/tracy")
-        if(EXISTS "${_quader_tracy_default_source_dir}/public/tracy/Tracy.hpp")
-            set(_quader_tracy_source_dir "${_quader_tracy_default_source_dir}")
-        endif()
-    endif()
-
-    if(_quader_tracy_source_dir STREQUAL "" OR NOT EXISTS "${_quader_tracy_source_dir}/public/tracy/Tracy.hpp")
-        message(FATAL_ERROR "Tracy instrumentation is enabled, but no Tracy checkout was found. Provide -DQUADER_TRACY_SOURCE_DIR=<path> or set QUADER_TRACY_SOURCE_DIR.")
-    endif()
-    if(NOT EXISTS "${_quader_tracy_source_dir}/LICENSE")
-        message(FATAL_ERROR "Tracy source checkout is missing LICENSE: ${_quader_tracy_source_dir}")
-    endif()
-
-    message(STATUS "Using local Tracy source: ${_quader_tracy_source_dir}")
-    set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiler." FORCE)
-    set(TRACY_ON_DEMAND ON CACHE BOOL "Enable Tracy on-demand mode." FORCE)
-    add_subdirectory("${_quader_tracy_source_dir}" "${CMAKE_CURRENT_BINARY_DIR}/_deps/tracy-local-build" EXCLUDE_FROM_ALL)
-
-    if(TARGET Tracy::TracyClient)
-        set(_quader_tracy_client_target Tracy::TracyClient)
-    elseif(TARGET TracyClient)
-        set(_quader_tracy_client_target TracyClient)
-    else()
-        message(FATAL_ERROR "Tracy checkout did not define a TracyClient CMake target.")
-    endif()
-
+    # Both modeling and engine rendering share the canonical profiler ABI.
+    find_package(Tracy 0.14.1 EXACT CONFIG REQUIRED)
+    set(_quader_tracy_client_target Tracy::TracyClient)
     # The Visual Studio tree is deliberately multi-config. Tracy is a Debug-only
     # dependency even though its source is configured once for the tree. The
     # Release link graph therefore has neither TracyClient nor Tracy definitions.

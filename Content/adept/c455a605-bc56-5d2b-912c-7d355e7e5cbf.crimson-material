@@ -1,0 +1,111 @@
+{
+  "graph": {
+    "links": [
+      {
+        "fromNode": 2,
+        "fromPin": 7,
+        "id": 1,
+        "toNode": 3,
+        "toPin": 7
+      },
+      {
+        "fromNode": 3,
+        "fromPin": 1,
+        "id": 9,
+        "toNode": 1,
+        "toPin": 10
+      }
+    ],
+    "nextLinkId": 10,
+    "nextNodeId": 9,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5,
+          "baseColor": [
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929
+          ],
+          "blend": 0,
+          "doubleSided": false,
+          "emission": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "metallic": 0.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "receiveFog": true,
+          "roughness": 1.0,
+          "shading": 0,
+          "specular": 0.5
+        },
+        "position": [
+          -141.0,
+          154.0
+        ]
+      },
+      {
+        "id": 2,
+        "kind": 1,
+        "name": "UV",
+        "position": [
+          -763.0,
+          90.0
+        ],
+        "uv": {
+          "mode": 0,
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "scaleLinked": true
+        }
+      },
+      {
+        "id": 3,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -450.0,
+          0.0
+        ],
+        "texture": {
+          "image": "9815efbc-dc6c-58a0-8053-2ba9d34e6247",
+          "normalStrength": 1.0,
+          "role": 0,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 0,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      }
+    ],
+    "version": 7
+  },
+  "id": "c455a605-bc56-5d2b-912c-7d355e7e5cbf",
+  "name": "Material_tripo_50ca3bca_a03f_4122_beff_cdf2c4a57236",
+  "originModel": "495cffa1-a528-55cb-99ae-e3fe3dbdee0b",
+  "type": "crimson-material",
+  "version": 6
+}

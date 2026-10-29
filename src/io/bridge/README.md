@@ -70,7 +70,7 @@ decoded by the canonical reader, not a later reread of a mutable pathname.
 Embedded material fingerprints refer to their containing QDR. The corresponding
 source path is borrowed from the handle and remains project-relative. A bridge
 can compare these fingerprints with the post-commit records under
-`.quader/bridge/` before publishing an automatic update. Ship the v6 reader and
+`.quader/bridge/` before publishing an automatic update. Ship the v7 reader and
 its consumer together; requesting the earlier ABI returns null.
 
 ABI version 6 appends `diffuse_model` to `QuaderBridgeMaterialView`. Both project
@@ -81,9 +81,25 @@ descriptor and requires no texture reads. Consumers map it to their equivalent
 diffuse model when importing or explicitly refreshing a material; their existing
 material-edit preservation policy continues to decide when to request it.
 
+ABI version 7 appends `node_count` to `QuaderBridgeSceneView` and `node_view`
+to the core function table. The detached hierarchy includes ordinary groups,
+meshes, lights and concrete instance members in parent-before-child, authored
+sibling order. Definition storage is excluded. Namespace each node by the
+project UUID, scene UUID and `(entity, occurrence_entity)` pair; expanded members
+retain their canonical source entity and concrete occurrence entity. The parent
+pair names another exported node, or `(0, 0)` for the importing root.
+
+Node transforms are complete affine world matrices, including parenting
+compensation, shear, reflections and instance placement. Node visibility retains
+the local authored flag and the node's saved display-layer flag; it excludes
+ancestor visibility so an imported group's visibility can be edited without
+destroying its children's own flags. Mesh views continue reporting effective
+visibility for consumers that only need a flat render snapshot. The reader never
+bakes those transforms into mesh positions or writes source files.
+
 ## Optional UV interpolation extension
 
-Core ABI 6 and all its structures remain unchanged. Consumers may separately
+The UV extension remains independent of core ABI 7. Consumers may separately
 resolve `quader_bridge_get_uv_interpolation_api` and request
 `QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION` (1). Check its returned pointer,
 `abi_version` and `struct_size` before calling `mesh_uv_interpolation_view` with
@@ -162,6 +178,23 @@ Offsets affect only the corner UV. Derive normal-map tangent directions from the
 derivatives, rather than the original triangle UV, to retain the same texture
 orientation. This extension adds no vertices, triangles, collision changes,
 material reads or source writes.
+
+## Optional source topology extension
+
+`quader_bridge_get_topology_api` independently accepts
+`QUADER_BRIDGE_TOPOLOGY_ABI_VERSION` (1). Check the returned table's version and
+size, then call `mesh_topology_view` with the same scene and mesh index used by
+`mesh_view`. The borrowed face array survives until scene release. Unsupported
+versions return null; an invalid scene, mesh index or output returns failure
+through the ordinary bounded error contract.
+
+Each exported source quad contains four compiled vertex indices and the two
+triangle numbers in the **final material-grouped mesh index order**. Material
+surface regrouping remaps this provenance together with the indices. Only an
+original six-index primitive with a valid four-corner quad boundary contributes a
+quad record. Other polygons keep their actual triangle geometry; the reader does
+not pair arbitrary adjacent triangles into authored quads. The extension changes
+no vertex/index buffers, UV charts, collision geometry or source identities.
 
 ## Lifetime and threading
 

@@ -9,6 +9,7 @@
 #include "render/overlay/overlay_renderable_builder.hpp"
 #include "render/overlay/overlay_camera_projector.hpp"
 #include "render/overlay/overlay_line_mesh_builder.hpp"
+#include "render/overlay/overlay_icon_image.hpp"
 #include "render/overlay/collision_shape_overlay_planner.hpp"
 #include "assets/mesh_collision_geometry_payload.hpp"
 #include "render/scene_render_extraction.hpp"
@@ -114,6 +115,12 @@ void pack_geometry(PackedBatch &output, const OverlayMesh<Vertex> &mesh,
     } else if constexpr (std::is_same_v<Vertex,OverlayPointVertex>) {
       positions.push_back({neutral(vertex.center),{},{},{}});
       attributes.push_back({{},{vertex.uv.x,vertex.uv.y},vertex.color});
+    } else if constexpr (std::is_same_v<Vertex,OverlayIconVertex>) {
+      const auto p=vertex.position;
+      // Quader's device-domain plan is GL [-1,+1] forward depth. The shared
+      // editor API consumes the same pixels in native [0,1] reversed depth.
+      positions.push_back({{p.x,p.y,(p.w-p.z)*.5f,p.w},{},{},{}});
+      attributes.push_back({{},{vertex.uv.x,vertex.uv.y},vertex.color});
     }
   }
   const EditorGeometry old = previous ? previous->batch.geometry : EditorGeometry{};
@@ -170,6 +177,10 @@ struct CrimsonEditorProjection::Impl final {
     bool selection_valid = false;
     std::shared_ptr<const RenderOverlaySelectedObjectSnapshot> selected_base;
     std::shared_ptr<const RenderOverlaySelectionSnapshot> hierarchy_base;
+    const RenderOverlaySelectionSnapshot* filtered_scene_source=nullptr;
+    RenderSourceStamp filtered_scene_stamp;
+    std::uint64_t filtered_scene_epoch=UINT64_MAX;
+    std::shared_ptr<const RenderOverlaySelectionSnapshot> filtered_scene;
     std::shared_ptr<const crimson::shared::EditorGrid> grid;
     bool overlays_visible = true;
     bool scene_visible = true;
@@ -185,6 +196,8 @@ struct CrimsonEditorProjection::Impl final {
   std::shared_ptr<const RenderOverlaySceneWireframeSnapshot> wireframe_base;
   std::shared_ptr<const RenderToolPreviewSceneSnapshot> preview;
   std::uint64_t preview_epoch = 0u;
+  std::uint64_t suppression_epoch = 0u;
+  ViewportOverlayFrame preview_overlay;
   std::unordered_map<int,std::unordered_map<int,QVec3>> preview_positions;
   struct CollisionGeometry final {
     PackedBatch fill, wire;
@@ -305,8 +318,16 @@ struct CrimsonEditorProjection::Impl final {
         batch.far_plane = camera.far_plane;
         append(point.mesh,batch,point.visibility_point_indices);
       }
-      // Light icons are excluded by the immutable public profile. Their absence
-      // never substitutes a point marker for an unavailable semantic feature.
+      for(const auto& icon:plan.icon_batches) {
+        const auto& image=overlay_icon_image(icon.icon);
+        if(!image.rgba8||image.rgba8->empty())continue;
+        auto batch=presentation(icon.state);
+        batch.primitive=EditorPrimitive::Icon;
+        batch.width_pixels=icon.size_pixels;
+        const auto bytes=std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(image.rgba8->data()),image.rgba8->size());
+        batch.image={0x515549434f4e0000ull+std::uint64_t(icon.icon),1,{image.width,image.height},true,{bytes,image.rgba8,1}};
+        append(icon.mesh,batch);
+      }
       cache.batches = std::move(batches);
       cache.signature = signature;
       cache.valid = true;
@@ -333,6 +354,31 @@ ViewportOverlaySubmissionResult CrimsonEditorProjection::submit(
   request.gpu_mesh_outlines = true;
   request.tool_preview_overlay_identity = reinterpret_cast<std::uintptr_t>(impl_.get());
   request.tool_preview_overlay_revision = impl_->preview_epoch;
+  request.tool_preview_overlay_frame=&impl_->preview_overlay;
+  if(impl_->preview){
+    const auto& preview=*impl_->preview;
+    request.selection_dimension_preview_curves=preview.curves;
+    request.array_dimension_preview_lights=preview.lights;
+    request.selection_dimension_preview_groups=preview.group_markers;
+    request.selection_dimension_preview_suppression=&preview.suppression;
+    if(request.scene_overlay_snapshot&&!preview.suppression.empty()&&request.viewport_index<impl_->panes.size()){
+      auto& pane=impl_->panes[request.viewport_index];const auto* source=request.scene_overlay_snapshot;
+      if(!request.selection_dimension_scene_snapshot)request.selection_dimension_scene_snapshot=source;
+      const RenderSourceStamp stamp=*source;
+      if(pane.filtered_scene_source!=source||pane.filtered_scene_stamp!=stamp||pane.filtered_scene_epoch!=impl_->suppression_epoch){
+        auto filtered=std::make_shared<RenderOverlaySelectionSnapshot>(*source);
+        const auto suppressed=[&](EntityId entity,EntityId occurrence=kInvalidEntityId,EntityId definition=kInvalidEntityId,EntityId member=kInvalidEntityId){for(const auto id:{entity,occurrence,definition,member})if(id!=kInvalidEntityId&&std::ranges::find(preview.suppression.entities,id)!=preview.suppression.entities.end())return true;return std::ranges::any_of(preview.suppression.occurrences,[&](const auto& entry){return entry.occurrence==occurrence&&(entry.source_entity==definition||entry.source_entity==member);});};
+        std::erase_if(filtered->hierarchy_selection_wires,[&](const auto& mesh){return suppressed(mesh.entity,mesh.occurrence,mesh.definition,mesh.member);});
+        std::erase_if(filtered->selected_mesh_bounds,[&](const auto& bounds){return suppressed(bounds.entity);});
+        std::erase_if(filtered->group_bounds,[&](const auto& bounds){return suppressed(bounds.entity);});
+        std::erase_if(filtered->selected_lights,[&](const auto& light){return suppressed(light.entity);});
+        std::erase_if(filtered->point_light_gizmos,[&](const auto& light){return suppressed(light.entity);});
+        std::erase_if(filtered->curves,[&](const auto& curve){return suppressed(curve.entity);});
+        pane.filtered_scene=std::move(filtered);pane.filtered_scene_source=source;pane.filtered_scene_stamp=stamp;pane.filtered_scene_epoch=impl_->suppression_epoch;
+      }
+      request.scene_overlay_snapshot=pane.filtered_scene.get();
+    }
+  }
   return impl_->coordinator.submit(std::move(request),settings,*this);
 }
 void CrimsonEditorProjection::set_active_viewports(std::uint8_t mask) {
@@ -340,7 +386,12 @@ void CrimsonEditorProjection::set_active_viewports(std::uint8_t mask) {
 }
 void CrimsonEditorProjection::set_preview(std::shared_ptr<const RenderToolPreviewSceneSnapshot> preview) {
   if (impl_->preview==preview) return;
+  const RenderToolPreviewSuppressionSnapshot empty;
+  const auto& before=impl_->preview?impl_->preview->suppression:empty;
+  const auto& after=preview?preview->suppression:empty;
+  if(before.entities!=after.entities||before.occurrences!=after.occurrences){++impl_->suppression_epoch;impl_->coordinator.invalidate_all();}
   impl_->preview=std::move(preview);
+  impl_->preview_overlay=impl_->preview?build_render_tool_preview_overlay_frame(*impl_->preview):ViewportOverlayFrame{};
   ++impl_->preview_epoch;
   impl_->preview_positions.clear();
   if (impl_->preview) {
@@ -723,6 +774,13 @@ std::shared_ptr<const crimson::shared::EditorFrame> CrimsonEditorProjection::fra
       auto batch = packed.batch;
       batch.near_plane = camera.near_plane;
       batch.far_plane = camera.far_plane;
+      if(batch.primitive==EditorPrimitive::Icon&&backing.width&&backing.height) {
+        auto& transform=batch.world_from_local.values;
+        transform[0]=float(crop.width)/backing.width;
+        transform[5]=float(crop.height)/backing.height;
+        transform[12]=(2.f*crop.x+crop.width)/backing.width-1.f;
+        transform[13]=1.f-(2.f*crop.y+crop.height)/backing.height;
+      }
       result->batches.push_back(std::move(batch));
     }
   }

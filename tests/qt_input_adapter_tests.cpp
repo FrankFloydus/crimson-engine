@@ -36,11 +36,12 @@
 #include "ui/qt_face_texture_panel.hpp"
 #include "ui/qt_input_adapter.hpp"
 #include "ui/qt_operation_input_hints.hpp"
-#include "render/render_system.hpp"
+#include "render/crimson/crimson_render_host.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
 #include "support/qt_viewport_input_test_helpers.hpp"
+#include "support/viewport_overlay_test_helpers.hpp"
 #include "viewport/viewport_input_router.hpp"
 #include "viewport/viewport_pointer_gesture.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
@@ -880,7 +881,8 @@ TEST(QtViewportSurfaceInputTests,
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
 
-  quader::RenderSystem render_system;
+  const auto renderer = quader::create_crimson_render_host();
+  auto &render_system = *renderer;
   quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
   surface.resize(800, 600);
 
@@ -5181,6 +5183,241 @@ TEST(QtViewportSurfaceInputTests,
     EXPECT_FALSE(editor.selection().summary().has_selection);
     EXPECT_EQ(editor.selection().summary().selection_revision,
               selection_before.selection_revision);
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     ComponentCandidateAndSelectedWiresSurviveOrbitAndFlyRelease) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-component-navigation-candidate-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Face}) {
+    for (const auto active_tool : {quader::ViewportToolId::Select,
+                                   quader::ViewportToolId::LassoSelect,
+                                   quader::ViewportToolId::PaintSelect,
+                                   quader::ViewportToolId::Move,
+                                   quader::ViewportToolId::Rotate,
+                                   quader::ViewportToolId::Scale}) {
+      for (const bool fly : {false, true}) {
+        for (const bool reticle_over_peer : {false, true}) {
+          SCOPED_TRACE(static_cast<int>(mode));
+          SCOPED_TRACE(static_cast<int>(active_tool));
+          SCOPED_TRACE(fly);
+          SCOPED_TRACE(reticle_over_peer);
+          NavigationPanelTestContext context;
+          ASSERT_NE(context.surface, nullptr);
+          auto &editor = context.editor;
+          const auto candidate = editor.modeling().create_box(
+              {.min = {-4, -1, -1}, .max = {-2, 1, 1}}, "Unselected candidate A");
+          // Keep B's screen-sized transform gizmo clear of C so the final
+          // pointer move exercises ordinary peer hover rather than a handle.
+          const auto selected = editor.modeling().create_box(
+              {.min = {8, -1, -1}, .max = {10, 1, 1}}, "Selected component B");
+          const auto peer = editor.modeling().create_box(
+              {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Crosshair peer C");
+          ASSERT_TRUE(candidate.ok()) << candidate.error_message();
+          ASSERT_TRUE(selected.ok()) << selected.error_message();
+          ASSERT_TRUE(peer.ok()) << peer.error_message();
+          ASSERT_TRUE(editor.selection().select_object(selected.value()).ok());
+          ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+          ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+          switch (mode) {
+          case quader::QuaderSelectionMode::Vertex:
+            ASSERT_TRUE(editor.selection().select_vertex(selected.value(), 1).ok());
+            break;
+          case quader::QuaderSelectionMode::Edge:
+            ASSERT_TRUE(editor.selection().select_edge(selected.value(), 1, 2).ok());
+            break;
+          case quader::QuaderSelectionMode::Face:
+            ASSERT_TRUE(editor.selection().select_face(selected.value(), 1).ok());
+            break;
+          case quader::QuaderSelectionMode::Object:
+          case quader::QuaderSelectionMode::Group:
+            FAIL() << "Expected a component mode";
+          }
+          const auto selection_tool =
+              active_tool == quader::ViewportToolId::Select ||
+                      active_tool == quader::ViewportToolId::LassoSelect
+                  ? active_tool : quader::ViewportToolId::PaintSelect;
+          ASSERT_TRUE(editor.tools().activate(selection_tool).ok());
+          if (active_tool != selection_tool) {
+            ASSERT_TRUE(editor.tools().activate(active_tool).ok());
+          }
+          const quader::QVec3 peer_target =
+              mode == quader::QuaderSelectionMode::Vertex ? quader::QVec3{1, 1, 1}
+              : mode == quader::QuaderSelectionMode::Edge ? quader::QVec3{1, 0, 1}
+                                                        : quader::QVec3{0, 0, 1};
+          const quader::QVec3 candidate_target = peer_target + quader::QVec3{-3, 0, 0};
+          const quader::QVec3 reticle_target =
+              reticle_over_peer ? peer_target : quader::QVec3{0, 4, 1};
+          ASSERT_TRUE(context.camera.restore_perspective_pose(
+              {.eye = reticle_target + quader::QVec3{0, 0, 14},
+               .target = reticle_target, .up = {0, 1, 0}}));
+          const auto process_input = [&]() { context.process(1.0 / 600.0); };
+          process_input();
+          ASSERT_EQ(context.panel.tool_state().active_tool, active_tool);
+          ASSERT_EQ(editor.viewports().preferred_selection_tool(), selection_tool);
+          const qreal scale = context.surface->input_device_pixel_ratio();
+          const auto project = [&](quader::QVec3 world) {
+            const auto projected = context.camera.project_world_point(world);
+            EXPECT_TRUE(projected.visible);
+            return QPointF{projected.position.x / scale,
+                           projected.position.y / scale};
+          };
+          const QPointF candidate_local = project(candidate_target);
+          context.mouse(QEvent::MouseMove, candidate_local, Qt::NoButton, Qt::NoButton);
+          process_input();
+          ASSERT_EQ(editor.selection().hover_summary().target.object_id,
+                    candidate.value().modeling_object_id);
+          ASSERT_EQ(context.session.modeling().selection_hover_summary().candidate_object_id,
+                    candidate.value().modeling_object_id);
+
+          const auto source_wire_count = [&](int object_id) {
+            const auto overlay = quader::test_support::visible_modeling_overlay_frame(
+                context.session.modeling());
+            return std::count_if(overlay.lines.begin(), overlay.lines.end(),
+                [&](const quader::ViewportOverlayLine &line) {
+                  return line.layer == quader::ViewportOverlayLayer::SourceWire &&
+                         line.element.object_id == object_id;
+                });
+          };
+          const auto vertex_point_count = [&](int object_id) {
+            const auto overlay = quader::test_support::visible_modeling_overlay_frame(
+                context.session.modeling());
+            return std::count_if(overlay.points.begin(), overlay.points.end(),
+                [&](const quader::ViewportOverlayPoint &point) {
+                  return point.layer == quader::ViewportOverlayLayer::UnselectedVertex &&
+                         point.element.object_id == object_id;
+                });
+          };
+          const auto candidate_wires = source_wire_count(candidate.value().modeling_object_id);
+          const auto selected_wires = source_wire_count(selected.value().modeling_object_id);
+          const auto candidate_points = vertex_point_count(candidate.value().modeling_object_id);
+          ASSERT_GT(candidate_wires, 0);
+          ASSERT_GT(selected_wires, 0);
+          ASSERT_EQ(source_wire_count(peer.value().modeling_object_id), 0);
+          if (mode == quader::QuaderSelectionMode::Vertex) {
+            ASSERT_GT(candidate_points, 0);
+          }
+          context.session.history().clear();
+          const auto selection_before = editor.selection().summary();
+          const auto scene_selection_before = context.session.scene().selected_entities();
+          const auto history_before = editor.history().snapshot();
+          const auto mode_generation = editor.mode().generation();
+          const auto asset_revision = context.session.assets().revision();
+          const auto expect_selection_unchanged = [&]() {
+            const auto actual = editor.selection().summary();
+            EXPECT_EQ(actual.mode, selection_before.mode);
+            EXPECT_EQ(actual.has_selection, selection_before.has_selection);
+            EXPECT_EQ(actual.active_kind, selection_before.active_kind);
+            EXPECT_EQ(actual.active_object_id, selection_before.active_object_id);
+            EXPECT_EQ(actual.active_vertex_id, selection_before.active_vertex_id);
+            EXPECT_EQ(actual.active_edge_a, selection_before.active_edge_a);
+            EXPECT_EQ(actual.active_edge_b, selection_before.active_edge_b);
+            EXPECT_EQ(actual.active_face_id, selection_before.active_face_id);
+            EXPECT_EQ(actual.selected_object_count, selection_before.selected_object_count);
+            EXPECT_EQ(actual.selected_vertex_count, selection_before.selected_vertex_count);
+            EXPECT_EQ(actual.selected_edge_count, selection_before.selected_edge_count);
+            EXPECT_EQ(actual.selected_face_count, selection_before.selected_face_count);
+            EXPECT_EQ(actual.sub_selection_kind, selection_before.sub_selection_kind);
+            EXPECT_EQ(actual.selected_sub_element_count,
+                      selection_before.selected_sub_element_count);
+            EXPECT_EQ(actual.sub_selection_revision, selection_before.sub_selection_revision);
+            EXPECT_EQ(actual.content_revision, selection_before.content_revision);
+            EXPECT_EQ(actual.selection_revision, selection_before.selection_revision);
+            EXPECT_EQ(context.session.scene().selected_entities(), scene_selection_before);
+            EXPECT_EQ(editor.mode().generation(), mode_generation);
+            ASSERT_EQ(editor.mode().state().participants.size(), 1u);
+            EXPECT_EQ(editor.mode().state().participants.front().id, selected.value().entity);
+            EXPECT_EQ(context.panel.tool_state().active_tool, active_tool);
+            EXPECT_EQ(editor.viewports().preferred_selection_tool(), selection_tool);
+            EXPECT_EQ(context.session.assets().revision(), asset_revision);
+            expect_history_unchanged(editor.history().snapshot(), history_before);
+            EXPECT_EQ(context.session.history().undo_count(), 0u);
+          };
+          const auto expect_candidate_preserved = [&]() {
+            EXPECT_EQ(context.session.modeling().selection_hover_summary().candidate_object_id,
+                      candidate.value().modeling_object_id);
+            EXPECT_EQ(source_wire_count(candidate.value().modeling_object_id), candidate_wires);
+            EXPECT_EQ(source_wire_count(selected.value().modeling_object_id), selected_wires);
+            EXPECT_EQ(source_wire_count(peer.value().modeling_object_id), 0);
+            EXPECT_EQ(vertex_point_count(candidate.value().modeling_object_id), candidate_points);
+            expect_selection_unchanged();
+          };
+          expect_candidate_preserved();
+          const auto pose_before = context.camera.pose();
+          const auto button = fly ? Qt::RightButton : Qt::MiddleButton;
+          context.mouse(QEvent::MouseButtonPress, candidate_local, button, button);
+          process_input();
+          ASSERT_TRUE(context.panel.command_input_context().navigation_active);
+          EXPECT_EQ(context.panel.command_input_context().fly_navigation_active, fly);
+          expect_candidate_preserved();
+          if (fly) {
+            QKeyEvent forward(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier);
+            send_visible_viewport_event(context.surface, &forward);
+            process_input();
+            expect_candidate_preserved();
+            QKeyEvent stop(QEvent::KeyRelease, Qt::Key_W, Qt::NoModifier);
+            send_visible_viewport_event(context.surface, &stop);
+          } else {
+            context.mouse(QEvent::MouseMove, candidate_local + QPointF{8, 4},
+                          Qt::NoButton, Qt::MiddleButton);
+          }
+          process_input();
+          ASSERT_GT(quader::length_squared(context.camera.pose().eye - pose_before.eye), 0.0f);
+          expect_candidate_preserved();
+          process_input();
+          expect_candidate_preserved();
+
+          // The captured release still carries navigation coordinates. In fly
+          // mode this is the reticle, before the platform restores the cursor.
+          const QPointF release_local = project(reticle_target);
+          if (fly) {
+            EXPECT_NEAR(release_local.x(), 400.0, 0.01);
+            EXPECT_NEAR(release_local.y(), 300.0, 0.01);
+          }
+          context.mouse(QEvent::MouseButtonRelease, release_local, button, Qt::NoButton);
+          process_input();
+          EXPECT_FALSE(context.panel.command_input_context().navigation_active);
+          expect_candidate_preserved();
+
+          // Restore the real pointer over empty space, then leave an unchanged
+          // frame. Neither packet may adopt C or discard the unselected A wire.
+          context.mouse(QEvent::MouseMove, {20, 20}, Qt::NoButton, Qt::NoButton);
+          process_input();
+          EXPECT_EQ(editor.selection().hover_summary().target.kind,
+                    quader::QuaderActiveSelectionKind::None);
+          expect_candidate_preserved();
+          process_input();
+          expect_candidate_preserved();
+
+          // A subsequent ordinary pointer hover, without any selection click,
+          // transfers the candidate. B remains visible from its real selection.
+          context.mouse(QEvent::MouseMove, project(peer_target), Qt::NoButton, Qt::NoButton);
+          process_input();
+          ASSERT_EQ(context.panel.operation_input_context().transform_handle,
+                    quader::QuaderInputTransformHandle::None);
+          EXPECT_EQ(editor.selection().hover_summary().target.object_id,
+                    peer.value().modeling_object_id);
+          EXPECT_EQ(context.session.modeling().selection_hover_summary().candidate_object_id,
+                    peer.value().modeling_object_id);
+          EXPECT_EQ(source_wire_count(candidate.value().modeling_object_id), 0);
+          EXPECT_EQ(source_wire_count(selected.value().modeling_object_id), selected_wires);
+          EXPECT_GT(source_wire_count(peer.value().modeling_object_id), 0);
+          if (mode == quader::QuaderSelectionMode::Vertex) {
+            EXPECT_EQ(vertex_point_count(candidate.value().modeling_object_id), 0);
+            EXPECT_GT(vertex_point_count(peer.value().modeling_object_id), 0);
+          }
+          expect_selection_unchanged();
+        }
+      }
+    }
   }
 }
 

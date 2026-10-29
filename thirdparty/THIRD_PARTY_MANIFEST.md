@@ -4,6 +4,7 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 
 | Dependency | Source | Version / commit | License | Used for |
 | --- | --- | --- | --- | --- |
+| Qt Direct3D 12 allocator header | Qt 6.10.3 `qtbase/src/3rdparty/D3D12MemoryAllocator` | Exact Qt-bundled header, SHA-256 recorded in `qt-d3d12-allocator/README.md` | MIT, see `qt-d3d12-allocator/LICENSE.txt` | Completes the installed pinned QRhi Direct3D 12 private-header include closure; no second allocator implementation is compiled. |
 | OpenMesh | https://gitlab.vci.rwth-aachen.de:9000/OpenMesh/OpenMesh.git | `5f016723f9f183770cffe5787a6f9f628e2914d8` | BSD 3-Clause, see `licenses/openmesh-BSD-3-Clause.txt` | Topology-backed polygon edit operations when `QUADER_USE_OPENMESH_TOPOLOGY=ON`. |
 | earcut.hpp | https://github.com/mapbox/earcut.hpp | vendored header | ISC, see `licenses/earcut-hpp-ISC.txt` | Polygon triangulation. |
 | nlohmann/json | https://github.com/nlohmann/json | `v3.12.0` single header and native vcpkg package | MIT, see `licenses/nlohmann-json-MIT.txt` | Human-readable `.qproj` manifests, recovery metadata, the per-user recent-project index and private canonical-renderer material IR serialization. |
@@ -15,8 +16,8 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | EnTT | https://github.com/skypjack/entt | vcpkg `3.16.0` | MIT, see `licenses/entt-MIT.txt` | Entity-component storage for scene/runtime data. |
 | OpenGL Mathematics (GLM) | https://glm.g-truc.net | vcpkg `1.0.3` | MIT or Happy Bunny License (Modified MIT), see `licenses/glm-MIT.txt` | Vector, matrix, and transform math. |
 | Filament SDK and bundled IBL assets | https://github.com/google/filament | Unreleased `main` commit `d1ccd94d8cd152a7a5d8933d75d2c1d03d99d185` (upstream version label `1.78.1`), source SHA-256 `f7f215b087dc30c4a070a9fbb427f8e0c360058f14b068e40115d6d7b4c5d336`, Quader patch `quader-vsync10` | Apache-2.0, see `licenses/filament-Apache-2.0.txt` and `filament/README.md` | Vulkan renderer with explicit VSync, retained swapchain presentation lifetimes, recoverable surface-loss propagation, upstream native queue allocation correction, optional Windows presentation scaling, unclipped presentable images, shifted AO reconstruction, light distance attenuation, opt-in Burley/Lambert diffuse shading, and correct sRGB presentation after dithering, materials, KTX IBL loading, and default `lightroom_14b` viewport environment. |
-| Crimson Renderer | https://github.com/qvertexworks/crimson-renderer | Recorded Git submodule commit at `thirdparty/crimson-renderer`, with `renderer-manifest.json` | Proprietary first-party renderer, used under the author's authorization; bundled dependency notices remain separate. | Canonical renderer shared with Crimson Engine; Public on `quader-crimson` uses its borrowed Vulkan modeling recipe. The dependency and optional composition probes remain available on `main`. |
-| bgfx | https://github.com/bkaradzic/bgfx.cmake | Pinned `1.129.8940-496` archive and maintained overlay port revision `14` in the renderer submodule, see `crimson/README.md` | BSD-2-Clause, see `licenses/bgfx-BSD-2-Clause.txt` | Canonical renderer device, resource, pass and native composition mechanisms. |
+| Crimson Renderer | https://github.com/qvertexworks/crimson-renderer | Recorded Git submodule commit at `thirdparty/crimson-renderer`, with `renderer-manifest.json` | Proprietary first-party renderer, used under the author's authorization; bundled dependency notices remain separate. | One borrowed Qt device hosts the complete modeling application and Engine scene, game and document-preview rendering. The renderer also retains its independent Quader Vulkan recipe. |
+| bgfx | https://github.com/bkaradzic/bgfx.cmake | Pinned `1.129.8940-496` archive; the exact maintained overlay revision and native ABI are owned by `crimson-renderer/renderer-manifest.json` | BSD-2-Clause, see `licenses/bgfx-BSD-2-Clause.txt` | Canonical renderer device, resource, pass and native composition mechanisms. |
 | meshoptimizer | https://github.com/zeux/meshoptimizer | Native vcpkg `1.1`, upstream tag `v1.1`, at the existing manifest baseline | MIT, exact installed notice in `licenses/meshoptimizer-MIT.txt` | Canonical renderer support for mesh detail preparation and content identity. |
 | bx and bimg | https://github.com/bkaradzic/bgfx.cmake | Bundled in the same pinned bgfx archive | BSD-2-Clause, see `licenses/bx-BSD-2-Clause.txt` and `licenses/bimg-BSD-2-Clause.txt` | bgfx platform utilities and image support. |
 | TinySTL | https://github.com/mendsley/tinystl | Bundled bx headers in the same pinned bgfx archive | BSD-2-Clause, see `licenses/tinystl-BSD-2-Clause.txt` | bgfx internal containers. |
@@ -35,15 +36,16 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | spdlog | https://github.com/gabime/spdlog | vcpkg `1.17.0` | MIT, see `licenses/spdlog-MIT.txt` | Runtime logging. |
 | {fmt} | https://github.com/fmtlib/fmt | vcpkg `12.1.0` | MIT, see `licenses/fmt-MIT.txt` | spdlog default formatting backend. |
 | stduuid | https://github.com/mariusbancila/stduuid | vcpkg `1.2.3` | MIT, see `licenses/stduuid-MIT.txt` | Stable UUID generation and parsing for scene entity identity. |
-| Tracy Profiler | https://github.com/wolfpld/tracy | `0.13.1`, commit `05cceee0df3b8d7c6fa87e9638af311dbabc63cb`; pin in `tracy-0.13.1.json` | BSD 3-Clause, exact upstream text in `licenses/tracy-BSD-3-Clause.txt` | Required Debug/Profile on-demand instrumentation; absent from Release. |
+| Tracy Profiler | https://github.com/wolfpld/tracy | Pinned vcpkg `0.14.1`, matching the canonical renderer's exact package requirement | BSD 3-Clause; the package copyright accompanies deployed profiler artifacts | Shared on-demand Engine CPU/GPU capture; retained Quader modeling instrumentation is enabled only in Debug. |
 
-## Qt Vulkan Source Policy
+## Qt and renderer source policy
 
-On `main`, Full and Public both use Filament. The `quader-crimson` branch keeps
-Full on Filament and Public on the pinned canonical Crimson Renderer submodule.
-The submodule and optional composition probes remain available on `main`, but its
-Public executable does not link the Crimson host. The native preset selects the renderer's
-maintained bgfx overlay, with package/source provenance checked at configure time.
+This Engine branch starts from the complete `quader-crimson` source and links
+the Full feature profile to the canonical Crimson host. Qt owns the native
+application, composition devices and textures. Historical Filament hosts remain
+available as source references, gated by `QUADER_BUILD_FILAMENT_REFERENCE`.
+The native preset selects the renderer's maintained bgfx overlay, with
+package/source provenance checked at configure time.
 The portable SDK does not consume these native feature dependencies. See
 [the integration and dependency contract](crimson/README.md) for source identity,
 overlay ownership, license evidence and explicit CMake configuration.
@@ -110,19 +112,11 @@ bypass, header-only patch, or mixture of rebuilt and official libraries is unsup
 
 ## Tracy Source Policy
 
-Native configuration requires a local Tracy source checkout. The canonical preset uses the
-sibling `_SOURCES/tracy-0.13.1`; select another compatible checkout explicitly with:
+Native configuration resolves exactly `Tracy 0.14.1` through the pinned vcpkg
+manifest. Engine and canonical renderer instrumentation share that package and
+its on-demand capture lifecycle. Quader's portable modeling SDK does not acquire
+this native dependency; its retained app instrumentation is still Debug-only.
+Preserve the package copyright with distributed diagnostic artifacts.
 
-```powershell
-cmake --preset vs2026 -DQUADER_TRACY_SOURCE_DIR=C:\path\to\tracy
-```
-
-The checkout must contain `public/tracy/Tracy.hpp` and `LICENSE`. Native CMake forces Tracy
-availability on, then restricts definitions and linkage to Debug/Profile; `QUADER_ENABLE_TRACY=OFF`
-does not disable that contract. Release is the sole shipping configuration and carries no Tracy.
-SDK-only builds do not require this native dependency. Preserve the license with distributed
-diagnostic artifacts.
-
-[`tracy-0.13.1.json`](tracy-0.13.1.json) records the upstream revision and license digest.
-The retained license is the original text at that revision. Configure uses the local checkout
-without fetching dependencies.
+[`tracy-0.13.1.json`](tracy-0.13.1.json) and its retained license describe the
+original Quader source baseline. They do not select the active Engine package.

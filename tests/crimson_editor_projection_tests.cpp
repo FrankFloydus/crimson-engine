@@ -13,6 +13,7 @@
 #include "render/viewport_overlay_policy.hpp"
 #include "viewport/viewport_settings.hpp"
 #include "core/color_space.hpp"
+#include "assets/curve_asset_payload.hpp"
 
 #include <gtest/gtest.h>
 
@@ -493,6 +494,16 @@ TEST(CrimsonEditorProjectionTests, ObjectFaceTintUsesMaskGeometryAndTracksFaceOn
   EXPECT_EQ(projection.counters().position_packs,before_wire_scale.position_packs);
   EXPECT_EQ(projection.counters().attribute_packs,before_wire_scale.attribute_packs);
   EXPECT_EQ(projection.counters().index_packs,before_wire_scale.index_packs);
+}
+
+TEST(CrimsonEditorProjectionTests, CurveAndLightPreviewsUseCanonicalGeometryAndSuppressCommittedCurve) {
+  auto samples=std::make_shared<CurveSamplePayload>();samples->samples.resize(2);samples->samples[0].position={0,0,0};samples->samples[1].position={2,0,0};samples->samples[1].parameter=1;
+  RenderOverlaySelectionSnapshot scene;scene.scene_revision=1;RenderOverlayCurveSnapshot committed;committed.entity=601;committed.sample_payload=samples;scene.curves.push_back(committed);
+  auto preview=std::make_shared<RenderToolPreviewSceneSnapshot>();preview->revision=2;preview->suppression.entities.push_back(601);RenderToolPreviewCurveRecord curve;curve.source_entity=601;curve.sample_payload=samples;curve.instance_transforms.resize(1);curve.instance_transforms[0].values[12]=5;curve.suppress_source=true;preview->curves.push_back(curve);RenderToolPreviewLightRecord light;light.source_entity=701;light.light.type=LightType::Directional;light.instance_transforms.resize(1);light.instance_transforms[0].values[12]=8;preview->lights.push_back(light);
+  CrimsonEditorProjection projection;projection.set_preview(preview);ViewportOverlaySubmissionRequest request;request.viewport_index=0;request.layer_mask=4;request.camera.eye={0,0,10};request.camera.viewport_size={800,600};request.camera.projection=ViewportOverlayProjection::Orthographic;request.camera.orthographic_size=20;request.overlays_visible=true;request.scene_overlay_requested=true;request.selection_overlays_visible=false;request.selection_dimensions_visible=false;request.scene_overlay_snapshot=&scene;
+  const auto settings=ViewportSettings::defaults();projection.submit(request,settings);const auto frame=projection.frame(4,{}, {0,0,800,600},{800,600},{},true,1);ASSERT_TRUE(frame);std::size_t ribbons=0;for(const auto& batch:frame->batches)if(batch.primitive==crimson::shared::EditorPrimitive::Ribbon)for(const auto& position:batch.geometry.positions.values){EXPECT_GE(position.position[0],4.99f);EXPECT_GE(position.endpoint[0],4.99f);++ribbons;}EXPECT_GT(ribbons,0u);
+  const auto before=projection.counters();const auto repeated=projection.submit(request,settings);EXPECT_TRUE(repeated.camera_only);projection.frame(4,{}, {0,0,800,600},{800,600},{},true,1);EXPECT_EQ(projection.counters().position_packs,before.position_packs);EXPECT_EQ(projection.counters().layer_builds,before.layer_builds);
+  projection.set_preview({});projection.submit(request,settings);const auto restored=projection.frame(4,{}, {0,0,800,600},{800,600},{},true,2);ASSERT_TRUE(restored);bool original=false;for(const auto& batch:restored->batches)if(batch.primitive==crimson::shared::EditorPrimitive::Ribbon)for(const auto& position:batch.geometry.positions.values)if(position.position[0]<.01f)original=true;EXPECT_TRUE(original);
 }
 
 } // namespace

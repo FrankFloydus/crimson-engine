@@ -21,6 +21,7 @@
 #include "scene/light_properties.hpp"
 #include "scene/scene_mesh_occurrence_projection.hpp"
 #include "scene/scene_texture_mapping.hpp"
+#include "scene/scene_transform.hpp"
 
 #include <quader/modeling/neutral/geometry/circular_uv_interpolation.hpp>
 #include <quader/modeling/neutral/geometry/quad_uv_interpolation.hpp>
@@ -56,9 +57,10 @@ struct MeshStorage final {
   std::string name;
   SceneMeshOccurrenceProjectionRecord placement;
   std::vector<QuaderBridgeVertex> vertices;
+  std::vector<QuaderBridgeUvInterpolationVertex> uv_interpolation;
   std::vector<uint32_t> indices;
   std::vector<QuaderBridgeSurface> surfaces;
-  std::vector<QuaderBridgeUvInterpolationVertex> uv_interpolation;
+  std::vector<QuaderBridgeSourceFace> source_faces;
   uint32_t collision_status = QUADER_BRIDGE_COLLISION_DISABLED;
   std::shared_ptr<const std::vector<QuaderBridgeCollisionPoint>> collision_points;
 };
@@ -70,6 +72,17 @@ struct LightStorage final {
   QMat4 world_transform;
   LightComponent light;
   bool effectively_visible = true;
+};
+
+/** One concrete hierarchy node, independent of definition storage ownership. */
+struct NodeStorage final {
+  std::string name;
+  EntityId entity = kInvalidEntityId;
+  EntityId occurrence_entity = kInvalidEntityId;
+  EntityId parent_entity = kInvalidEntityId;
+  EntityId parent_occurrence_entity = kInvalidEntityId;
+  QMat4 world_transform;
+  bool visible = true;
 };
 
 /** Retains the source descriptor without touching its image files. */
@@ -154,6 +167,7 @@ int guarded(QuaderBridgeError *error, Callback &&callback) noexcept {
   return static_cast<uint32_t>(value);
 }
 
+
 } // namespace
 
 /** Validated immutable project catalog owned entirely by the reader DLL. */
@@ -172,6 +186,7 @@ struct QuaderBridgeScene final {
   std::string relative_path;
   std::vector<MeshStorage> meshes;
   std::vector<LightStorage> lights;
+  std::vector<NodeStorage> nodes;
   std::vector<MaterialStorage> materials;
   std::unordered_map<std::string, uint32_t> material_indices;
   std::optional<quader::ProjectMaterialCatalog> material_catalog;
@@ -404,10 +419,9 @@ void build_mesh_snapshot(QuaderBridgeScene &target) {
     MeshStorage mesh;
     const NameComponent *display_name = scene.name(placement.display_entity);
     const NameComponent *geometry_name = scene.name(placement.geometry_entity);
-    mesh.name = display_name != nullptr ? display_name->name : "Mesh";
-    if (placement.formal_instance() && geometry_name != nullptr) {
-      mesh.name += " / " + geometry_name->name;
-    }
+    const NameComponent *export_name =
+        placement.formal_instance() ? geometry_name : display_name;
+    mesh.name = export_name != nullptr ? export_name->name : "Mesh";
     mesh.placement = placement;
     if (component->generate_collisions) {
       mesh.collision_status = mesh_collision_supported(*component)
@@ -452,6 +466,7 @@ void build_mesh_snapshot(QuaderBridgeScene &target) {
     const std::vector<MeshPrimitiveSpan> spans = normalized_mesh_primitive_spans(exported);
     std::unordered_map<uint32_t, std::size_t> surface_by_material;
     std::vector<std::vector<uint32_t>> surface_indices;
+    std::vector<std::vector<uint32_t>> surface_triangle_sources;
     for (const MeshPrimitiveSpan &span : spans) {
       require(span.index_count % 3u == 0u,
               "Source material surface does not contain complete triangles.");
@@ -461,9 +476,12 @@ void build_mesh_snapshot(QuaderBridgeScene &target) {
       auto [found, inserted] = surface_by_material.emplace(material, surface_indices.size());
       if (inserted) {
         surface_indices.emplace_back();
+        surface_triangle_sources.emplace_back();
         mesh.surfaces.push_back({.material_index = material});
       }
       std::vector<uint32_t> &indices = surface_indices[found->second];
+      for(uint32_t offset=0;offset<span.index_count;offset+=3)
+        surface_triangle_sources[found->second].push_back((span.index_offset+offset)/3u);
       for (uint32_t offset = 0u; offset < span.index_count; ++offset) {
         const uint32_t index = geometry.indices[span.index_offset + offset];
         require(index < geometry.vertices.size(), "Source mesh index is out of bounds.");
@@ -471,11 +489,23 @@ void build_mesh_snapshot(QuaderBridgeScene &target) {
       }
     }
     mesh.indices.reserve(geometry.indices.size());
+    std::vector<uint32_t> triangle_remap(geometry.indices.size()/3u,UINT32_MAX);
     for (std::size_t index = 0u; index < mesh.surfaces.size(); ++index) {
       mesh.surfaces[index].index_offset = count32(mesh.indices.size());
       mesh.surfaces[index].index_count = count32(surface_indices[index].size());
+      for(std::size_t triangle=0;triangle<surface_triangle_sources[index].size();++triangle)
+        triangle_remap[surface_triangle_sources[index][triangle]]=mesh.surfaces[index].index_offset/3u+count32(triangle);
       mesh.indices.insert(mesh.indices.end(), surface_indices[index].begin(),
                           surface_indices[index].end());
+    }
+    for(const auto& primitive:geometry.primitives)if(primitive.index_count==6u&&
+        std::uint64_t(primitive.index_offset)+6u<=geometry.indices.size()) {
+      const auto corners=quad_interpolation_corners(std::span(geometry.indices).subspan(primitive.index_offset,6u).first<6>());
+      if(!corners)continue;
+      const auto first=triangle_remap[primitive.index_offset/3u],second=triangle_remap[primitive.index_offset/3u+1u];
+      if(first==UINT32_MAX||second==UINT32_MAX)continue;
+      mesh.source_faces.push_back({.vertices={(*corners)[0],(*corners)[1],(*corners)[2],(*corners)[3]},
+          .triangles={first,second},.corner_count=4u});
     }
     target.meshes.push_back(std::move(mesh));
   }
@@ -502,6 +532,77 @@ void build_light_snapshot(QuaderBridgeScene &target) {
         .effectively_visible = placement.effectively_visible});
   }
   (void)count32(target.lights.size());
+}
+
+/** Preserves local flags so toggling an imported group reveals its children. */
+[[nodiscard]] bool node_is_locally_visible(const SceneDocument &scene,
+                                         EntityId entity) {
+  if (const VisibilityComponent *visibility = scene.visibility(entity);
+      visibility != nullptr && !visibility->visible) {
+    return false;
+  }
+  const SceneLayerId layer_id = scene.entity_layer(entity);
+  const SceneLayerRecord *layer = scene.layer(layer_id);
+  return layer_id == kInvalidSceneLayerId || (layer != nullptr && layer->visible);
+}
+
+void build_node_snapshot(QuaderBridgeScene &target) {
+  const SceneDocument &scene = target.source.document.scene();
+  const auto hierarchy = scene.hierarchy_projection();
+  std::unordered_map<EntityId,
+                     std::vector<const SceneHierarchyProjectionRecord *>> members;
+  for (const SceneHierarchyProjectionRecord &placement : hierarchy->records()) {
+    if (placement.containing_instance_definition != kInvalidEntityId &&
+        placement.entity != placement.containing_instance_definition) {
+      members[placement.containing_instance_definition].push_back(&placement);
+    }
+  }
+  const auto append = [&](const SceneHierarchyProjectionRecord &placement,
+                          EntityId occurrence, EntityId parent,
+                          EntityId parent_occurrence, const QMat4 &world) {
+    require(scene_matrix_is_finite(world),
+            "Source hierarchy transform contains non-finite values.");
+    const NameComponent *name = scene.name(placement.entity);
+    target.nodes.push_back({
+        .name = name != nullptr ? name->name : "Entity",
+        .entity = placement.entity,
+        .occurrence_entity = occurrence,
+        .parent_entity = parent,
+        .parent_occurrence_entity = parent_occurrence,
+        .world_transform = world,
+        .visible = node_is_locally_visible(scene, placement.entity)});
+  };
+  for (const SceneHierarchyProjectionRecord &placement : hierarchy->records()) {
+    if (placement.containing_instance_definition != kInvalidEntityId ||
+        scene.is_instance_definition_entity(placement.entity)) {
+      continue;
+    }
+    append(placement, kInvalidEntityId, placement.parent, kInvalidEntityId,
+           placement.world_transform);
+    const InstanceOccurrenceComponent *occurrence =
+        scene.instance_occurrence(placement.entity);
+    if (occurrence == nullptr) {
+      continue;
+    }
+    const SceneHierarchyProjectionRecord *definition =
+        hierarchy->find(occurrence->definition);
+    require(definition != nullptr, "Instance hierarchy has no definition.");
+    const auto definition_from_world =
+        try_scene_matrix_inverse(definition->world_transform);
+    require(definition_from_world.has_value(),
+            "Cannot export an instance whose definition has a singular transform.");
+    for (const SceneHierarchyProjectionRecord *member : members[occurrence->definition]) {
+      const bool root_member = member->parent == occurrence->definition;
+      append(*member, placement.entity,
+             root_member ? placement.entity : member->parent,
+             root_member ? kInvalidEntityId : placement.entity,
+             scene_transform_multiply(
+                 placement.world_transform,
+                 scene_transform_multiply(*definition_from_world,
+                                          member->world_transform)));
+    }
+  }
+  (void)count32(target.nodes.size());
 }
 
 [[nodiscard]] ProjectMaterialCatalogEntry read_project_material(
@@ -732,6 +833,7 @@ int open_scene(const QuaderBridgeProject *project, const char *scene_id,
     scene->id = std::string(id.value().str());
     build_mesh_snapshot(*scene);
     build_light_snapshot(*scene);
+    build_node_snapshot(*scene);
     *out = scene.release();
   });
 }
@@ -748,7 +850,26 @@ int scene_view(const QuaderBridgeScene *scene, QuaderBridgeSceneView *out,
             .light_count = count32(scene->lights.size()),
             .camera_aperture = kLightPreviewAperture,
             .camera_shutter_seconds = kLightPreviewShutterSeconds,
-            .camera_iso = kLightPreviewSensitivity};
+            .camera_iso = kLightPreviewSensitivity,
+            .node_count = count32(scene->nodes.size())};
+  });
+}
+
+int node_view(const QuaderBridgeScene *scene, uint32_t index,
+              QuaderBridgeNodeView *out, QuaderBridgeError *error) noexcept {
+  return guarded(error, [&] {
+    require(scene != nullptr && out != nullptr,
+            "Scene and output hierarchy node are required.");
+    require(index < scene->nodes.size(), "Hierarchy node index is out of bounds.");
+    const NodeStorage &node = scene->nodes[index];
+    *out = {.name = node.name.c_str(),
+            .entity = node.entity,
+            .occurrence_entity = node.occurrence_entity,
+            .parent_entity = node.parent_entity,
+            .parent_occurrence_entity = node.parent_occurrence_entity,
+            .visible = node.visible ? 1u : 0u,
+            .order = index};
+    std::ranges::copy(node.world_transform.values, out->transform);
   });
 }
 
@@ -968,7 +1089,8 @@ constexpr QuaderBridgeApi kApi{
     .read_texture = read_texture, .blob_view = blob_view, .release_blob = release_blob,
     .scene_source_fingerprint = scene_source_fingerprint,
     .material_source_fingerprint = material_source_fingerprint,
-    .light_view = light_view};
+    .light_view = light_view,
+    .node_view = node_view};
 
 constexpr QuaderBridgeUvInterpolationApi kUvInterpolationApi{
     .abi_version = QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION,
@@ -986,4 +1108,18 @@ extern "C" QUADER_BRIDGE_EXPORT const QuaderBridgeUvInterpolationApi *
 quader_bridge_get_uv_interpolation_api(uint32_t requested_abi_version) {
   return requested_abi_version == QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION
              ? &kUvInterpolationApi : nullptr;
+}
+
+extern "C" QUADER_BRIDGE_EXPORT const QuaderBridgeTopologyApi *
+quader_bridge_get_topology_api(uint32_t requested_abi_version) {
+  static constexpr QuaderBridgeTopologyApi kTopologyApi{
+    .abi_version=QUADER_BRIDGE_TOPOLOGY_ABI_VERSION,.struct_size=sizeof(QuaderBridgeTopologyApi),
+    .mesh_topology_view=[](const QuaderBridgeScene* scene,uint32_t index,QuaderBridgeTopologyView* out,QuaderBridgeError* error)->int {
+      return guarded(error,[&] {
+        require(scene&&out&&index<scene->meshes.size(),"Invalid mesh topology request.");
+        const auto& faces=scene->meshes[index].source_faces;
+        out->faces=faces.empty()?nullptr:faces.data();out->face_count=count32(faces.size());
+      });
+    }};
+  return requested_abi_version==QUADER_BRIDGE_TOPOLOGY_ABI_VERSION?&kTopologyApi:nullptr;
 }

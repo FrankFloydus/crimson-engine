@@ -5,7 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "assets/asset_registry.hpp"
-#include "render/overlay/collision_shape_overlay_cache.hpp"
+#include "render/overlay/collision_shape_overlay_planner.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/render_scene_snapshot.hpp"

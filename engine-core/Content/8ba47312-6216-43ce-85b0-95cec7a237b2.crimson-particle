@@ -1,0 +1,134 @@
+{
+  "defaultSeed": "1",
+  "emitters": [
+    {
+      "acceleration": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "appearanceTracks": {
+        "color": {
+          "gradient": {
+            "interpolation": "linear",
+            "stops": []
+          },
+          "mode": "constant"
+        },
+        "intensity": {
+          "curve": {
+            "interpolation": "linear",
+            "keys": []
+          },
+          "mode": "constant",
+          "range": null
+        },
+        "rotation": {
+          "curve": {
+            "interpolation": "linear",
+            "keys": []
+          },
+          "mode": "constant",
+          "range": null
+        },
+        "size": {
+          "curve": {
+            "interpolation": "linear",
+            "keys": []
+          },
+          "mode": "constant",
+          "range": null
+        }
+      },
+      "behaviors": {
+        "acceleration": {
+          "enabled": true,
+          "present": false
+        },
+        "drag": {
+          "enabled": true,
+          "present": false
+        },
+        "gravity": {
+          "enabled": true,
+          "present": true
+        }
+      },
+      "billboardMode": "disabled",
+      "boxSize": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "capacity": 256,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "colorSpace": "linear-hdr",
+      "direction": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "directionFlatness": 0.0,
+      "directionMode": "fixed",
+      "directionSpread": 0.0,
+      "drag": 1.0,
+      "enabled": true,
+      "explosiveness": 0.0,
+      "gravity": [
+        0.0,
+        -9.8100004196167,
+        0.0
+      ],
+      "id": "1",
+      "initialVelocity": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "intensity": 1.0,
+      "lifetime": 1.25,
+      "lifetimeRange": {
+        "enabled": false,
+        "maximum": 1.25,
+        "minimum": 1.25
+      },
+      "material": "e44b4255-ac0c-58ff-b98f-1e747aad688b",
+      "name": "Emitter 1",
+      "opacity": 1.0,
+      "orientation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "radius": 0.25,
+      "rate": 30.0,
+      "renderer": "sprite",
+      "rotation": 0.0,
+      "shape": "point",
+      "size": 0.07999999821186066,
+      "space": "world",
+      "speed": 1.0,
+      "speedRange": {
+        "enabled": false,
+        "maximum": 1.0,
+        "minimum": 1.0
+      },
+      "timing": {
+        "delay": 0.0,
+        "duration": 1.0,
+        "finiteDuration": false,
+        "loop": false
+      },
+      "velocityMode": "vector"
+    }
+  ],
+  "id": "8ba47312-6216-43ce-85b0-95cec7a237b2",
+  "name": "New Particle Effect 2",
+  "preprocessSeconds": 0.0,
+  "type": "crimson-particle",
+  "version": 9
+}

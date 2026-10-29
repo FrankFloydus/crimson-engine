@@ -17,6 +17,9 @@
 
 namespace quader {
 
+[[nodiscard]] bool crimson_tool_preview_snapshots_equal(
+    const RenderToolPreviewSceneSnapshot&,const RenderToolPreviewSceneSnapshot&);
+
 /** Pins one complete translation, including original Quader stream owners. */
 struct CrimsonSceneProjection final {
   std::uint64_t generation = 0u;
@@ -24,7 +27,14 @@ struct CrimsonSceneProjection final {
   std::shared_ptr<const RenderToolPreviewSceneSnapshot> preview;
   std::vector<crimson::shared::MeshUpdate> meshes;
   std::vector<crimson::shared::SurfaceUpdate> surfaces;
+  // Full Standard payloads remain immutable alongside the modeling albedo
+  // transport, so Rendered can reuse exact source identities and all four maps.
+  std::vector<std::pair<std::uint64_t,RenderMaterialAssetSnapshot>> source_materials;
   std::vector<crimson::shared::InstanceUpdate> instances;
+  std::vector<std::pair<std::uint64_t,bool>> instance_cast_shadows;
+  // Accepted and transient lights use the same immutable publication as mesh
+  // coverage. Replaced sources never illuminate alongside their preview.
+  std::vector<RenderSceneLightRecord> lights;
 
   [[nodiscard]] crimson::shared::SceneCandidate candidate() const noexcept {
     return {generation, meshes, surfaces, instances};

@@ -26,12 +26,13 @@ namespace quader {
 class RenderHost;
 
 /**
- * Places an externally rendered Vulkan image in Qt's window composition.
+ * Places an externally rendered image in Qt's native window composition.
  * Qt owns its device and output texture; the renderer owns its GPU resources.
  */
 class QtVulkanCompositionWidget final : public QRhiWidget {
 public:
-  explicit QtVulkanCompositionWidget(QWidget *parent = nullptr);
+  explicit QtVulkanCompositionWidget(QWidget *parent = nullptr,
+      RenderCompositionApi api = RenderCompositionApi::Vulkan);
   ~QtVulkanCompositionWidget() override;
 
   void set_render_system(RenderHost *render_system);
@@ -72,6 +73,11 @@ private:
   std::unique_ptr<QRhiTextureRenderTarget> empty_render_target_;
   std::unique_ptr<QRhiRenderPassDescriptor> empty_render_pass_;
   bool prepare_callback_active_ = false;
+  std::uint64_t destination_generation_ = 1;
+  std::uint64_t accepted_destination_generation_ = 0;
+  QRhiTexture *observed_color_texture_ = nullptr;
+  quint64 observed_native_object_ = 0;
+  QSize observed_pixel_size_;
   bool vsync_requested_ = true;
   bool vsync_request_configured_ = false;
   bool vsync_change_pending_ = false;
